@@ -40,6 +40,20 @@ pub enum Command {
     EqualizeLayout,
     /// Toggle zoom on the focused panel.
     ZoomPanel,
+    /// Move tree selection up (wraps from first to last).
+    TreeUp,
+    /// Move tree selection down (wraps from last to first).
+    TreeDown,
+    /// Toggle expand/collapse on directory, noop on file.
+    TreeToggle,
+    /// Expand directory (right arrow).
+    TreeExpand,
+    /// Collapse expanded directory, or navigate to parent.
+    TreeCollapseOrParent,
+    /// Jump to first item in tree.
+    TreeHome,
+    /// Jump to last item in tree.
+    TreeEnd,
 }
 
 #[cfg(test)]
@@ -67,6 +81,13 @@ mod tests {
             Command::ResizeDown,
             Command::EqualizeLayout,
             Command::ZoomPanel,
+            Command::TreeUp,
+            Command::TreeDown,
+            Command::TreeToggle,
+            Command::TreeExpand,
+            Command::TreeCollapseOrParent,
+            Command::TreeHome,
+            Command::TreeEnd,
         ];
 
         for (i, a) in variants.iter().enumerate() {

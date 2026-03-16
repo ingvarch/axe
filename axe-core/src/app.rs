@@ -164,6 +164,25 @@ impl AppState {
             return;
         }
 
+        // Tree-focus key interception: arrow keys, Enter, Home, End navigate the tree.
+        if self.focus == FocusTarget::Tree && !self.show_help {
+            let tree_cmd = match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Up) => Some(Command::TreeUp),
+                (KeyModifiers::NONE, KeyCode::Down) => Some(Command::TreeDown),
+                (KeyModifiers::NONE, KeyCode::Enter) => Some(Command::TreeToggle),
+                (KeyModifiers::NONE, KeyCode::Right) => Some(Command::TreeExpand),
+                (KeyModifiers::NONE, KeyCode::Left) => Some(Command::TreeCollapseOrParent),
+                (KeyModifiers::NONE, KeyCode::Home) => Some(Command::TreeHome),
+                (KeyModifiers::NONE, KeyCode::End) => Some(Command::TreeEnd),
+                _ => None,
+            };
+            if let Some(cmd) = tree_cmd {
+                self.execute(cmd);
+                return;
+            }
+            // Fall through to global keymap for Ctrl+Q, Tab, etc.
+        }
+
         if let Some(cmd) = self.keymap.resolve(&key) {
             if self.show_help {
                 match cmd {
@@ -199,6 +218,41 @@ impl AppState {
             Command::ResizeDown => self.resize_vertical(1),
             Command::EqualizeLayout => self.equalize_layout(),
             Command::ZoomPanel => self.toggle_zoom(),
+            Command::TreeUp => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.move_up();
+                }
+            }
+            Command::TreeDown => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.move_down();
+                }
+            }
+            Command::TreeToggle => {
+                if let Some(ref mut tree) = self.file_tree {
+                    let _ = tree.toggle();
+                }
+            }
+            Command::TreeExpand => {
+                if let Some(ref mut tree) = self.file_tree {
+                    let _ = tree.expand();
+                }
+            }
+            Command::TreeCollapseOrParent => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.collapse_or_parent();
+                }
+            }
+            Command::TreeHome => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.move_home();
+                }
+            }
+            Command::TreeEnd => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.move_end();
+                }
+            }
         }
     }
 
@@ -1298,5 +1352,67 @@ mod tests {
     fn new_with_root_invalid_path_has_no_file_tree() {
         let app = AppState::new_with_root(PathBuf::from("/nonexistent/path/12345"));
         assert!(app.file_tree.is_none());
+    }
+
+    // --- Tree navigation key routing tests ---
+
+    fn app_with_tree_focused() -> AppState {
+        let tmp = std::env::temp_dir();
+        let mut app = AppState::new_with_root(tmp);
+        app.focus = FocusTarget::Tree;
+        app
+    }
+
+    #[test]
+    fn tree_down_when_focused() {
+        let mut app = app_with_tree_focused();
+        let initial = app.file_tree.as_ref().unwrap().selected();
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_ne!(app.file_tree.as_ref().unwrap().selected(), initial);
+    }
+
+    #[test]
+    fn tree_up_when_focused() {
+        let mut app = app_with_tree_focused();
+        // Move down first, then up
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let after_down = app.file_tree.as_ref().unwrap().selected();
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_ne!(app.file_tree.as_ref().unwrap().selected(), after_down);
+    }
+
+    #[test]
+    fn arrows_not_intercepted_when_editor_focused() {
+        let tmp = std::env::temp_dir();
+        let mut app = AppState::new_with_root(tmp);
+        app.focus = FocusTarget::Editor;
+        let initial = app.file_tree.as_ref().unwrap().selected();
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // Down arrow in editor mode should not affect tree
+        assert_eq!(app.file_tree.as_ref().unwrap().selected(), initial);
+    }
+
+    #[test]
+    fn tree_keys_blocked_when_help_open() {
+        let mut app = app_with_tree_focused();
+        app.show_help = true;
+        let initial = app.file_tree.as_ref().unwrap().selected();
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.file_tree.as_ref().unwrap().selected(), initial);
+    }
+
+    #[test]
+    fn global_keys_work_when_tree_focused() {
+        let mut app = app_with_tree_focused();
+        // Ctrl+Q should still quit
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn tab_works_when_tree_focused() {
+        let mut app = app_with_tree_focused();
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.focus, FocusTarget::Editor);
     }
 }

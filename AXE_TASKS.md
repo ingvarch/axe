@@ -201,25 +201,26 @@ Show the current working directory's contents in the file tree panel.
 
 ---
 
-### Task 3.2 — File Tree: Navigation & Expand/Collapse
+### Task 3.2 — File Tree: Navigation & Expand/Collapse ✅
 
 Navigate the tree with keyboard and expand/collapse directories.
 
 **Acceptance criteria:**
-- `↑`/`↓` moves selection up/down (highlighted row)
-- `Enter` or `→` on a directory: expands it (loads children)
-- `Enter` on a file: does nothing yet (will open in editor later)
-- `←` on an expanded directory: collapses it
-- `←` on a file or collapsed directory: moves to parent directory
-- Scrolling works when the tree is taller than the panel
-- `Home` jumps to the first item, `End` to the last
-- Selection wraps around (last item → first, first → last)
+- [x] `↑`/`↓` moves selection up/down (highlighted row)
+- [x] `Enter` or `→` on a directory: expands it (loads children)
+- [x] `Enter` on a file: does nothing yet (will open in editor later)
+- [x] `←` on an expanded directory: collapses it
+- [x] `←` on a file or collapsed directory: moves to parent directory
+- [x] Scrolling works when the tree is taller than the panel
+- [x] `Home` jumps to the first item, `End` to the last
+- [x] Selection wraps around (last item → first, first → last)
 
 **Implementation details:**
-- Add `selected: usize` and `scroll_offset: usize` to `FileTree`
-- Calculate visible range based on panel height
-- Children are inserted into the flat `Vec<TreeNode>` after the parent (with depth + 1)
-- Collapsing removes children from the vec
+- Added `viewport_height` to `FileTree` with scroll management
+- Tree-focus key interception in `handle_key_event()` (after resize mode, before global keymap)
+- 7 new `Command` variants: `TreeUp`, `TreeDown`, `TreeToggle`, `TreeExpand`, `TreeCollapseOrParent`, `TreeHome`, `TreeEnd`
+- Children inserted into flat `Vec<TreeNode>` after parent on expand, drained on collapse
+- Selection highlight with `tree_selection_bg` theme color
 
 ---
 

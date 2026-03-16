@@ -33,6 +33,7 @@ pub struct FileTree {
     nodes: Vec<TreeNode>,
     selected: usize,
     scroll: usize,
+    viewport_height: usize,
 }
 
 impl FileTree {
@@ -75,6 +76,7 @@ impl FileTree {
             nodes,
             selected: 0,
             scroll: 0,
+            viewport_height: usize::MAX,
         })
     }
 
@@ -106,6 +108,168 @@ impl FileTree {
     /// Returns a reference to all nodes.
     pub fn nodes(&self) -> &[TreeNode] {
         &self.nodes
+    }
+
+    /// Sets the viewport height for scroll calculations.
+    pub fn set_viewport_height(&mut self, h: usize) {
+        self.viewport_height = h;
+        self.adjust_scroll();
+    }
+
+    /// Returns a reference to the currently selected node, if any.
+    pub fn selected_node(&self) -> Option<&TreeNode> {
+        self.nodes.get(self.selected)
+    }
+
+    /// Moves selection up by one. Wraps from first to last.
+    pub fn move_up(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        if self.selected == 0 {
+            self.selected = self.nodes.len() - 1;
+        } else {
+            self.selected -= 1;
+        }
+        self.adjust_scroll();
+    }
+
+    /// Moves selection down by one. Wraps from last to first.
+    pub fn move_down(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        if self.selected >= self.nodes.len() - 1 {
+            self.selected = 0;
+        } else {
+            self.selected += 1;
+        }
+        self.adjust_scroll();
+    }
+
+    /// Jumps selection to the first item and resets scroll.
+    pub fn move_home(&mut self) {
+        self.selected = 0;
+        self.scroll = 0;
+    }
+
+    /// Jumps selection to the last item and adjusts scroll.
+    pub fn move_end(&mut self) {
+        if !self.nodes.is_empty() {
+            self.selected = self.nodes.len() - 1;
+        }
+        self.adjust_scroll();
+    }
+
+    /// Expands the selected directory, loading its children into the flat vec.
+    ///
+    /// Noop if the selected node is a file or already expanded.
+    pub fn expand(&mut self) -> Result<()> {
+        if self.selected >= self.nodes.len() {
+            return Ok(());
+        }
+        let node = &self.nodes[self.selected];
+        if !matches!(node.kind, NodeKind::Directory { .. }) || node.expanded {
+            return Ok(());
+        }
+
+        let dir_path = node.path.clone();
+        let depth = node.depth + 1;
+        let parent_index = self.selected;
+
+        let children = Self::read_children(&dir_path, depth, parent_index)?;
+
+        self.nodes[self.selected].expanded = true;
+        self.nodes[self.selected].children_loaded = true;
+
+        // Insert children right after the selected node.
+        let insert_pos = self.selected + 1;
+        for (i, child) in children.into_iter().enumerate() {
+            self.nodes.insert(insert_pos + i, child);
+        }
+
+        Ok(())
+    }
+
+    /// Collapses the selected directory, removing all its descendants.
+    ///
+    /// Noop if the selected node is a file or already collapsed.
+    pub fn collapse(&mut self) {
+        if self.selected >= self.nodes.len() {
+            return;
+        }
+        let node = &self.nodes[self.selected];
+        if !matches!(node.kind, NodeKind::Directory { .. }) || !node.expanded {
+            return;
+        }
+
+        let selected_depth = node.depth;
+        // Find the range of descendants: all nodes after selected with depth > selected_depth.
+        let mut end = self.selected + 1;
+        while end < self.nodes.len() && self.nodes[end].depth > selected_depth {
+            end += 1;
+        }
+
+        self.nodes.drain((self.selected + 1)..end);
+        self.nodes[self.selected].expanded = false;
+        self.adjust_scroll();
+    }
+
+    /// Toggles expand/collapse on the selected directory.
+    ///
+    /// If collapsed directory: expand. If expanded directory: collapse. File: noop.
+    pub fn toggle(&mut self) -> Result<()> {
+        if self.selected >= self.nodes.len() {
+            return Ok(());
+        }
+        if !matches!(self.nodes[self.selected].kind, NodeKind::Directory { .. }) {
+            return Ok(());
+        }
+        if self.nodes[self.selected].expanded {
+            self.collapse();
+        } else {
+            self.expand()?;
+        }
+        Ok(())
+    }
+
+    /// Collapses the selected directory if expanded, otherwise navigates to parent.
+    pub fn collapse_or_parent(&mut self) {
+        if self.selected >= self.nodes.len() {
+            return;
+        }
+        let node = &self.nodes[self.selected];
+
+        if matches!(node.kind, NodeKind::Directory { .. }) && node.expanded {
+            self.collapse();
+        } else if let Some(parent_idx) = self.find_parent_index(self.selected) {
+            self.selected = parent_idx;
+            self.adjust_scroll();
+        }
+    }
+
+    /// Keeps the selected index within the visible scroll window.
+    fn adjust_scroll(&mut self) {
+        if self.selected < self.scroll {
+            self.scroll = self.selected;
+        } else if self.selected >= self.scroll + self.viewport_height {
+            self.scroll = self.selected + 1 - self.viewport_height;
+        }
+    }
+
+    /// Finds the parent node index by scanning backward for the first node
+    /// with a lower depth.
+    fn find_parent_index(&self, index: usize) -> Option<usize> {
+        if index == 0 {
+            return None;
+        }
+        let target_depth = self.nodes[index].depth;
+        if target_depth == 0 {
+            return None;
+        }
+        (0..index)
+            .rev()
+            .find(|&i| self.nodes[i].depth < target_depth)
     }
 
     /// Reads the children of a directory, filtering hidden files and sorting
@@ -377,5 +541,285 @@ mod tests {
         for node in &tree.nodes()[1..] {
             assert_eq!(node.parent, Some(0), "children should reference root");
         }
+    }
+
+    // --- Navigation tests ---
+
+    #[test]
+    fn move_down_increments_selected() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0);
+        tree.move_down();
+        assert_eq!(tree.selected(), 1);
+    }
+
+    #[test]
+    fn move_down_wraps_at_end() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // 5 nodes (root + 2 dirs + 2 files), go to last then wrap
+        for _ in 0..4 {
+            tree.move_down();
+        }
+        assert_eq!(tree.selected(), 4);
+        tree.move_down();
+        assert_eq!(tree.selected(), 0);
+    }
+
+    #[test]
+    fn move_up_decrements_selected() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down();
+        tree.move_down();
+        assert_eq!(tree.selected(), 2);
+        tree.move_up();
+        assert_eq!(tree.selected(), 1);
+    }
+
+    #[test]
+    fn move_up_wraps_at_start() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0);
+        tree.move_up();
+        assert_eq!(tree.selected(), 4); // last node
+    }
+
+    #[test]
+    fn move_home_goes_to_zero() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down();
+        tree.move_down();
+        tree.move_home();
+        assert_eq!(tree.selected(), 0);
+    }
+
+    #[test]
+    fn move_end_goes_to_last() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_end();
+        assert_eq!(tree.selected(), 4);
+    }
+
+    #[test]
+    fn selected_node_returns_correct() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // selected=0 is root
+        assert!(matches!(
+            tree.selected_node().unwrap().kind,
+            NodeKind::Directory { .. }
+        ));
+        tree.move_down(); // first child: "beta" dir
+        assert_eq!(tree.selected_node().unwrap().name, "beta");
+    }
+
+    // --- Expand/collapse tests ---
+
+    /// Creates a nested directory structure for expand/collapse tests:
+    /// root/
+    ///   sub/           (dir with children)
+    ///     nested/      (dir)
+    ///     file.txt     (file)
+    ///   other.txt      (file)
+    fn create_nested_test_dir() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir_all(root.join("sub/nested")).unwrap();
+        fs::write(root.join("sub/file.txt"), "content").unwrap();
+        fs::write(root.join("other.txt"), "content").unwrap();
+
+        tmp
+    }
+
+    #[test]
+    fn expand_directory_inserts_children() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Initial: root, sub (collapsed), other.txt = 3 nodes
+        assert_eq!(tree.nodes().len(), 3);
+
+        // Select "sub" (index 1) and expand
+        tree.move_down();
+        tree.expand().unwrap();
+
+        // Now: root, sub (expanded), nested, file.txt, other.txt = 5 nodes
+        assert_eq!(tree.nodes().len(), 5);
+    }
+
+    #[test]
+    fn expand_sets_expanded_flag() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "sub"
+        assert!(!tree.nodes()[1].expanded);
+        tree.expand().unwrap();
+        assert!(tree.nodes()[1].expanded);
+    }
+
+    #[test]
+    fn expand_on_file_is_noop() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let initial_count = tree.nodes().len();
+        // Select "other.txt" (last node, index 2)
+        tree.move_down();
+        tree.move_down();
+        tree.expand().unwrap();
+        assert_eq!(tree.nodes().len(), initial_count);
+    }
+
+    #[test]
+    fn expand_already_expanded_is_noop() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "sub"
+        tree.expand().unwrap();
+        let count_after = tree.nodes().len();
+        tree.expand().unwrap(); // expand again
+        assert_eq!(tree.nodes().len(), count_after);
+    }
+
+    #[test]
+    fn collapse_removes_descendants() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "sub"
+        tree.expand().unwrap();
+        assert_eq!(tree.nodes().len(), 5);
+
+        tree.collapse();
+        assert_eq!(tree.nodes().len(), 3); // back to initial
+    }
+
+    #[test]
+    fn collapse_resets_expanded_flag() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down();
+        tree.expand().unwrap();
+        assert!(tree.nodes()[1].expanded);
+        tree.collapse();
+        assert!(!tree.nodes()[1].expanded);
+    }
+
+    #[test]
+    fn collapse_on_file_is_noop() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let initial_count = tree.nodes().len();
+        tree.move_down();
+        tree.move_down(); // select "other.txt"
+        tree.collapse();
+        assert_eq!(tree.nodes().len(), initial_count);
+    }
+
+    #[test]
+    fn collapse_removes_deeply_nested() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub"
+        tree.move_down();
+        tree.expand().unwrap();
+        // Now expand "nested" (index 2 after expansion)
+        tree.move_down(); // select "nested" at index 2
+        tree.expand().unwrap();
+        // Collapse "sub" at index 1 — should remove nested and its children
+        tree.move_up(); // back to "sub"
+        let sub_idx = tree.selected();
+        assert_eq!(tree.nodes()[sub_idx].name, "sub");
+        tree.collapse();
+        // Should be back to: root, sub (collapsed), other.txt
+        assert_eq!(tree.nodes().len(), 3);
+    }
+
+    #[test]
+    fn toggle_expands_collapsed() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "sub"
+        tree.toggle().unwrap();
+        assert!(tree.nodes()[1].expanded);
+    }
+
+    #[test]
+    fn toggle_collapses_expanded() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down();
+        tree.expand().unwrap();
+        tree.toggle().unwrap();
+        assert!(!tree.nodes()[1].expanded);
+    }
+
+    #[test]
+    fn collapse_or_parent_collapses_expanded_dir() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "sub"
+        tree.expand().unwrap();
+        tree.collapse_or_parent();
+        assert!(!tree.nodes()[1].expanded);
+        assert_eq!(tree.nodes().len(), 3);
+    }
+
+    #[test]
+    fn collapse_or_parent_moves_to_parent_on_file() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select "other.txt" (last node, depth 1, parent is root at index 0)
+        tree.move_end();
+        assert_eq!(tree.selected_node().unwrap().name, "other.txt");
+        tree.collapse_or_parent();
+        assert_eq!(tree.selected(), 0); // moved to root
+    }
+
+    #[test]
+    fn collapse_or_parent_noop_at_root() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0); // root, depth 0
+        tree.collapse_or_parent();
+        // Root is expanded — collapse_or_parent should collapse it
+        // After collapse root has no visible children
+        // Actually, root IS expanded but at depth 0 — let's check behavior
+        // The root is a directory and expanded, so it should collapse
+        assert!(!tree.nodes()[0].expanded);
+    }
+
+    // --- Scroll tests ---
+
+    #[test]
+    fn scroll_adjusts_when_below_viewport() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3); // can see 3 items at a time
+                                     // Move to item 3 (0-indexed), which is beyond viewport [0,1,2]
+        tree.move_down();
+        tree.move_down();
+        tree.move_down();
+        assert_eq!(tree.selected(), 3);
+        assert!(
+            tree.scroll() > 0,
+            "scroll should adjust to keep selected visible"
+        );
+        assert!(tree.selected() < tree.scroll() + 3);
+    }
+
+    #[test]
+    fn move_home_resets_scroll() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.move_end();
+        assert!(tree.scroll() > 0);
+        tree.move_home();
+        assert_eq!(tree.scroll(), 0);
+        assert_eq!(tree.selected(), 0);
     }
 }

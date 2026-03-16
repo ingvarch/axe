@@ -136,6 +136,13 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Z", "Zoom panel"),
     ("Click panel", "Focus panel"),
     ("Drag border", "Resize panel"),
+    ("", ""),
+    ("--- Tree ---", ""),
+    ("\u{2191}/\u{2193}", "Navigate tree"),
+    ("Enter", "Expand/collapse dir"),
+    ("\u{2190}/\u{2192}", "Collapse/expand"),
+    ("Home/End", "First/last item"),
+    ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
 ];
@@ -207,42 +214,55 @@ const DIR_EXPANDED_PREFIX: &str = "▾ ";
 /// Prefix for files (space for alignment with directory arrows).
 const FILE_PREFIX: &str = "  ";
 
-/// Renders file tree content into the given area.
+/// Renders file tree content into the given area, with selection highlight and scrolling.
 fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
     let nodes = file_tree.visible_nodes();
-    let mut lines: Vec<Line> = Vec::with_capacity(nodes.len());
+    let scroll = file_tree.scroll();
+    let selected = file_tree.selected();
+    let visible_count = area.height as usize;
+    let mut lines: Vec<Line> = Vec::with_capacity(visible_count);
 
-    for node in nodes {
+    for (i, node) in nodes.iter().enumerate().skip(scroll).take(visible_count) {
         let indent = " ".repeat(TREE_INDENT * node.depth);
+        let is_selected = i == selected;
 
-        if node.depth == 0 {
-            // Root node: bold project name.
-            lines.push(Line::from(Span::styled(
-                format!("{indent}{}", node.name),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )));
+        let text = if node.depth == 0 {
+            format!("{indent}{}", node.name)
         } else {
-            let (prefix, style) = match &node.kind {
+            let prefix = match &node.kind {
                 NodeKind::Directory { .. } => {
-                    let pfx = if node.expanded {
+                    if node.expanded {
                         DIR_EXPANDED_PREFIX
                     } else {
                         DIR_COLLAPSED_PREFIX
-                    };
-                    (pfx, Style::default().fg(theme.panel_border_active))
+                    }
                 }
-                NodeKind::File { .. } | NodeKind::Symlink { .. } => {
-                    (FILE_PREFIX, Style::default().fg(theme.foreground))
-                }
+                NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
             };
+            format!("{indent}{prefix}{}", node.name)
+        };
 
-            lines.push(Line::from(Span::styled(
-                format!("{indent}{prefix}{}", node.name),
-                style,
-            )));
+        // Pad to full width for selection highlight.
+        let padded = format!("{:<width$}", text, width = area.width as usize);
+
+        let mut style = if node.depth == 0 {
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            match &node.kind {
+                NodeKind::Directory { .. } => Style::default().fg(theme.panel_border_active),
+                NodeKind::File { .. } | NodeKind::Symlink { .. } => {
+                    Style::default().fg(theme.foreground)
+                }
+            }
+        };
+
+        if is_selected {
+            style = style.bg(theme.tree_selection_bg);
         }
+
+        lines.push(Line::from(Span::styled(padded, style)));
     }
 
     let paragraph = Paragraph::new(lines);

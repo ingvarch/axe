@@ -62,6 +62,14 @@ async fn main() -> Result<()> {
 
     while !app.should_quit {
         let size = terminal.size()?;
+
+        // Update tree viewport height for scroll calculations.
+        if let Some(ref mut tree) = app.file_tree {
+            // Inner height: total height minus status bar (1) minus top/bottom borders (2).
+            let inner_h = size.height.saturating_sub(3);
+            tree.set_viewport_height(inner_h as usize);
+        }
+
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {

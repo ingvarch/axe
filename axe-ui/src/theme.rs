@@ -26,6 +26,8 @@ pub struct Theme {
     pub overlay_bg: Color,
     /// Border color used in resize mode.
     pub resize_border: Color,
+    /// Background color for selected tree row.
+    pub tree_selection_bg: Color,
 }
 
 impl Default for Theme {
@@ -41,6 +43,7 @@ impl Default for Theme {
             overlay_border: Color::Rgb(97, 175, 239),      // #61afef
             overlay_bg: Color::Rgb(40, 44, 52),            // #282c34
             resize_border: Color::Rgb(229, 192, 123),      // #e5c07b (yellow)
+            tree_selection_bg: Color::Rgb(50, 55, 65),     // slightly lighter than bg
         }
     }
 }
