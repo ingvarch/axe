@@ -3,7 +3,7 @@ use std::panic;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
@@ -20,11 +20,15 @@ type Term = Terminal<CrosstermBackend<io::Stdout>>;
 fn setup_terminal() -> Result<Term> {
     terminal::enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal() {
+    if let Err(e) = stdout().execute(DisableMouseCapture) {
+        eprintln!("Failed to disable mouse capture: {e}");
+    }
     if let Err(e) = terminal::disable_raw_mode() {
         eprintln!("Failed to disable raw mode: {e}");
     }
@@ -51,13 +55,18 @@ async fn main() -> Result<()> {
     let mut app = AppState::new();
 
     while !app.should_quit {
+        let size = terminal.size()?;
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.handle_key_event(key);
                 }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse_event(mouse, size.width, size.height);
+                }
+                _ => {}
             }
         }
     }

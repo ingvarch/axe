@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::command::Command;
 use crate::keymap::KeymapResolver;
@@ -13,6 +13,22 @@ const RESIZE_STEP: u16 = 2;
 const MIN_PANEL_PCT: u16 = 10;
 /// Maximum allowed panel size percentage.
 const MAX_PANEL_PCT: u16 = 90;
+
+/// Which panel border is being dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragBorder {
+    /// Vertical border between tree and editor/terminal.
+    Vertical,
+    /// Horizontal border between editor and terminal.
+    Horizontal,
+}
+
+/// Tracks mouse drag state for panel border resizing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MouseDragState {
+    /// Which border is currently being dragged, if any.
+    pub border: Option<DragBorder>,
+}
 
 /// State for the panel resize mode.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,6 +83,7 @@ pub struct AppState {
     pub show_terminal: bool,
     pub show_help: bool,
     pub resize_mode: ResizeModeState,
+    pub mouse_drag: MouseDragState,
     pub tree_width_pct: u16,
     pub editor_height_pct: u16,
     keymap: KeymapResolver,
@@ -82,6 +99,7 @@ impl AppState {
             show_terminal: true,
             show_help: false,
             resize_mode: ResizeModeState::default(),
+            mouse_drag: MouseDragState::default(),
             tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             keymap: KeymapResolver::with_defaults(),
@@ -180,6 +198,111 @@ impl AppState {
         let new_pct = (self.editor_height_pct as i16 + direction * RESIZE_STEP as i16)
             .clamp(MIN_PANEL_PCT as i16, MAX_PANEL_PCT as i16);
         self.editor_height_pct = new_pct as u16;
+    }
+
+    /// Processes a mouse event for panel border drag-resizing.
+    ///
+    /// Mouse drag works without entering resize mode -- it's always available.
+    /// The caller must provide the current screen dimensions so border positions
+    /// can be computed from stored percentages.
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent, screen_width: u16, screen_height: u16) {
+        /// Border detection tolerance in cells.
+        const BORDER_TOLERANCE: u16 = 1;
+        /// Status bar height in rows.
+        const STATUS_BAR_HEIGHT: u16 = 1;
+
+        let main_height = screen_height.saturating_sub(STATUS_BAR_HEIGHT);
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let col = mouse.column;
+                let row = mouse.row;
+
+                // Check vertical border (tree/editor boundary)
+                if self.show_tree {
+                    let border_x =
+                        (u32::from(screen_width) * u32::from(self.tree_width_pct) / 100) as u16;
+                    if col.abs_diff(border_x) <= BORDER_TOLERANCE && row < main_height {
+                        self.mouse_drag.border = Some(DragBorder::Vertical);
+                        return;
+                    }
+                }
+
+                // Check horizontal border (editor/terminal boundary)
+                if self.show_terminal && self.show_tree {
+                    let right_x =
+                        (u32::from(screen_width) * u32::from(self.tree_width_pct) / 100) as u16;
+                    let right_height = main_height;
+                    let border_y =
+                        (u32::from(right_height) * u32::from(self.editor_height_pct) / 100) as u16;
+                    if row.abs_diff(border_y) <= BORDER_TOLERANCE && col >= right_x {
+                        self.mouse_drag.border = Some(DragBorder::Horizontal);
+                        return;
+                    }
+                } else if self.show_terminal {
+                    // Tree hidden: horizontal border spans entire width
+                    let border_y =
+                        (u32::from(main_height) * u32::from(self.editor_height_pct) / 100) as u16;
+                    if row.abs_diff(border_y) <= BORDER_TOLERANCE {
+                        self.mouse_drag.border = Some(DragBorder::Horizontal);
+                        return;
+                    }
+                }
+
+                // No border hit — focus the clicked panel
+                if row < main_height {
+                    self.focus = self.panel_at(col, row, screen_width, main_height);
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                match self.mouse_drag.border {
+                    Some(DragBorder::Vertical) => {
+                        if !self.show_tree || screen_width == 0 {
+                            return;
+                        }
+                        let new_pct =
+                            (u32::from(mouse.column) * 100 / u32::from(screen_width)) as u16;
+                        self.tree_width_pct = new_pct.clamp(MIN_PANEL_PCT, MAX_PANEL_PCT);
+                    }
+                    Some(DragBorder::Horizontal) => {
+                        if !self.show_terminal || main_height == 0 {
+                            return;
+                        }
+                        // Compute right area start (0 if tree hidden)
+                        let right_area_start_y: u16 = 0;
+                        let right_area_height = main_height;
+                        let relative_row = mouse.row.saturating_sub(right_area_start_y);
+                        let new_pct =
+                            (u32::from(relative_row) * 100 / u32::from(right_area_height)) as u16;
+                        self.editor_height_pct = new_pct.clamp(MIN_PANEL_PCT, MAX_PANEL_PCT);
+                    }
+                    None => {}
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.mouse_drag.border = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Determines which panel occupies the given screen position.
+    fn panel_at(&self, col: u16, row: u16, screen_width: u16, main_height: u16) -> FocusTarget {
+        let tree_border_x = (u32::from(screen_width) * u32::from(self.tree_width_pct) / 100) as u16;
+
+        if self.show_tree && col < tree_border_x {
+            return FocusTarget::Tree;
+        }
+
+        if self.show_terminal {
+            let border_y =
+                (u32::from(main_height) * u32::from(self.editor_height_pct) / 100) as u16;
+            if row >= border_y {
+                return FocusTarget::Terminal(0);
+            }
+        }
+
+        FocusTarget::Editor
     }
 
     /// Resets all panel sizes to their defaults.
@@ -841,5 +964,218 @@ mod tests {
         let mut app = AppState::new();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(app.resize_mode.active);
+    }
+
+    // --- Mouse drag resize tests ---
+
+    fn mouse_event(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn mouse_drag_inactive_by_default() {
+        let app = AppState::new();
+        assert_eq!(app.mouse_drag.border, None);
+    }
+
+    #[test]
+    fn mouse_down_near_vertical_border_starts_drag() {
+        let mut app = AppState::new();
+        // tree_width_pct = 20, screen_width = 100 → border at col 20
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 20, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.mouse_drag.border, Some(DragBorder::Vertical));
+    }
+
+    #[test]
+    fn mouse_down_near_horizontal_border_starts_drag() {
+        let mut app = AppState::new();
+        // editor_height_pct = 70, main_height = 29 (30-1 status), border_y = 29*70/100 = 20
+        // col must be >= tree border (col 20 for 20% of 100)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 20);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.mouse_drag.border, Some(DragBorder::Horizontal));
+    }
+
+    #[test]
+    fn mouse_down_away_from_border_no_drag() {
+        let mut app = AppState::new();
+        // Click in the middle of editor area, far from any border
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 60, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.mouse_drag.border, None);
+    }
+
+    #[test]
+    fn mouse_drag_vertical_updates_tree_width() {
+        let mut app = AppState::new();
+        // Start drag on vertical border
+        app.mouse_drag.border = Some(DragBorder::Vertical);
+        // Drag to col 30 of 100 → 30%
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 30, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.tree_width_pct, 30);
+    }
+
+    #[test]
+    fn mouse_drag_horizontal_updates_editor_height() {
+        let mut app = AppState::new();
+        app.mouse_drag.border = Some(DragBorder::Horizontal);
+        // main_height = 29, drag to row 14 → 14*100/29 = 48%
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 50, 14);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.editor_height_pct, 48);
+    }
+
+    #[test]
+    fn mouse_up_ends_drag() {
+        let mut app = AppState::new();
+        app.mouse_drag.border = Some(DragBorder::Vertical);
+        let evt = mouse_event(MouseEventKind::Up(MouseButton::Left), 30, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.mouse_drag.border, None);
+    }
+
+    #[test]
+    fn mouse_drag_clamps_at_minimum() {
+        let mut app = AppState::new();
+        app.mouse_drag.border = Some(DragBorder::Vertical);
+        // Drag to col 2 of 100 → 2%, should clamp to 10%
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 2, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.tree_width_pct, MIN_PANEL_PCT);
+    }
+
+    #[test]
+    fn mouse_drag_clamps_at_maximum() {
+        let mut app = AppState::new();
+        app.mouse_drag.border = Some(DragBorder::Vertical);
+        // Drag to col 98 of 100 → 98%, should clamp to 90%
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 98, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.tree_width_pct, MAX_PANEL_PCT);
+    }
+
+    #[test]
+    fn mouse_drag_vertical_noop_when_tree_hidden() {
+        let mut app = AppState::new();
+        app.show_tree = false;
+        app.mouse_drag.border = Some(DragBorder::Vertical);
+        let original = app.tree_width_pct;
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 30, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.tree_width_pct, original);
+    }
+
+    #[test]
+    fn mouse_drag_horizontal_noop_when_terminal_hidden() {
+        let mut app = AppState::new();
+        app.show_terminal = false;
+        app.mouse_drag.border = Some(DragBorder::Horizontal);
+        let original = app.editor_height_pct;
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 50, 14);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.editor_height_pct, original);
+    }
+
+    #[test]
+    fn mouse_drag_ignores_right_button() {
+        let mut app = AppState::new();
+        // Right-click near vertical border should not start drag
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Right), 20, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.mouse_drag.border, None);
+    }
+
+    // --- Mouse click focus tests ---
+
+    #[test]
+    fn mouse_click_in_tree_focuses_tree() {
+        let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Editor);
+        // tree_width_pct = 20, screen_width = 100 → tree occupies cols 0..20
+        // Click at col 5 (well inside tree area)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Tree);
+    }
+
+    #[test]
+    fn mouse_click_in_editor_focuses_editor() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        // Click at col 60, row 5 (well inside editor area, above horizontal border)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 60, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn mouse_click_in_terminal_focuses_terminal() {
+        let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Editor);
+        // editor_height_pct = 70, main_height = 29, border_y = 20
+        // Click at col 60, row 25 (below the horizontal border)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 60, 25);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
+    }
+
+    #[test]
+    fn mouse_click_in_editor_when_tree_hidden() {
+        let mut app = AppState::new();
+        app.show_tree = false;
+        app.focus = FocusTarget::Terminal(0);
+        // Tree hidden, click at col 5 row 5 → editor (no tree to click)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn mouse_click_in_editor_when_terminal_hidden() {
+        let mut app = AppState::new();
+        app.show_terminal = false;
+        app.focus = FocusTarget::Tree;
+        // Terminal hidden, click at col 60 row 25 → editor (no terminal)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 60, 25);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn mouse_click_on_border_does_not_change_focus() {
+        let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Editor);
+        // Click right on the vertical border → starts drag, does NOT change focus
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 20, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.mouse_drag.border, Some(DragBorder::Vertical));
+    }
+
+    #[test]
+    fn mouse_click_in_status_bar_does_not_change_focus() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        // Status bar is the last row (row 29 for screen_height=30)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 29);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Tree);
+    }
+
+    #[test]
+    fn mouse_right_click_does_not_change_focus() {
+        let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Editor);
+        // Right-click in tree area should not change focus
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Right), 5, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        assert_eq!(app.focus, FocusTarget::Editor);
     }
 }

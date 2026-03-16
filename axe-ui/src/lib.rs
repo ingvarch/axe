@@ -127,6 +127,8 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
     ("Ctrl+R", "Resize mode"),
+    ("Click panel", "Focus panel"),
+    ("Drag border", "Resize panel"),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
 ];

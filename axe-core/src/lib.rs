@@ -2,7 +2,7 @@ pub mod app;
 pub mod command;
 pub mod keymap;
 
-pub use app::{AppState, FocusTarget, ResizeModeState};
+pub use app::{AppState, DragBorder, FocusTarget, MouseDragState, ResizeModeState};
 pub use command::Command;
 pub use keymap::KeymapResolver;
 
