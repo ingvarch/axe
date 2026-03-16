@@ -1,5 +1,5 @@
 pub mod app;
-pub use app::AppState;
+pub use app::{AppState, FocusTarget};
 
 /// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {

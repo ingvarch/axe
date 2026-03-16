@@ -73,7 +73,7 @@ No content yet — just colored borders with panel titles.
 
 ---
 
-### Task 1.4 — Focus System & Panel Switching
+### Task 1.4 — Focus System & Panel Switching [DONE]
 
 Implement focus switching between the three panels. The active panel should have
 a highlighted border.
