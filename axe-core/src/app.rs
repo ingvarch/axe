@@ -84,6 +84,7 @@ pub struct AppState {
     pub show_help: bool,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
+    /// Which panel is currently zoomed to full screen, if any.
     pub zoomed_panel: Option<FocusTarget>,
     pub tree_width_pct: u16,
     pub editor_height_pct: u16,
@@ -313,6 +314,13 @@ impl AppState {
     /// - `None` -> zoom current focus
     /// - `Some(x)` where `x == focus` -> un-zoom
     /// - `Some(_)` -> switch zoom to current focus
+    ///
+    // IMPACT ANALYSIS — toggle_zoom
+    // Parents: KeyEvent → Command::ZoomPanel → this function
+    // Children: render() checks zoomed_panel to decide layout
+    // Siblings: resize_mode (must be deactivated), focus cycling (unaffected),
+    //           mouse drag (unaffected — drag still updates percentages even while zoomed)
+    // Risk: None — zoomed_panel is purely additive, no existing state is modified
     fn toggle_zoom(&mut self) {
         self.resize_mode.active = false;
         if self.zoomed_panel.as_ref() == Some(&self.focus) {
