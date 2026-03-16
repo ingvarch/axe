@@ -6,7 +6,7 @@
 //           axe-ui reads tab.term() for rendering.
 //           Resize events from the main loop call tab.resize().
 
-use std::io::Read;
+use std::io::{Read, Write};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
@@ -42,6 +42,7 @@ impl Dimensions for TermSize {
 pub struct TerminalTab {
     title: String,
     master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     term: Term<AltScreenListener>,
     processor: ansi::Processor,
@@ -59,6 +60,8 @@ impl TerminalTab {
         let (master, child, reader) =
             pty::spawn_shell(&shell, cols, rows).context("Failed to spawn terminal shell")?;
 
+        let writer = master.take_writer().context("Failed to take PTY writer")?;
+
         let size = TermSize {
             cols: cols as usize,
             rows: rows as usize,
@@ -69,6 +72,7 @@ impl TerminalTab {
         let tab = Self {
             title: shell,
             master,
+            writer,
             child,
             term,
             processor,
@@ -77,6 +81,15 @@ impl TerminalTab {
         };
 
         Ok((tab, reader))
+    }
+
+    /// Writes raw bytes to the PTY, sending input to the shell process.
+    pub fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.writer
+            .write_all(data)
+            .context("Failed to write to PTY")?;
+        self.writer.flush().context("Failed to flush PTY writer")?;
+        Ok(())
     }
 
     /// Feeds raw bytes from the PTY into the VT parser, updating the terminal grid.
@@ -195,5 +208,14 @@ mod tests {
     fn title_returns_shell_name() {
         let (tab, _reader) = TerminalTab::new(80, 24).unwrap();
         assert!(!tab.title().is_empty(), "Tab title should not be empty");
+    }
+
+    #[test]
+    fn write_sends_data_to_pty() {
+        let (mut tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        // Writing to PTY should not error. The shell receives the bytes.
+        let result = tab.write(b"echo hello\n");
+        assert!(result.is_ok(), "write should succeed: {:?}", result.err());
+        assert!(tab.is_alive(), "Child should still be alive after write");
     }
 }

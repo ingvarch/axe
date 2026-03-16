@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 alacritty_terminal = "0.25"
 anyhow = "1"
+crossterm = "0.28"
 log = "0.4"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

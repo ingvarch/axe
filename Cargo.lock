@@ -138,6 +138,7 @@ dependencies = [
 name = "axe-core"
 version = "0.1.0"
 dependencies = [
+ "alacritty_terminal",
  "axe-terminal",
  "axe-tree",
  "crossterm",
@@ -168,6 +169,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "crossterm",
  "log",
  "portable-pty",
  "serde",

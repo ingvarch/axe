@@ -148,6 +148,31 @@ impl AppState {
         }
     }
 
+    /// Converts a key event to bytes and writes them to the active terminal PTY.
+    ///
+    /// Reads the application cursor mode from the terminal state to produce the
+    /// correct escape sequences for arrow keys.
+    fn write_terminal_input(&mut self, key: &KeyEvent) {
+        let app_cursor = self
+            .terminal_manager
+            .as_ref()
+            .and_then(|mgr| mgr.active_tab())
+            .map(|tab| {
+                tab.term()
+                    .mode()
+                    .contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+            })
+            .unwrap_or(false);
+
+        if let Some(bytes) = axe_terminal::input::key_to_bytes(key, app_cursor) {
+            if let Some(ref mut mgr) = self.terminal_manager {
+                if let Err(e) = mgr.write_to_active(&bytes) {
+                    log::warn!("Failed to write to terminal: {e}");
+                }
+            }
+        }
+    }
+
     /// Processes a key event by resolving it through the keymap and executing
     /// the resulting command, if any.
     ///
@@ -232,6 +257,17 @@ impl AppState {
                 return;
             }
             // Fall through to global keymap for Ctrl+Q, Tab, etc.
+        }
+
+        // Terminal-focus key interception: global bindings take priority, everything else
+        // is forwarded to the PTY as raw bytes.
+        if matches!(self.focus, FocusTarget::Terminal(_)) && !self.show_help {
+            if let Some(cmd) = self.keymap.resolve(&key) {
+                self.execute(cmd);
+            } else {
+                self.write_terminal_input(&key);
+            }
+            return;
         }
 
         if let Some(cmd) = self.keymap.resolve(&key) {
@@ -1525,5 +1561,62 @@ mod tests {
     fn poll_terminal_noop_without_manager() {
         let mut app = AppState::new();
         app.poll_terminal(); // Should not panic.
+    }
+
+    // --- Terminal key interception tests ---
+
+    #[test]
+    fn terminal_focused_printable_key_not_handled_as_command() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        // Typing 'a' should not trigger quit or any command side effect.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        // Focus should remain on terminal (not cycled).
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
+    }
+
+    #[test]
+    fn terminal_focused_ctrl_q_still_quits() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn terminal_focused_tab_still_cycles_focus() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.focus, FocusTarget::Tree);
+    }
+
+    #[test]
+    fn terminal_focused_ctrl_c_not_forwarded_as_quit() {
+        // Ctrl+C is a global binding (Quit). When terminal is focused,
+        // the global binding takes precedence.
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn terminal_focused_enter_not_handled_as_command() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
+    }
+
+    #[test]
+    fn terminal_focused_arrow_keys_not_handled_as_command() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
+        assert!(!app.should_quit);
     }
 }

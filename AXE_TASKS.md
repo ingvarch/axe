@@ -496,7 +496,7 @@ Spawn a shell process in the terminal panel and display its output.
 
 ---
 
-### Task 6.2 — Terminal: Keyboard Input
+### Task 6.2 — Terminal: Keyboard Input ✅
 
 Pass keyboard input to the terminal shell.
 

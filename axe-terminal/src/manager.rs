@@ -80,6 +80,16 @@ impl TerminalManager {
         }
     }
 
+    /// Writes raw bytes to the active terminal tab's PTY.
+    ///
+    /// No-op if there are no tabs.
+    pub fn write_to_active(&mut self, data: &[u8]) -> Result<()> {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.write(data)?;
+        }
+        Ok(())
+    }
+
     /// Returns a reference to the currently active tab, if any.
     pub fn active_tab(&self) -> Option<&TerminalTab> {
         self.tabs.get(self.active)
@@ -193,5 +203,27 @@ mod tests {
     fn poll_output_noop_without_tabs() {
         let mut mgr = TerminalManager::new();
         mgr.poll_output(); // Should not panic.
+    }
+
+    #[test]
+    fn write_to_active_works() {
+        let mut mgr = TerminalManager::new();
+        mgr.spawn_default_tab(80, 24).unwrap();
+        let result = mgr.write_to_active(b"echo test\n");
+        assert!(
+            result.is_ok(),
+            "write_to_active should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn write_to_active_noop_without_tabs() {
+        let mut mgr = TerminalManager::new();
+        let result = mgr.write_to_active(b"hello");
+        assert!(
+            result.is_ok(),
+            "write_to_active with no tabs should be a no-op"
+        );
     }
 }
