@@ -3,6 +3,7 @@ pub mod command;
 pub mod keymap;
 
 pub use app::{AppState, DragBorder, FocusTarget, MouseDragState, ResizeModeState};
+pub use axe_tree::FileTree;
 pub use command::Command;
 pub use keymap::KeymapResolver;
 

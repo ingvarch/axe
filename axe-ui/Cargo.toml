@@ -5,5 +5,9 @@ edition.workspace = true
 
 [dependencies]
 axe-core = { path = "../axe-core" }
+axe-tree = { path = "../axe-tree" }
 ratatui = "0.29"
 crossterm = "0.28"
+
+[dev-dependencies]
+tempfile = "3"

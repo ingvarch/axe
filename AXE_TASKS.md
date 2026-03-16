@@ -180,18 +180,18 @@ Maximize the active panel to fill the entire screen.
 
 ## Phase 3: File Tree
 
-### Task 3.1 — File Tree: Display Directory Listing
+### Task 3.1 — File Tree: Display Directory Listing [DONE]
 
 Show the current working directory's contents in the file tree panel.
 
 **Acceptance criteria:**
-- On startup, the file tree shows the contents of the directory passed as argument (`axe .`) or CWD
-- Directories shown before files, both sorted alphabetically
-- Directories have a `▸` (collapsed) or `▾` (expanded) prefix
-- Files have a ` ` (space) prefix for alignment
-- Indentation shows nesting depth (2 spaces per level)
-- The project root name is shown as the first item (bold)
-- Hidden files (starting with `.`) are hidden by default
+- [x] On startup, the file tree shows the contents of the directory passed as argument (`axe .`) or CWD
+- [x] Directories shown before files, both sorted alphabetically
+- [x] Directories have a `▸` (collapsed) or `▾` (expanded) prefix
+- [x] Files have a ` ` (space) prefix for alignment
+- [x] Indentation shows nesting depth (2 spaces per level)
+- [x] The project root name is shown as the first item (bold)
+- [x] Hidden files (starting with `.`) are hidden by default
 
 **Implementation details:**
 - Implement `FileTree` struct in `axe-tree` with `Vec<TreeNode>`

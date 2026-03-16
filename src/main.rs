@@ -1,5 +1,6 @@
 use std::io::{self, stdout};
 use std::panic;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
@@ -13,7 +14,11 @@ use axe_core::AppState;
 
 #[derive(Parser)]
 #[command(name = "axe", version = axe_core::version(), about = "Axe IDE")]
-struct Cli {}
+struct Cli {
+    /// Directory to open (defaults to current directory)
+    #[arg(default_value = ".")]
+    path: PathBuf,
+}
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -47,12 +52,13 @@ fn install_panic_hook() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    Cli::parse();
+    let cli = Cli::parse();
 
     install_panic_hook();
 
     let mut terminal = setup_terminal()?;
-    let mut app = AppState::new();
+    let root = cli.path.canonicalize().unwrap_or(cli.path);
+    let mut app = AppState::new_with_root(root);
 
     while !app.should_quit {
         let size = terminal.size()?;

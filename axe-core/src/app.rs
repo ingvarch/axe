@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::command::Command;
@@ -88,11 +90,13 @@ pub struct AppState {
     pub zoomed_panel: Option<FocusTarget>,
     pub tree_width_pct: u16,
     pub editor_height_pct: u16,
+    /// File tree for the project directory, if loaded.
+    pub file_tree: Option<axe_tree::FileTree>,
     keymap: KeymapResolver,
 }
 
 impl AppState {
-    /// Creates a new `AppState` with default values.
+    /// Creates a new `AppState` with default values and no file tree.
     pub fn new() -> Self {
         Self {
             should_quit: false,
@@ -105,7 +109,25 @@ impl AppState {
             zoomed_panel: None,
             tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
+            file_tree: None,
             keymap: KeymapResolver::with_defaults(),
+        }
+    }
+
+    /// Creates a new `AppState` with a file tree loaded from the given root directory.
+    ///
+    /// If the directory cannot be read, logs a warning and falls back to no file tree.
+    pub fn new_with_root(root: PathBuf) -> Self {
+        let file_tree = match axe_tree::FileTree::new(root) {
+            Ok(tree) => Some(tree),
+            Err(e) => {
+                log::warn!("Failed to load file tree: {e}");
+                None
+            }
+        };
+        Self {
+            file_tree,
+            ..Self::new()
         }
     }
 
@@ -1255,5 +1277,26 @@ mod tests {
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Right), 5, 5);
         app.handle_mouse_event(evt, 100, 30);
         assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    // --- FileTree integration tests ---
+
+    #[test]
+    fn new_has_no_file_tree() {
+        let app = AppState::new();
+        assert!(app.file_tree.is_none());
+    }
+
+    #[test]
+    fn new_with_root_has_file_tree() {
+        let tmp = std::env::temp_dir();
+        let app = AppState::new_with_root(tmp);
+        assert!(app.file_tree.is_some());
+    }
+
+    #[test]
+    fn new_with_root_invalid_path_has_no_file_tree() {
+        let app = AppState::new_with_root(PathBuf::from("/nonexistent/path/12345"));
+        assert!(app.file_tree.is_none());
     }
 }

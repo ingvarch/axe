@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use axe_core::{AppState, FocusTarget};
+use axe_tree::{FileTree, NodeKind};
 
 use layout::LayoutManager;
 use theme::Theme;
@@ -197,6 +198,57 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     frame.render_widget(help_text, content_area);
 }
 
+/// Indentation width per nesting level in the file tree.
+const TREE_INDENT: usize = 2;
+/// Prefix for collapsed directories.
+const DIR_COLLAPSED_PREFIX: &str = "▸ ";
+/// Prefix for expanded directories.
+const DIR_EXPANDED_PREFIX: &str = "▾ ";
+/// Prefix for files (space for alignment with directory arrows).
+const FILE_PREFIX: &str = "  ";
+
+/// Renders file tree content into the given area.
+fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
+    let nodes = file_tree.visible_nodes();
+    let mut lines: Vec<Line> = Vec::with_capacity(nodes.len());
+
+    for node in nodes {
+        let indent = " ".repeat(TREE_INDENT * node.depth);
+
+        if node.depth == 0 {
+            // Root node: bold project name.
+            lines.push(Line::from(Span::styled(
+                format!("{indent}{}", node.name),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            let (prefix, style) = match &node.kind {
+                NodeKind::Directory { .. } => {
+                    let pfx = if node.expanded {
+                        DIR_EXPANDED_PREFIX
+                    } else {
+                        DIR_COLLAPSED_PREFIX
+                    };
+                    (pfx, Style::default().fg(theme.panel_border_active))
+                }
+                NodeKind::File { .. } | NodeKind::Symlink { .. } => {
+                    (FILE_PREFIX, Style::default().fg(theme.foreground))
+                }
+            };
+
+            lines.push(Line::from(Span::styled(
+                format!("{indent}{prefix}{}", node.name),
+                style,
+            )));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
 /// Renders the full IDE interface with conditional panel visibility and a status bar.
 pub fn render(app: &AppState, frame: &mut Frame) {
     let theme = Theme::default();
@@ -221,10 +273,14 @@ pub fn render(app: &AppState, frame: &mut Frame) {
             FocusTarget::Editor => (" Editor (zoomed) ", FocusTarget::Editor),
             FocusTarget::Terminal(id) => (" Terminal (zoomed) ", FocusTarget::Terminal(*id)),
         };
-        frame.render_widget(
-            panel_block(title, &app.focus, &panel_target, &theme, resize_active),
-            main_area,
-        );
+        let block = panel_block(title, &app.focus, &panel_target, &theme, resize_active);
+        let inner = block.inner(main_area);
+        frame.render_widget(block, main_area);
+        if matches!(zoomed, FocusTarget::Tree) {
+            if let Some(ref tree) = app.file_tree {
+                render_tree_content(tree, inner, frame, &theme);
+            }
+        }
     } else if layout_mgr.show_tree {
         let horizontal = Layout::horizontal([
             Constraint::Percentage(layout_mgr.tree_width_pct),
@@ -235,16 +291,18 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         let tree_area = horizontal[0];
         let right_area = horizontal[1];
 
-        frame.render_widget(
-            panel_block(
-                " Files ",
-                &app.focus,
-                &FocusTarget::Tree,
-                &theme,
-                resize_active,
-            ),
-            tree_area,
+        let tree_block = panel_block(
+            " Files ",
+            &app.focus,
+            &FocusTarget::Tree,
+            &theme,
+            resize_active,
         );
+        let tree_inner = tree_block.inner(tree_area);
+        frame.render_widget(tree_block, tree_area);
+        if let Some(ref tree) = app.file_tree {
+            render_tree_content(tree, tree_inner, frame, &theme);
+        }
 
         render_right_panels(app, frame, right_area, &layout_mgr, &theme, resize_active);
     } else {
@@ -627,5 +685,65 @@ mod tests {
         let content = render_app_to_string(&app, 100, 24);
         assert!(content.contains("Files"), "expected 'Files' panel");
         assert!(content.contains("Editor"), "expected 'Editor' panel");
+    }
+
+    // --- File tree rendering tests ---
+
+    fn app_with_tree() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "").unwrap();
+        let app = AppState::new_with_root(tmp.path().to_path_buf());
+        (app, tmp)
+    }
+
+    #[test]
+    fn render_tree_shows_root_name() {
+        let (app, tmp) = app_with_tree();
+        let root_name = tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains(&root_name),
+            "expected root name '{root_name}' in rendered output"
+        );
+    }
+
+    #[test]
+    fn render_tree_shows_directory_prefix() {
+        let (app, _tmp) = app_with_tree();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains('\u{25B8}'),
+            "expected collapsed dir prefix '▸' in rendered output"
+        );
+    }
+
+    #[test]
+    fn render_tree_shows_file_entries() {
+        let (app, _tmp) = app_with_tree();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("Cargo.toml"),
+            "expected 'Cargo.toml' in tree"
+        );
+        assert!(
+            content.contains("README.md"),
+            "expected 'README.md' in tree"
+        );
+    }
+
+    #[test]
+    fn render_tree_shows_directory_name() {
+        let (app, _tmp) = app_with_tree();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains("src"), "expected 'src' directory in tree");
     }
 }
