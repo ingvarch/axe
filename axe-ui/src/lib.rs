@@ -108,6 +108,15 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         spans.push(Span::styled(format!("{lines} lines"), text_style));
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled(ftype.to_string(), text_style));
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(
+            format!(
+                "Ln {}, Col {}",
+                buffer.cursor.row + 1,
+                buffer.cursor.col + 1
+            ),
+            text_style,
+        ));
     }
 
     if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
@@ -909,6 +918,91 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     Some(adjust_terminal_rect(inner, has_tabs))
 }
 
+/// Computes the editor content area rect (after borders and gutter).
+///
+/// Used by main.rs to sync `AppState::editor_inner_area` each frame.
+pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    // If zoomed to a non-editor panel, editor is not visible.
+    if let Some(ref zoomed) = app.zoomed_panel {
+        if !matches!(zoomed, FocusTarget::Editor) {
+            return None;
+        }
+        // Editor is zoomed — it fills the main area minus status bar.
+        let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        let block = panel_block(
+            " Editor (zoomed) ",
+            &app.focus,
+            &FocusTarget::Editor,
+            &Theme::default(),
+            false,
+        );
+        let inner = block.inner(vertical[0]);
+        let gutter_w = app
+            .buffer_manager
+            .active_buffer()
+            .map(|b| gutter_width(b.line_count()))
+            .unwrap_or(3);
+        return Some(Rect {
+            x: inner.x + gutter_w,
+            y: inner.y,
+            width: inner.width.saturating_sub(gutter_w),
+            height: inner.height,
+        });
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let right_area = if layout_mgr.show_tree {
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(layout_mgr.tree_width_pct),
+            Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+        ])
+        .split(main_area);
+        horizontal[1]
+    } else {
+        main_area
+    };
+
+    let editor_outer = if layout_mgr.show_terminal {
+        let right_split = Layout::vertical([
+            Constraint::Percentage(layout_mgr.editor_height_pct),
+            Constraint::Percentage(100 - layout_mgr.editor_height_pct),
+        ])
+        .split(right_area);
+        right_split[0]
+    } else {
+        right_area
+    };
+
+    let block = panel_block(
+        " Editor ",
+        &app.focus,
+        &FocusTarget::Editor,
+        &Theme::default(),
+        false,
+    );
+    let inner = block.inner(editor_outer);
+    let gutter_w = app
+        .buffer_manager
+        .active_buffer()
+        .map(|b| gutter_width(b.line_count()))
+        .unwrap_or(3);
+    Some(Rect {
+        x: inner.x + gutter_w,
+        y: inner.y,
+        width: inner.width.saturating_sub(gutter_w),
+        height: inner.height,
+    })
+}
+
 /// Width reserved for the terminal scrollbar column.
 const TERMINAL_SCROLLBAR_WIDTH: u16 = 1;
 
@@ -1020,10 +1114,17 @@ fn gutter_width(line_count: usize) -> u16 {
 
 // IMPACT ANALYSIS — render_editor_content
 // Parents: render_right_panels() calls this with the inner area of the editor block.
-// Children: reads EditorBuffer via active_buffer().
+// Children: reads EditorBuffer via active_buffer() — cursor, scroll_row, scroll_col.
 // Siblings: render_terminal_content (similar pattern, independent).
-/// Renders the file content with line numbers inside the editor panel.
-fn render_editor_content(buffer: &EditorBuffer, area: Rect, frame: &mut Frame, theme: &Theme) {
+/// Renders the file content with line numbers, scroll offset, cursor, and
+/// current-line highlighting inside the editor panel.
+fn render_editor_content(
+    buffer: &EditorBuffer,
+    area: Rect,
+    frame: &mut Frame,
+    theme: &Theme,
+    editor_focused: bool,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -1045,21 +1146,36 @@ fn render_editor_content(buffer: &EditorBuffer, area: Rect, frame: &mut Frame, t
     };
 
     let gutter_style = Style::default().fg(theme.line_number).bg(theme.gutter_bg);
+    let gutter_active_style = Style::default()
+        .fg(theme.line_number_active)
+        .bg(theme.gutter_bg);
 
     let visible_lines = area.height as usize;
+    let scroll_row = buffer.scroll_row;
+    let scroll_col = buffer.scroll_col;
+    let cursor_row = buffer.cursor.row;
+    let cursor_col = buffer.cursor.col;
 
-    // Render gutter (line numbers).
+    // Render gutter (line numbers) with scroll offset and active line highlight.
     let gutter_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
-            let line_num = i + 1;
-            if line_num <= buffer.line_count() {
-                Line::from(format!(
-                    "{:>width$} ",
-                    line_num,
-                    width = (gutter_w - 1) as usize
+            let file_line = scroll_row + i;
+            let line_num = file_line + 1;
+            if file_line < buffer.line_count() {
+                let style = if file_line == cursor_row && editor_focused {
+                    gutter_active_style
+                } else {
+                    gutter_style
+                };
+                Line::from(Span::styled(
+                    format!("{:>width$} ", line_num, width = (gutter_w - 1) as usize),
+                    style,
                 ))
             } else {
-                Line::from(format!("{:>width$}", "~", width = gutter_w as usize))
+                Line::from(Span::styled(
+                    format!("{:>width$}", "~", width = gutter_w as usize),
+                    gutter_style,
+                ))
             }
         })
         .collect();
@@ -1067,18 +1183,38 @@ fn render_editor_content(buffer: &EditorBuffer, area: Rect, frame: &mut Frame, t
     let gutter_paragraph = Paragraph::new(gutter_lines).style(gutter_style);
     frame.render_widget(gutter_paragraph, gutter_area);
 
-    // Render file content.
+    // Render file content with scroll offset and current-line background.
     let content_style = Style::default().fg(theme.foreground).bg(theme.background);
+    let cursor_line_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.cursor_line_bg);
 
     let content_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
-            if let Some(rope_line) = buffer.line_at(i) {
+            let file_line = scroll_row + i;
+            let is_cursor_line = file_line == cursor_row && editor_focused;
+            let line_style = if is_cursor_line {
+                cursor_line_style
+            } else {
+                content_style
+            };
+            if let Some(rope_line) = buffer.line_at(file_line) {
                 let text: String = rope_line.chars().collect();
                 // Trim trailing newline for display.
                 let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
-                // Clip to available width.
-                let display: String = trimmed.chars().take(content_w as usize).collect();
-                Line::from(display)
+                // Apply horizontal scroll and clip to available width.
+                let display: String = trimmed
+                    .chars()
+                    .skip(scroll_col)
+                    .take(content_w as usize)
+                    .collect();
+                // Pad to full width so the cursor line background covers the entire line.
+                let padded = if is_cursor_line {
+                    format!("{:<width$}", display, width = content_w as usize)
+                } else {
+                    display
+                };
+                Line::from(Span::styled(padded, line_style))
             } else {
                 Line::from("")
             }
@@ -1087,6 +1223,22 @@ fn render_editor_content(buffer: &EditorBuffer, area: Rect, frame: &mut Frame, t
 
     let content_paragraph = Paragraph::new(content_lines).style(content_style);
     frame.render_widget(content_paragraph, content_area);
+
+    // Render cursor by directly modifying the frame buffer cell at the cursor position.
+    if editor_focused {
+        let screen_row = cursor_row.saturating_sub(scroll_row);
+        let screen_col = cursor_col.saturating_sub(scroll_col);
+        if screen_row < visible_lines && screen_col < content_w as usize {
+            let cx = content_area.x + screen_col as u16;
+            let cy = content_area.y + screen_row as u16;
+            if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
+                let fg = cell.fg;
+                let bg = cell.bg;
+                cell.set_fg(bg);
+                cell.set_bg(fg);
+            }
+        }
+    }
 }
 
 /// Renders the right-side panels (editor and optionally terminal) in the given area.
@@ -1115,7 +1267,8 @@ fn render_right_panels(
         let editor_inner = editor_block.inner(right_split[0]);
         frame.render_widget(editor_block, right_split[0]);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
-            render_editor_content(buffer, editor_inner, frame, theme);
+            let focused = app.focus == FocusTarget::Editor;
+            render_editor_content(buffer, editor_inner, frame, theme, focused);
         }
 
         let term_block = panel_block(
@@ -1141,7 +1294,8 @@ fn render_right_panels(
         let editor_inner = editor_block.inner(area);
         frame.render_widget(editor_block, area);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
-            render_editor_content(buffer, editor_inner, frame, theme);
+            let focused = app.focus == FocusTarget::Editor;
+            render_editor_content(buffer, editor_inner, frame, theme, focused);
         }
     }
 }

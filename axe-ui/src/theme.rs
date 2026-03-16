@@ -34,6 +34,8 @@ pub struct Theme {
     pub line_number: Color,
     /// Foreground color for the active (cursor) line number.
     pub line_number_active: Color,
+    /// Background color for the current cursor line.
+    pub cursor_line_bg: Color,
 }
 
 impl Default for Theme {
@@ -53,6 +55,7 @@ impl Default for Theme {
             gutter_bg: Color::Rgb(35, 39, 46),             // #23272e — slightly darker than bg
             line_number: Color::Rgb(76, 82, 99),           // #4c5263 — dim
             line_number_active: Color::Rgb(171, 178, 191), // #abb2bf — bright
+            cursor_line_bg: Color::Rgb(45, 50, 60),        // subtle highlight
         }
     }
 }
@@ -76,6 +79,15 @@ mod tests {
         );
         assert_ne!(theme.line_number, Color::Black);
         assert_ne!(theme.line_number_active, Color::Black);
+    }
+
+    #[test]
+    fn cursor_line_bg_differs_from_background() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.cursor_line_bg, theme.background,
+            "cursor_line_bg should differ from background"
+        );
     }
 
     #[test]

@@ -58,6 +58,11 @@ impl BufferManager {
         self.buffers.get(self.active)
     }
 
+    /// Returns a mutable reference to the active buffer, if any.
+    pub fn active_buffer_mut(&mut self) -> Option<&mut EditorBuffer> {
+        self.buffers.get_mut(self.active)
+    }
+
     /// Returns the number of open buffers.
     pub fn buffer_count(&self) -> usize {
         self.buffers.len()
@@ -121,6 +126,21 @@ mod tests {
         mgr.open_file(tmp.path()).unwrap();
 
         assert_eq!(mgr.buffer_count(), 1);
+    }
+
+    #[test]
+    fn active_buffer_mut_returns_mutable_ref() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+
+        let buf = mgr.active_buffer_mut().unwrap();
+        buf.cursor.row = 42;
+
+        assert_eq!(mgr.active_buffer().unwrap().cursor.row, 42);
     }
 
     #[test]

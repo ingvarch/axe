@@ -86,6 +86,30 @@ pub enum Command {
     TerminalScrollBottom,
     /// Open a file in the editor from the given path.
     OpenFile(PathBuf),
+    /// Move cursor up one line.
+    EditorUp,
+    /// Move cursor down one line.
+    EditorDown,
+    /// Move cursor left one character.
+    EditorLeft,
+    /// Move cursor right one character.
+    EditorRight,
+    /// Move cursor to beginning of line.
+    EditorHome,
+    /// Move cursor to end of line.
+    EditorEnd,
+    /// Move cursor to beginning of file.
+    EditorFileStart,
+    /// Move cursor to end of file.
+    EditorFileEnd,
+    /// Scroll/move cursor up by one page.
+    EditorPageUp,
+    /// Scroll/move cursor down by one page.
+    EditorPageDown,
+    /// Move cursor to next word boundary.
+    EditorWordRight,
+    /// Move cursor to previous word boundary.
+    EditorWordLeft,
 }
 
 #[cfg(test)]
@@ -136,6 +160,18 @@ mod tests {
             Command::TerminalScrollTop,
             Command::TerminalScrollBottom,
             Command::OpenFile(PathBuf::from("/tmp/test")),
+            Command::EditorUp,
+            Command::EditorDown,
+            Command::EditorLeft,
+            Command::EditorRight,
+            Command::EditorHome,
+            Command::EditorEnd,
+            Command::EditorFileStart,
+            Command::EditorFileEnd,
+            Command::EditorPageUp,
+            Command::EditorPageDown,
+            Command::EditorWordRight,
+            Command::EditorWordLeft,
         ];
 
         for (i, a) in variants.iter().enumerate() {

@@ -91,8 +91,17 @@ async fn main() -> Result<()> {
 
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
 
-        // Sync terminal PTY size with actual panel dimensions after draw.
+        // Sync panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);
+
+        // Update editor content area for viewport-dependent cursor movement.
+        if let Some(editor_rect) = axe_ui::editor_inner_rect(&app, full_area) {
+            app.editor_inner_area = Some((editor_rect.width, editor_rect.height));
+        } else {
+            app.editor_inner_area = None;
+        }
+
+        // Sync terminal PTY size with actual panel dimensions after draw.
         if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
             // Store grid area for mouse coordinate conversion (selection, etc.).
             app.terminal_grid_area =

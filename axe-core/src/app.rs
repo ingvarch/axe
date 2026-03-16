@@ -121,6 +121,10 @@ pub struct AppState {
     /// Updated each frame from `terminal_inner_rect()` in main.rs.
     /// Used for converting mouse screen coordinates to grid coordinates.
     pub terminal_grid_area: Option<(u16, u16, u16, u16)>,
+    /// Editor content area dimensions (width, height) in cells.
+    ///
+    /// Updated each frame from `editor_inner_rect()` in main.rs.
+    pub editor_inner_area: Option<(u16, u16)>,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -151,6 +155,7 @@ impl AppState {
             last_terminal_cols: DEFAULT_TERMINAL_COLS,
             last_terminal_rows: DEFAULT_TERMINAL_ROWS,
             terminal_grid_area: None,
+            editor_inner_area: None,
             terminal_selecting: false,
             terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
@@ -271,6 +276,30 @@ impl AppState {
                 self.execute(cmd);
             }
             return;
+        }
+
+        // Editor-focus key interception: cursor movement and navigation.
+        if self.focus == FocusTarget::Editor && !self.show_help {
+            let editor_cmd = match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Up) => Some(Command::EditorUp),
+                (KeyModifiers::NONE, KeyCode::Down) => Some(Command::EditorDown),
+                (KeyModifiers::NONE, KeyCode::Left) => Some(Command::EditorLeft),
+                (KeyModifiers::NONE, KeyCode::Right) => Some(Command::EditorRight),
+                (KeyModifiers::NONE, KeyCode::Home) => Some(Command::EditorHome),
+                (KeyModifiers::NONE, KeyCode::End) => Some(Command::EditorEnd),
+                (KeyModifiers::CONTROL, KeyCode::Home) => Some(Command::EditorFileStart),
+                (KeyModifiers::CONTROL, KeyCode::End) => Some(Command::EditorFileEnd),
+                (KeyModifiers::NONE, KeyCode::PageUp) => Some(Command::EditorPageUp),
+                (KeyModifiers::NONE, KeyCode::PageDown) => Some(Command::EditorPageDown),
+                (KeyModifiers::CONTROL, KeyCode::Left) => Some(Command::EditorWordLeft),
+                (KeyModifiers::CONTROL, KeyCode::Right) => Some(Command::EditorWordRight),
+                _ => None,
+            };
+            if let Some(cmd) = editor_cmd {
+                self.execute(cmd);
+                return;
+            }
+            // Fall through to global keymap for Ctrl+Q, Tab, etc.
         }
 
         // Tree-focus key interception: handle active actions, navigation, and file operations.
@@ -491,6 +520,42 @@ impl AppState {
                 Ok(()) => self.focus = FocusTarget::Editor,
                 Err(e) => log::warn!("Failed to open file: {e}"),
             },
+            // IMPACT ANALYSIS — Editor cursor movement commands
+            // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
+            // Children: EditorBuffer cursor/scroll state
+            // Siblings: Tree/terminal unaffected; UI reads cursor/scroll to render
+            Command::EditorUp
+            | Command::EditorDown
+            | Command::EditorLeft
+            | Command::EditorRight
+            | Command::EditorHome
+            | Command::EditorEnd
+            | Command::EditorFileStart
+            | Command::EditorFileEnd
+            | Command::EditorPageUp
+            | Command::EditorPageDown
+            | Command::EditorWordRight
+            | Command::EditorWordLeft => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    match cmd {
+                        Command::EditorUp => buf.move_up(),
+                        Command::EditorDown => buf.move_down(),
+                        Command::EditorLeft => buf.move_left(),
+                        Command::EditorRight => buf.move_right(),
+                        Command::EditorHome => buf.move_home(),
+                        Command::EditorEnd => buf.move_end(),
+                        Command::EditorFileStart => buf.move_file_start(),
+                        Command::EditorFileEnd => buf.move_file_end(),
+                        Command::EditorPageUp => buf.move_page_up(h),
+                        Command::EditorPageDown => buf.move_page_down(h),
+                        Command::EditorWordRight => buf.move_word_right(),
+                        Command::EditorWordLeft => buf.move_word_left(),
+                        _ => unreachable!(),
+                    }
+                    buf.ensure_cursor_visible(h, w);
+                }
+            }
         }
     }
 
@@ -839,6 +904,13 @@ impl AppState {
         if let Some(ref mut mgr) = self.terminal_manager {
             mgr.scroll_active(scroll);
         }
+    }
+
+    /// Returns `(height, width)` of the editor content area for viewport calculations.
+    fn editor_viewport(&self) -> (usize, usize) {
+        self.editor_inner_area
+            .map(|(w, h)| (h as usize, w as usize))
+            .unwrap_or((20, 80))
     }
 
     /// Activates a specific terminal tab by index. No-op if the index is out of range.
@@ -2273,5 +2345,68 @@ mod tests {
         app.execute(Command::TreeToggle);
         assert_eq!(app.focus, FocusTarget::Editor);
         assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    // --- Editor cursor movement tests ---
+
+    fn app_with_editor_buffer(content: &str) -> AppState {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, content.as_bytes()).unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+        // Leak the tempfile so the path remains valid for the test.
+        let _ = tmp.into_temp_path();
+        app
+    }
+
+    #[test]
+    fn editor_up_moves_cursor() {
+        let mut app = app_with_editor_buffer("line1\nline2\nline3");
+        app.execute(Command::EditorDown);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+        app.execute(Command::EditorUp);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+    }
+
+    #[test]
+    fn editor_arrow_keys_intercepted_when_editor_focused() {
+        let mut app = app_with_editor_buffer("hello\nworld");
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+        app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 1);
+    }
+
+    #[test]
+    fn editor_home_end_work() {
+        let mut app = app_with_editor_buffer("hello world");
+        app.execute(Command::EditorEnd);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 11);
+        app.execute(Command::EditorHome);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 0);
+    }
+
+    #[test]
+    fn editor_page_down_uses_viewport() {
+        let content = (0..50)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = app_with_editor_buffer(&content);
+        app.editor_inner_area = Some((80, 10));
+        app.execute(Command::EditorPageDown);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 10);
+    }
+
+    #[test]
+    fn editor_word_movement_works() {
+        let mut app = app_with_editor_buffer("hello world foo");
+        app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 6);
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 0);
     }
 }
