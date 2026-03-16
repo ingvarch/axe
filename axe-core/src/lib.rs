@@ -1,3 +1,6 @@
+pub mod app;
+pub use app::AppState;
+
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

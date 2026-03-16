@@ -31,17 +31,17 @@ with a placeholder comment. The root should have a `src/main.rs` that prints "Ax
 
 ---
 
-### Task 1.2 — Basic Event Loop with Raw Terminal
+### Task 1.2 — Basic Event Loop with Raw Terminal [DONE]
 
 Set up the main event loop: enter raw mode, create a Ratatui terminal, render an empty
 screen, and handle `q` to quit. This is the foundation everything else builds on.
 
 **Acceptance criteria:**
-- Running `cargo run` enters the TUI (alternate screen, raw mode)
-- Pressing `q` exits cleanly (terminal restored to normal)
-- An empty screen is rendered with a centered "Axe IDE" text
-- `Ctrl+C` also exits cleanly
-- Terminal is always restored on panic (install panic hook)
+- [x] Running `cargo run` enters the TUI (alternate screen, raw mode)
+- [x] Pressing `q` exits cleanly (terminal restored to normal)
+- [x] An empty screen is rendered with a centered "Axe IDE" text
+- [x] `Ctrl+C` also exits cleanly
+- [x] Terminal is always restored on panic (install panic hook)
 
 **Implementation details:**
 - Use `crossterm` as the Ratatui backend
