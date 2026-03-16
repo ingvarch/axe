@@ -549,6 +549,14 @@ impl AppState {
                     }
                 }
 
+                // IMPACT ANALYSIS — Terminal mouse text selection (Down/Drag/Up)
+                // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
+                // Children: terminal_manager selection state, system clipboard (on drag release).
+                // Siblings: mouse_drag.border (panel border resize — mutually exclusive, border check
+                //           runs first and returns early), tab_bar_hit (also checked before selection).
+                //           terminal_grid_area must be kept in sync by main.rs each frame.
+                // Risk: terminal_selecting flag must be cleared on Up to avoid stale drag state.
+
                 // Check if click is in terminal grid area — start selection.
                 if let Some(point) = self.screen_to_terminal_point(col, row) {
                     if let Some(ref mut mgr) = self.terminal_manager {
@@ -817,6 +825,13 @@ impl AppState {
         }
     }
 
+    // IMPACT ANALYSIS — screen_to_terminal_point
+    // Parents: handle_mouse_event() calls this for Down and Drag events in the terminal grid.
+    // Children: None — pure conversion function returning Option<Point>.
+    // Siblings: terminal_grid_area (must be set by main.rs each frame),
+    //           terminal_manager.active_display_offset() (must reflect current scroll state).
+    // Risk: None — stateless helper, cannot corrupt state.
+
     /// Converts screen coordinates to a terminal grid Point.
     ///
     /// Returns `None` if the coordinates are outside the terminal grid area
@@ -838,6 +853,12 @@ impl AppState {
             Column(grid_col),
         ))
     }
+
+    // IMPACT ANALYSIS — copy_to_clipboard
+    // Parents: handle_mouse_event() Up handler calls this after drag selection completes.
+    // Children: System clipboard (external side effect).
+    // Siblings: None — standalone utility, no shared state.
+    // Risk: Clipboard access may fail on headless systems or Wayland without focus. Errors are logged.
 
     /// Copies the given text to the system clipboard.
     ///
