@@ -5,6 +5,7 @@
 // Siblings: detect_shell() is also used by TerminalTab to determine which shell to spawn.
 
 use std::io::Read;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -28,9 +29,10 @@ pub fn detect_shell() -> String {
 
 /// Spawns a shell process in a new PTY with the given dimensions.
 ///
-/// Returns the master PTY (for resize/write), the child process handle, and a
-/// reader stream for the PTY output.
-pub fn spawn_shell(shell: &str, cols: u16, rows: u16) -> Result<SpawnResult> {
+/// The shell's working directory is set to `cwd`. Returns the master PTY
+/// (for resize/write), the child process handle, and a reader stream for
+/// the PTY output.
+pub fn spawn_shell(shell: &str, cols: u16, rows: u16, cwd: &Path) -> Result<SpawnResult> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -41,7 +43,8 @@ pub fn spawn_shell(shell: &str, cols: u16, rows: u16) -> Result<SpawnResult> {
         })
         .context("Failed to open PTY")?;
 
-    let cmd = CommandBuilder::new(shell);
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.cwd(cwd);
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -81,7 +84,8 @@ mod tests {
     #[test]
     fn spawn_shell_creates_valid_pty() {
         let shell = detect_shell();
-        let result = spawn_shell(&shell, 80, 24);
+        let cwd = std::env::current_dir().unwrap();
+        let result = spawn_shell(&shell, 80, 24, &cwd);
         assert!(
             result.is_ok(),
             "spawn_shell should succeed: {:?}",
@@ -93,6 +97,18 @@ mod tests {
         assert!(
             child.try_wait().unwrap().is_none(),
             "Child should still be running"
+        );
+    }
+
+    #[test]
+    fn spawn_shell_respects_cwd() {
+        let shell = detect_shell();
+        let tmp = std::env::temp_dir();
+        let result = spawn_shell(&shell, 80, 24, &tmp);
+        assert!(
+            result.is_ok(),
+            "spawn_shell with temp dir should succeed: {:?}",
+            result.err()
         );
     }
 }

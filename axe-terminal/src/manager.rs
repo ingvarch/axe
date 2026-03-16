@@ -5,6 +5,7 @@
 //           when panel dimensions change.
 
 use std::io::Read;
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{Context, Result};
@@ -53,9 +54,9 @@ impl TerminalManager {
     ///
     /// Starts a background thread that reads PTY output and sends it through
     /// the internal channel.
-    pub fn spawn_default_tab(&mut self, cols: u16, rows: u16) -> Result<()> {
+    pub fn spawn_default_tab(&mut self, cols: u16, rows: u16, cwd: &Path) -> Result<()> {
         let (tab, reader) =
-            TerminalTab::new(cols, rows).context("Failed to create terminal tab")?;
+            TerminalTab::new(cols, rows, cwd).context("Failed to create terminal tab")?;
         self.tabs.push(tab);
 
         let tx = self.event_tx.clone();
@@ -143,7 +144,7 @@ mod tests {
     #[test]
     fn spawn_default_tab_adds_tab() {
         let mut mgr = TerminalManager::new();
-        let result = mgr.spawn_default_tab(80, 24);
+        let result = mgr.spawn_default_tab(80, 24, &std::env::current_dir().unwrap());
         assert!(
             result.is_ok(),
             "spawn_default_tab should succeed: {:?}",
@@ -156,7 +157,8 @@ mod tests {
     #[test]
     fn poll_output_processes_channel_data() {
         let mut mgr = TerminalManager::new();
-        mgr.spawn_default_tab(80, 24).unwrap();
+        mgr.spawn_default_tab(80, 24, &std::env::current_dir().unwrap())
+            .unwrap();
 
         // Manually send test data through the channel.
         mgr.event_tx
@@ -179,7 +181,8 @@ mod tests {
     #[test]
     fn resize_active_works() {
         let mut mgr = TerminalManager::new();
-        mgr.spawn_default_tab(80, 24).unwrap();
+        mgr.spawn_default_tab(80, 24, &std::env::current_dir().unwrap())
+            .unwrap();
 
         let result = mgr.resize_active(120, 40);
         assert!(
@@ -208,7 +211,8 @@ mod tests {
     #[test]
     fn write_to_active_works() {
         let mut mgr = TerminalManager::new();
-        mgr.spawn_default_tab(80, 24).unwrap();
+        mgr.spawn_default_tab(80, 24, &std::env::current_dir().unwrap())
+            .unwrap();
         let result = mgr.write_to_active(b"echo test\n");
         assert!(
             result.is_ok(),

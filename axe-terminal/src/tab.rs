@@ -7,6 +7,7 @@
 //           Resize events from the main loop call tab.resize().
 
 use std::io::{Read, Write};
+use std::path::Path;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
@@ -55,10 +56,10 @@ impl TerminalTab {
     ///
     /// The caller is responsible for reading from the returned reader in a background
     /// thread and feeding the data back through `process_output()`.
-    pub fn new(cols: u16, rows: u16) -> Result<(Self, Box<dyn Read + Send>)> {
+    pub fn new(cols: u16, rows: u16, cwd: &Path) -> Result<(Self, Box<dyn Read + Send>)> {
         let shell = pty::detect_shell();
         let (master, child, reader) =
-            pty::spawn_shell(&shell, cols, rows).context("Failed to spawn terminal shell")?;
+            pty::spawn_shell(&shell, cols, rows, cwd).context("Failed to spawn terminal shell")?;
 
         let writer = master.take_writer().context("Failed to take PTY writer")?;
 
@@ -150,7 +151,7 @@ mod tests {
 
     #[test]
     fn new_creates_valid_tab() {
-        let result = TerminalTab::new(80, 24);
+        let result = TerminalTab::new(80, 24, &std::env::current_dir().unwrap());
         assert!(
             result.is_ok(),
             "TerminalTab::new should succeed: {:?}",
@@ -165,7 +166,8 @@ mod tests {
 
     #[test]
     fn process_output_updates_grid() {
-        let (mut tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
 
         // Feed "hello" as raw bytes through the VT parser.
         tab.process_output(b"hello");
@@ -186,7 +188,8 @@ mod tests {
 
     #[test]
     fn resize_updates_dimensions() {
-        let (mut tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
 
         let result = tab.resize(120, 40);
         assert!(result.is_ok(), "resize should succeed: {:?}", result.err());
@@ -199,20 +202,22 @@ mod tests {
 
     #[test]
     fn resize_noop_when_same_size() {
-        let (mut tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         let result = tab.resize(80, 24);
         assert!(result.is_ok(), "noop resize should succeed");
     }
 
     #[test]
     fn title_returns_shell_name() {
-        let (tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         assert!(!tab.title().is_empty(), "Tab title should not be empty");
     }
 
     #[test]
     fn write_sends_data_to_pty() {
-        let (mut tab, _reader) = TerminalTab::new(80, 24).unwrap();
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         // Writing to PTY should not error. The shell receives the bytes.
         let result = tab.write(b"echo hello\n");
         assert!(result.is_ok(), "write should succeed: {:?}", result.err());

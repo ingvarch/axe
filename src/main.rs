@@ -64,12 +64,13 @@ async fn main() -> Result<()> {
 
     let mut terminal = setup_terminal()?;
     let root = cli.path.canonicalize().unwrap_or(cli.path);
-    let mut app = AppState::new_with_root(root);
 
-    // Initialize terminal emulator with default shell.
+    // Initialize terminal emulator with default shell in the project directory.
     let mut mgr = axe_terminal::TerminalManager::new();
-    mgr.spawn_default_tab(INITIAL_TERM_COLS, INITIAL_TERM_ROWS)
+    mgr.spawn_default_tab(INITIAL_TERM_COLS, INITIAL_TERM_ROWS, &root)
         .context("Failed to spawn terminal")?;
+
+    let mut app = AppState::new_with_root(root);
     app.terminal_manager = Some(mgr);
 
     // Track terminal panel size to detect resize.
