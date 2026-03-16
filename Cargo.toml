@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "axe-core",
+    "axe-config",
+    "axe-editor",
+    "axe-tree",
+    "axe-terminal",
+    "axe-lsp",
+    "axe-ui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[package]
+name = "axe"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axe-core = { path = "axe-core" }
+axe-ui = { path = "axe-ui" }
+axe-config = { path = "axe-config" }
+crossterm = "0.28"
+ratatui = "0.29"
+tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,8 @@
+[package]
+name = "axe-tree"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axe-core = { path = "../axe-core" }
+serde = { version = "1", features = ["derive"] }
