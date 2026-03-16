@@ -91,6 +91,28 @@ impl KeymapResolver {
             Command::CloseTerminalTab,
         );
 
+        // Terminal scrollback navigation.
+        resolver.bind(
+            KeyModifiers::SHIFT,
+            KeyCode::PageUp,
+            Command::TerminalScrollPageUp,
+        );
+        resolver.bind(
+            KeyModifiers::SHIFT,
+            KeyCode::PageDown,
+            Command::TerminalScrollPageDown,
+        );
+        resolver.bind(
+            KeyModifiers::SHIFT,
+            KeyCode::Home,
+            Command::TerminalScrollTop,
+        );
+        resolver.bind(
+            KeyModifiers::SHIFT,
+            KeyCode::End,
+            Command::TerminalScrollBottom,
+        );
+
         // Alt+1-9: direct terminal tab access (1-indexed for the user, 0-indexed internally).
         for i in 1..=9u8 {
             resolver.bind(
@@ -276,6 +298,37 @@ mod tests {
             resolver.resolve(&key),
             Some(Command::ActivateTerminalTab(8))
         );
+    }
+
+    #[test]
+    fn default_bindings_shift_page_up_scrolls_terminal() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT);
+        assert_eq!(resolver.resolve(&key), Some(Command::TerminalScrollPageUp));
+    }
+
+    #[test]
+    fn default_bindings_shift_page_down_scrolls_terminal() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT);
+        assert_eq!(
+            resolver.resolve(&key),
+            Some(Command::TerminalScrollPageDown)
+        );
+    }
+
+    #[test]
+    fn default_bindings_shift_home_scrolls_terminal_top() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT);
+        assert_eq!(resolver.resolve(&key), Some(Command::TerminalScrollTop));
+    }
+
+    #[test]
+    fn default_bindings_shift_end_scrolls_terminal_bottom() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::End, KeyModifiers::SHIFT);
+        assert_eq!(resolver.resolve(&key), Some(Command::TerminalScrollBottom));
     }
 
     #[test]

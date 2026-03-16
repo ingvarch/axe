@@ -15,6 +15,8 @@ const RESIZE_STEP: u16 = 2;
 const MIN_PANEL_PCT: u16 = 10;
 /// Maximum allowed panel size percentage.
 const MAX_PANEL_PCT: u16 = 90;
+/// Number of lines to scroll per mouse wheel tick.
+const MOUSE_SCROLL_LINES: i32 = 3;
 
 /// Which panel border is being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,11 +310,20 @@ impl AppState {
             // Fall through to global keymap for Ctrl+Q, Tab, etc.
         }
 
-        // Terminal-focus key interception: global bindings take priority, everything else
-        // is forwarded to the PTY as raw bytes.
+        // Terminal-focus key interception: only specific global bindings are intercepted,
+        // everything else is forwarded to the PTY as raw bytes.
+        // CloseOverlay (Esc) is NOT intercepted here — shell needs Esc for vi mode,
+        // completion cancel, etc. Also prevents SGR mouse sequence splitting: if crossterm
+        // splits a mouse escape, the leading Esc would be consumed while `[<65;...M` would
+        // leak into the PTY as visible text.
         if matches!(self.focus, FocusTarget::Terminal(_)) && !self.show_help {
             if let Some(cmd) = self.keymap.resolve(&key) {
-                self.execute(cmd);
+                if cmd == Command::CloseOverlay {
+                    // Esc with no overlay open — forward to PTY.
+                    self.write_terminal_input(&key);
+                } else {
+                    self.execute(cmd);
+                }
             } else {
                 self.write_terminal_input(&key);
             }
@@ -426,6 +437,18 @@ impl AppState {
             Command::NewTerminalTab => self.new_terminal_tab(),
             Command::CloseTerminalTab => self.close_terminal_tab(),
             Command::ActivateTerminalTab(idx) => self.activate_terminal_tab(idx),
+            Command::TerminalScrollPageUp => {
+                self.terminal_scroll(alacritty_terminal::grid::Scroll::PageUp);
+            }
+            Command::TerminalScrollPageDown => {
+                self.terminal_scroll(alacritty_terminal::grid::Scroll::PageDown);
+            }
+            Command::TerminalScrollTop => {
+                self.terminal_scroll(alacritty_terminal::grid::Scroll::Top);
+            }
+            Command::TerminalScrollBottom => {
+                self.terminal_scroll(alacritty_terminal::grid::Scroll::Bottom);
+            }
         }
     }
 
@@ -542,6 +565,30 @@ impl AppState {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.mouse_drag.border = None;
+            }
+            MouseEventKind::ScrollUp => {
+                if self.show_terminal
+                    && matches!(
+                        self.panel_at(mouse.column, mouse.row, screen_width, main_height),
+                        FocusTarget::Terminal(_)
+                    )
+                {
+                    self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
+                        MOUSE_SCROLL_LINES,
+                    ));
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.show_terminal
+                    && matches!(
+                        self.panel_at(mouse.column, mouse.row, screen_width, main_height),
+                        FocusTarget::Terminal(_)
+                    )
+                {
+                    self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
+                        -MOUSE_SCROLL_LINES,
+                    ));
+                }
             }
             _ => {}
         }
@@ -676,6 +723,13 @@ impl AppState {
                 return;
             }
             self.focus = FocusTarget::Terminal(mgr.active_index());
+        }
+    }
+
+    /// Scrolls the active terminal tab by the given amount.
+    fn terminal_scroll(&mut self, scroll: alacritty_terminal::grid::Scroll) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            mgr.scroll_active(scroll);
         }
     }
 
@@ -1840,5 +1894,57 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.focus, FocusTarget::Terminal(0));
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn terminal_focused_esc_forwarded_to_pty_not_close_overlay() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        // Esc should NOT trigger CloseOverlay when terminal is focused without overlay.
+        // It should be forwarded to PTY (for shell vi-mode, cancel completion, etc.).
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
+        assert!(!app.should_quit);
+        // show_help was already false, stays false — verifying no side effect.
+        assert!(!app.show_help);
+    }
+
+    // --- Mouse scroll tests ---
+
+    #[test]
+    fn mouse_scroll_up_over_terminal_does_not_panic() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        // Scroll over the terminal area (bottom-right area with default layout).
+        let evt = mouse_event(MouseEventKind::ScrollUp, 60, 25);
+        app.handle_mouse_event(evt, 100, 30);
+        // No terminal_manager — should be a no-op, no panic.
+    }
+
+    #[test]
+    fn mouse_scroll_down_over_terminal_does_not_panic() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        let evt = mouse_event(MouseEventKind::ScrollDown, 60, 25);
+        app.handle_mouse_event(evt, 100, 30);
+    }
+
+    #[test]
+    fn mouse_scroll_over_editor_does_not_scroll_terminal() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        // Scroll over the editor area (top-right with default layout).
+        let evt = mouse_event(MouseEventKind::ScrollUp, 60, 5);
+        app.handle_mouse_event(evt, 100, 30);
+        // Should not panic, terminal not scrolled.
+    }
+
+    #[test]
+    fn mouse_scroll_ignored_when_terminal_hidden() {
+        let mut app = AppState::new();
+        app.show_terminal = false;
+        let evt = mouse_event(MouseEventKind::ScrollUp, 60, 25);
+        app.handle_mouse_event(evt, 100, 30);
+        // No-op, no panic.
     }
 }

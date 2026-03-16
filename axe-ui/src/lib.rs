@@ -166,6 +166,10 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Alt+T", "New terminal tab"),
     ("Alt+W", "Close terminal tab"),
     ("Alt+1-9", "Switch to tab N"),
+    ("Shift+PgUp", "Scroll up"),
+    ("Shift+PgDn", "Scroll down"),
+    ("Shift+Home", "Scroll to top"),
+    ("Shift+End", "Scroll to bottom"),
     ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
@@ -563,6 +567,7 @@ fn cell_flags_to_modifier(flags: CellFlags) -> Modifier {
 fn render_terminal_tab_bar(mgr: &TerminalManager, area: Rect, frame: &mut Frame, theme: &Theme) {
     let titles = mgr.tab_titles();
     let active = mgr.active_index();
+    let display_offset = mgr.active_display_offset();
 
     let mut spans: Vec<Span> = Vec::new();
     for (i, title) in titles.iter().enumerate() {
@@ -580,6 +585,17 @@ fn render_terminal_tab_bar(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
         if i + 1 < titles.len() {
             spans.push(Span::raw(" "));
         }
+    }
+
+    // Show scroll indicator when not at the bottom.
+    if display_offset > 0 {
+        let indicator = format!(" [{display_offset} lines up]");
+        spans.push(Span::styled(
+            indicator,
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::DIM),
+        ));
     }
 
     let line = Line::from(spans);
@@ -625,17 +641,37 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
         return;
     }
 
+    // Reserve 1 column on the right for the scrollbar track (like real terminals).
+    let scrollbar_width: u16 = 1;
+    let content_width = area.width.saturating_sub(scrollbar_width);
+
     // Split area: 1 row for tab bar, rest for terminal grid.
-    let (tab_bar_area, grid_area) = if mgr.tab_count() > 0 && area.height > 1 {
+    let (tab_bar_area, grid_area, scrollbar_area) = if mgr.tab_count() > 0 && area.height > 1 {
         let tab_bar = Rect { height: 1, ..area };
         let grid = Rect {
             y: area.y + 1,
             height: area.height.saturating_sub(1),
+            width: content_width,
             ..area
         };
-        (Some(tab_bar), grid)
+        let scrollbar = Rect {
+            x: area.x + content_width,
+            y: area.y + 1,
+            width: scrollbar_width,
+            height: area.height.saturating_sub(1),
+        };
+        (Some(tab_bar), grid, scrollbar)
     } else {
-        (None, area)
+        let grid = Rect {
+            width: content_width,
+            ..area
+        };
+        let scrollbar = Rect {
+            x: area.x + content_width,
+            width: scrollbar_width,
+            ..area
+        };
+        (None, grid, scrollbar)
     };
 
     if let Some(tab_bar) = tab_bar_area {
@@ -648,55 +684,136 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
     };
 
     let term = tab.term();
-    let content = term.renderable_content();
-    let buf = frame.buffer_mut();
 
-    // Render each cell from the terminal grid into the ratatui buffer.
-    for indexed in content.display_iter {
-        let point = indexed.point;
-        let cell = &indexed.cell;
+    // Render grid content and cursor, then release the borrow on term for scrollbar rendering.
+    let display_offset = {
+        let content = term.renderable_content();
+        let buf = frame.buffer_mut();
 
-        // Convert grid coordinates to buffer coordinates within the grid area.
-        let x = grid_area.x + point.column.0 as u16;
-        let y = grid_area.y + point.line.0 as u16;
+        // display_iter returns absolute grid coordinates where line 0 is the
+        // top of the current screen. When scrolled, lines start at
+        // -display_offset. Convert to viewport-relative row by adding
+        // display_offset.
+        let offset = content.display_offset as i32;
 
-        // Skip cells outside the visible area.
-        if x >= grid_area.x + grid_area.width || y >= grid_area.y + grid_area.height {
-            continue;
+        for indexed in content.display_iter {
+            let point = indexed.point;
+            let cell = &indexed.cell;
+
+            // Convert absolute grid line to viewport-relative row.
+            let viewport_row = point.line.0 + offset;
+            if viewport_row < 0 {
+                continue;
+            }
+            let x = grid_area.x.saturating_add(point.column.0 as u16);
+            let y = grid_area.y.saturating_add(viewport_row as u16);
+
+            // Skip cells outside the visible area.
+            if x >= grid_area.x + grid_area.width || y >= grid_area.y + grid_area.height {
+                continue;
+            }
+
+            // Skip wide char spacers — the main wide char cell covers them.
+            if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+
+            let fg = convert_ansi_color(&cell.fg);
+            let bg = convert_ansi_color(&cell.bg);
+            let modifier = cell_flags_to_modifier(cell.flags);
+
+            let style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+
+            if let Some(buf_cell) = buf.cell_mut((x, y)) {
+                buf_cell.set_char(cell.c);
+                buf_cell.set_style(style);
+            }
         }
 
-        // Skip wide char spacers — the main wide char cell covers them.
-        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
-            || cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER)
-        {
-            continue;
+        // Render cursor (only when not scrolled up — cursor is on the live screen).
+        if content.cursor.shape != CursorShape::Hidden && offset == 0 {
+            let cursor_point = content.cursor.point;
+            let cursor_row = cursor_point.line.0;
+            if cursor_row >= 0 {
+                let cx = grid_area.x.saturating_add(cursor_point.column.0 as u16);
+                let cy = grid_area.y.saturating_add(cursor_row as u16);
+
+                if cx < grid_area.x + grid_area.width && cy < grid_area.y + grid_area.height {
+                    if let Some(buf_cell) = buf.cell_mut((cx, cy)) {
+                        let cursor_style = Style::default()
+                            .fg(theme.background)
+                            .bg(theme.foreground)
+                            .add_modifier(Modifier::REVERSED);
+                        buf_cell.set_style(cursor_style);
+                    }
+                }
+            }
         }
 
-        let fg = convert_ansi_color(&cell.fg);
-        let bg = convert_ansi_color(&cell.bg);
-        let modifier = cell_flags_to_modifier(cell.flags);
+        content.display_offset
+    };
 
-        let style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+    // Render scrollbar in the reserved right column.
+    if scrollbar_area.height > 0 && scrollbar_area.width > 0 {
+        let buf = frame.buffer_mut();
+        render_terminal_scrollbar(term, display_offset, scrollbar_area, buf, theme);
+    }
+}
 
-        if let Some(buf_cell) = buf.cell_mut((x, y)) {
-            buf_cell.set_char(cell.c);
-            buf_cell.set_style(style);
-        }
+/// Renders a scrollbar in the given scrollbar area.
+///
+/// The thumb position is proportional to the scroll position within the history.
+/// When there is no scrollback history, renders nothing (empty column).
+fn render_terminal_scrollbar(
+    term: &alacritty_terminal::Term<axe_terminal::event_listener::AltScreenListener>,
+    display_offset: usize,
+    scrollbar_area: Rect,
+    buf: &mut ratatui::buffer::Buffer,
+    theme: &Theme,
+) {
+    use alacritty_terminal::grid::Dimensions;
+
+    let total_lines = term.grid().total_lines();
+    let screen_lines = term.grid().screen_lines();
+    let max_offset = total_lines.saturating_sub(screen_lines);
+
+    // No scrollback history — nothing to show.
+    if max_offset == 0 {
+        return;
     }
 
-    // Render cursor.
-    if content.cursor.shape != CursorShape::Hidden {
-        let cursor_point = content.cursor.point;
-        let cx = grid_area.x + cursor_point.column.0 as u16;
-        let cy = grid_area.y + cursor_point.line.0 as u16;
+    let track_height = scrollbar_area.height as usize;
+    if track_height == 0 {
+        return;
+    }
 
-        if cx < grid_area.x + grid_area.width && cy < grid_area.y + grid_area.height {
-            if let Some(buf_cell) = buf.cell_mut((cx, cy)) {
-                let cursor_style = Style::default()
-                    .fg(theme.background)
-                    .bg(theme.foreground)
-                    .add_modifier(Modifier::REVERSED);
-                buf_cell.set_style(cursor_style);
+    let scroll_x = scrollbar_area.x;
+
+    // Thumb size: proportional to visible content vs total content, minimum 1 row.
+    let thumb_size = ((screen_lines * track_height) / total_lines).max(1);
+
+    // Thumb position: display_offset 0 = at bottom, max_offset = at top.
+    // Invert so top of scrollbar = top of history.
+    let scroll_fraction = display_offset as f64 / max_offset as f64;
+    let thumb_top =
+        ((1.0 - scroll_fraction) * (track_height.saturating_sub(thumb_size)) as f64) as usize;
+
+    let track_style = Style::default()
+        .fg(theme.foreground)
+        .add_modifier(Modifier::DIM);
+    let thumb_style = Style::default().fg(theme.panel_border_active);
+
+    for row in 0..track_height {
+        let y = scrollbar_area.y + row as u16;
+        if let Some(cell) = buf.cell_mut((scroll_x, y)) {
+            if row >= thumb_top && row < thumb_top + thumb_size {
+                cell.set_char('\u{2588}'); // Full block for thumb
+                cell.set_style(thumb_style);
+            } else {
+                cell.set_char('\u{2502}'); // Thin vertical line for track
+                cell.set_style(track_style);
             }
         }
     }
@@ -735,7 +852,7 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
                 false,
             );
             let inner = block.inner(vertical[0]);
-            return Some(subtract_tab_bar_row(inner, has_tabs));
+            return Some(adjust_terminal_rect(inner, has_tabs));
         }
         return None;
     }
@@ -768,20 +885,22 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         false,
     );
     let inner = term_block.inner(right_split[1]);
-    Some(subtract_tab_bar_row(inner, has_tabs))
+    Some(adjust_terminal_rect(inner, has_tabs))
 }
 
-/// Subtracts 1 row from a rect to account for the terminal tab bar.
-fn subtract_tab_bar_row(rect: Rect, has_tabs: bool) -> Rect {
-    if has_tabs && rect.height > 1 {
-        Rect {
-            y: rect.y + 1,
-            height: rect.height.saturating_sub(1),
-            ..rect
-        }
-    } else {
-        rect
+/// Width reserved for the terminal scrollbar column.
+const TERMINAL_SCROLLBAR_WIDTH: u16 = 1;
+
+/// Adjusts a rect for the terminal grid: subtracts 1 row for the tab bar (if needed)
+/// and 1 column for the scrollbar.
+fn adjust_terminal_rect(rect: Rect, has_tabs: bool) -> Rect {
+    let mut r = rect;
+    if has_tabs && r.height > 1 {
+        r.y += 1;
+        r.height = r.height.saturating_sub(1);
     }
+    r.width = r.width.saturating_sub(TERMINAL_SCROLLBAR_WIDTH);
+    r
 }
 
 /// Renders the full IDE interface with conditional panel visibility and a status bar.

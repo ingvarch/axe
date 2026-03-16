@@ -535,7 +535,7 @@ Support multiple terminal instances with tabs.
 
 ---
 
-### Task 6.4 — Terminal: Scrollback Buffer
+### Task 6.4 — Terminal: Scrollback Buffer ✅
 
 Scroll through terminal output history.
 

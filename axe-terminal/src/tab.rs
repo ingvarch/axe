@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::vte::ansi;
 use alacritty_terminal::Term;
@@ -140,6 +140,21 @@ impl TerminalTab {
         self.child.kill().context("Failed to kill terminal process")
     }
 
+    /// Scrolls the terminal display by the given amount.
+    pub fn scroll(&mut self, scroll: Scroll) {
+        self.term.scroll_display(scroll);
+    }
+
+    /// Returns the current display offset (0 = at bottom, >0 = scrolled up).
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Returns a mutable reference to the alacritty terminal state.
+    pub fn term_mut(&mut self) -> &mut Term<AltScreenListener> {
+        &mut self.term
+    }
+
     /// Checks whether the child process is still running.
     pub fn is_alive(&mut self) -> bool {
         self.child
@@ -234,7 +249,7 @@ fn path_to_components(path: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::grid::{Dimensions, Scroll};
 
     // --- abbreviate_path tests ---
 
@@ -363,6 +378,78 @@ mod tests {
     fn title_returns_nonempty() {
         let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         assert!(!tab.title().is_empty(), "Tab title should not be empty");
+    }
+
+    #[test]
+    fn display_offset_zero_by_default() {
+        let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(
+            tab.display_offset(),
+            0,
+            "New tab should have display_offset 0"
+        );
+    }
+
+    #[test]
+    fn scroll_page_up_changes_offset() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+
+        // Feed enough output to fill scrollback: 100 lines of text.
+        for i in 0..100 {
+            let line = format!("line {i}\r\n");
+            tab.process_output(line.as_bytes());
+        }
+
+        tab.scroll(Scroll::PageUp);
+        assert!(
+            tab.display_offset() > 0,
+            "After PageUp with scrollback content, display_offset should be > 0"
+        );
+    }
+
+    #[test]
+    fn scroll_bottom_resets_offset() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+
+        // Fill scrollback.
+        for i in 0..100 {
+            let line = format!("line {i}\r\n");
+            tab.process_output(line.as_bytes());
+        }
+
+        tab.scroll(Scroll::PageUp);
+        assert!(tab.display_offset() > 0);
+
+        tab.scroll(Scroll::Bottom);
+        assert_eq!(
+            tab.display_offset(),
+            0,
+            "Scroll::Bottom should reset display_offset to 0"
+        );
+    }
+
+    #[test]
+    fn scroll_top_and_bottom() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+
+        // Fill scrollback.
+        for i in 0..100 {
+            let line = format!("line {i}\r\n");
+            tab.process_output(line.as_bytes());
+        }
+
+        tab.scroll(Scroll::Top);
+        let top_offset = tab.display_offset();
+        assert!(
+            top_offset > 0,
+            "Scroll::Top should scroll to maximum offset"
+        );
+
+        tab.scroll(Scroll::Bottom);
+        assert_eq!(tab.display_offset(), 0);
     }
 
     #[test]

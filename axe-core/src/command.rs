@@ -74,6 +74,14 @@ pub enum Command {
     CloseTerminalTab,
     /// Activate a specific terminal tab by index (0-based).
     ActivateTerminalTab(usize),
+    /// Scroll terminal up by one page.
+    TerminalScrollPageUp,
+    /// Scroll terminal down by one page.
+    TerminalScrollPageDown,
+    /// Scroll terminal to the top of history.
+    TerminalScrollTop,
+    /// Scroll terminal to the bottom (current output).
+    TerminalScrollBottom,
 }
 
 #[cfg(test)]
@@ -119,6 +127,10 @@ mod tests {
             Command::CloseTerminalTab,
             Command::ActivateTerminalTab(0),
             Command::ActivateTerminalTab(1),
+            Command::TerminalScrollPageUp,
+            Command::TerminalScrollPageDown,
+            Command::TerminalScrollTop,
+            Command::TerminalScrollBottom,
         ];
 
         for (i, a) in variants.iter().enumerate() {

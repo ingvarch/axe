@@ -11,6 +11,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use anyhow::{Context, Result};
 use log;
 
+use alacritty_terminal::grid::Scroll;
+
 use crate::tab::TerminalTab;
 
 /// Size of the read buffer for the background PTY reader thread.
@@ -224,6 +226,18 @@ impl TerminalManager {
             tab.resize(cols, rows)?;
         }
         Ok(())
+    }
+
+    /// Scrolls the active terminal tab by the given amount.
+    pub fn scroll_active(&mut self, scroll: Scroll) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.scroll(scroll);
+        }
+    }
+
+    /// Returns the display offset of the active terminal tab (0 = at bottom).
+    pub fn active_display_offset(&self) -> usize {
+        self.active_tab().map(|t| t.display_offset()).unwrap_or(0)
     }
 
     /// Returns the number of tabs.
@@ -602,6 +616,43 @@ mod tests {
 
         let label_len = format!("[1:{}]", mgr.tabs[0].title()).len();
         assert_eq!(mgr.tab_at_x_offset(label_len + 10), None);
+    }
+
+    #[test]
+    fn active_display_offset_zero_by_default() {
+        let mut mgr = TerminalManager::new();
+        assert_eq!(mgr.active_display_offset(), 0);
+
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        assert_eq!(mgr.active_display_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_active_no_tabs_is_noop() {
+        let mut mgr = TerminalManager::new();
+        mgr.scroll_active(Scroll::PageUp); // should not panic
+    }
+
+    #[test]
+    fn scroll_active_changes_display_offset() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        // Feed output to create scrollback.
+        let tab_id = mgr.tab_ids[0];
+        for i in 0..100 {
+            let line = format!("line {i}\r\n");
+            mgr.send_event(TermEvent::Output(tab_id, line.into_bytes()));
+        }
+        mgr.poll_output();
+
+        mgr.scroll_active(Scroll::PageUp);
+        assert!(mgr.active_display_offset() > 0);
+
+        mgr.scroll_active(Scroll::Bottom);
+        assert_eq!(mgr.active_display_offset(), 0);
     }
 
     #[test]

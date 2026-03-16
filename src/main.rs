@@ -108,15 +108,22 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Wait for at least one event, then drain all pending events to prevent
+        // input backlog and reduce the chance of split escape sequences.
         if event::poll(std::time::Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    app.handle_key_event(key);
+            loop {
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        app.handle_key_event(key);
+                    }
+                    Event::Mouse(mouse) => {
+                        app.handle_mouse_event(mouse, size.width, size.height);
+                    }
+                    _ => {}
                 }
-                Event::Mouse(mouse) => {
-                    app.handle_mouse_event(mouse, size.width, size.height);
+                if app.should_quit || !event::poll(std::time::Duration::from_millis(0))? {
+                    break;
                 }
-                _ => {}
             }
         }
     }
