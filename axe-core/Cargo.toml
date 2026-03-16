@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 alacritty_terminal = "0.25"
+arboard = "3"
 axe-terminal = { path = "../axe-terminal" }
 axe-tree = { path = "../axe-tree" }
 crossterm = "0.28"

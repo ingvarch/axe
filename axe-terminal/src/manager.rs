@@ -12,6 +12,8 @@ use anyhow::{Context, Result};
 use log;
 
 use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::index::{Direction, Point};
+use alacritty_terminal::selection::SelectionType;
 
 use crate::tab::TerminalTab;
 
@@ -243,6 +245,38 @@ impl TerminalManager {
     /// Returns the number of tabs.
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
+    }
+
+    /// Starts a text selection on the active tab.
+    ///
+    /// No-op if there are no tabs.
+    pub fn start_selection_active(&mut self, ty: SelectionType, point: Point, side: Direction) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.start_selection(ty, point, side);
+        }
+    }
+
+    /// Extends the selection on the active tab to the given point.
+    ///
+    /// No-op if there are no tabs or no active selection.
+    pub fn update_selection_active(&mut self, point: Point, side: Direction) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.update_selection(point, side);
+        }
+    }
+
+    /// Returns the selected text from the active tab, if any.
+    pub fn copy_selection_active(&self) -> Option<String> {
+        self.active_tab()?.selection_to_string()
+    }
+
+    /// Clears the selection on the active tab.
+    ///
+    /// No-op if there are no tabs.
+    pub fn clear_selection_active(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.clear_selection();
+        }
     }
 
     /// Provides access to the event sender for testing.
@@ -659,5 +693,90 @@ mod tests {
     fn tab_at_x_offset_empty_tabs() {
         let mgr = TerminalManager::new();
         assert_eq!(mgr.tab_at_x_offset(0), None);
+    }
+
+    // --- Selection delegation tests ---
+
+    #[test]
+    fn start_selection_active_sets_selection() {
+        use alacritty_terminal::index::{Column, Direction, Line, Point};
+        use alacritty_terminal::selection::SelectionType;
+
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        mgr.start_selection_active(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        assert!(
+            mgr.active_tab().unwrap().has_selection(),
+            "Active tab should have selection"
+        );
+    }
+
+    #[test]
+    fn copy_selection_active_returns_text() {
+        use alacritty_terminal::index::{Column, Direction, Line, Point};
+        use alacritty_terminal::selection::SelectionType;
+
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        // Feed content and select it.
+        let tab_id = mgr.tab_ids[0];
+        mgr.send_event(TermEvent::Output(tab_id, b"hello world".to_vec()));
+        mgr.poll_output();
+
+        mgr.start_selection_active(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        mgr.update_selection_active(Point::new(Line(0), Column(4)), Direction::Right);
+
+        let text = mgr.copy_selection_active();
+        assert_eq!(text, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn clear_selection_active_removes_selection() {
+        use alacritty_terminal::index::{Column, Direction, Line, Point};
+        use alacritty_terminal::selection::SelectionType;
+
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        mgr.start_selection_active(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        mgr.clear_selection_active();
+        assert!(
+            !mgr.active_tab().unwrap().has_selection(),
+            "Selection should be cleared"
+        );
+    }
+
+    #[test]
+    fn selection_methods_noop_without_tabs() {
+        use alacritty_terminal::index::{Column, Direction, Line, Point};
+        use alacritty_terminal::selection::SelectionType;
+
+        let mut mgr = TerminalManager::new();
+        // These should not panic with no tabs.
+        mgr.start_selection_active(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        mgr.update_selection_active(Point::new(Line(0), Column(5)), Direction::Right);
+        mgr.clear_selection_active();
+        assert_eq!(mgr.copy_selection_active(), None);
     }
 }

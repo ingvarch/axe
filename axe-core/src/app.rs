@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+use alacritty_terminal::index::{Column, Direction, Line, Point};
+use alacritty_terminal::selection::SelectionType;
+
 use crate::command::Command;
 use crate::keymap::KeymapResolver;
 
@@ -109,6 +112,16 @@ pub struct AppState {
     pub last_terminal_cols: u16,
     /// Last known terminal panel height in rows.
     pub last_terminal_rows: u16,
+    /// Terminal grid area in screen coordinates (x, y, width, height).
+    ///
+    /// Updated each frame from `terminal_inner_rect()` in main.rs.
+    /// Used for converting mouse screen coordinates to grid coordinates.
+    pub terminal_grid_area: Option<(u16, u16, u16, u16)>,
+    /// Whether a terminal text selection drag is currently in progress.
+    terminal_selecting: bool,
+    /// Screen position where the last mouse-down occurred in the terminal grid.
+    /// Used to distinguish clicks (no movement) from drags.
+    terminal_select_start: Option<(u16, u16)>,
     keymap: KeymapResolver,
 }
 
@@ -132,6 +145,9 @@ impl AppState {
             project_root: None,
             last_terminal_cols: DEFAULT_TERMINAL_COLS,
             last_terminal_rows: DEFAULT_TERMINAL_ROWS,
+            terminal_grid_area: None,
+            terminal_selecting: false,
+            terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
         }
     }
@@ -533,12 +549,43 @@ impl AppState {
                     }
                 }
 
-                // No border or tab bar hit — focus the clicked panel
+                // Check if click is in terminal grid area — start selection.
+                if let Some(point) = self.screen_to_terminal_point(col, row) {
+                    if let Some(ref mut mgr) = self.terminal_manager {
+                        mgr.clear_selection_active();
+                        mgr.start_selection_active(SelectionType::Simple, point, Direction::Left);
+                    }
+                    self.terminal_selecting = true;
+                    self.terminal_select_start = Some((col, row));
+                    self.focus = FocusTarget::Terminal(0);
+                    return;
+                }
+
+                // No border, tab bar, or terminal grid hit — focus the clicked panel.
                 if row < main_height {
                     self.focus = self.panel_at(col, row, screen_width, main_height);
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Terminal text selection drag.
+                if self.terminal_selecting {
+                    // Clamp coordinates to the terminal grid area.
+                    let point = if let Some((gx, gy, gw, gh)) = self.terminal_grid_area {
+                        let clamped_col = mouse.column.clamp(gx, gx + gw.saturating_sub(1));
+                        let clamped_row = mouse.row.clamp(gy, gy + gh.saturating_sub(1));
+                        self.screen_to_terminal_point(clamped_col, clamped_row)
+                    } else {
+                        None
+                    };
+                    if let Some(point) = point {
+                        if let Some(ref mut mgr) = self.terminal_manager {
+                            mgr.update_selection_active(point, Direction::Right);
+                        }
+                    }
+                    return;
+                }
+
+                // Panel border drag.
                 match self.mouse_drag.border {
                     Some(DragBorder::Vertical) => {
                         if !self.show_tree || screen_width == 0 {
@@ -564,6 +611,33 @@ impl AppState {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.terminal_selecting {
+                    self.terminal_selecting = false;
+
+                    // Check if this was a click without drag (no movement).
+                    let was_click = self
+                        .terminal_select_start
+                        .is_none_or(|(sx, sy)| sx == mouse.column && sy == mouse.row);
+                    self.terminal_select_start = None;
+
+                    if was_click {
+                        // Click without drag — clear selection.
+                        if let Some(ref mut mgr) = self.terminal_manager {
+                            mgr.clear_selection_active();
+                        }
+                    } else {
+                        // Drag completed — copy selection to clipboard.
+                        let text = self
+                            .terminal_manager
+                            .as_ref()
+                            .and_then(|mgr| mgr.copy_selection_active());
+                        if let Some(ref text) = text {
+                            if !text.is_empty() {
+                                Self::copy_to_clipboard(text);
+                            }
+                        }
+                    }
+                }
                 self.mouse_drag.border = None;
             }
             MouseEventKind::ScrollUp => {
@@ -739,6 +813,44 @@ impl AppState {
             if idx < mgr.tab_count() {
                 mgr.activate_tab(idx);
                 self.focus = FocusTarget::Terminal(idx);
+            }
+        }
+    }
+
+    /// Converts screen coordinates to a terminal grid Point.
+    ///
+    /// Returns `None` if the coordinates are outside the terminal grid area
+    /// or if no grid area has been set.
+    fn screen_to_terminal_point(&self, col: u16, row: u16) -> Option<Point> {
+        let (gx, gy, gw, gh) = self.terminal_grid_area?;
+        if col < gx || col >= gx + gw || row < gy || row >= gy + gh {
+            return None;
+        }
+        let grid_col = (col - gx) as usize;
+        let grid_row = (row - gy) as i32;
+        let display_offset = self
+            .terminal_manager
+            .as_ref()
+            .map(|mgr| mgr.active_display_offset())
+            .unwrap_or(0) as i32;
+        Some(Point::new(
+            Line(grid_row - display_offset),
+            Column(grid_col),
+        ))
+    }
+
+    /// Copies the given text to the system clipboard.
+    ///
+    /// Logs a warning if clipboard access fails.
+    fn copy_to_clipboard(text: &str) {
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                if let Err(e) = clipboard.set_text(text) {
+                    log::warn!("Failed to copy to clipboard: {e}");
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to access clipboard: {e}");
             }
         }
     }
@@ -1946,5 +2058,115 @@ mod tests {
         let evt = mouse_event(MouseEventKind::ScrollUp, 60, 25);
         app.handle_mouse_event(evt, 100, 30);
         // No-op, no panic.
+    }
+
+    // --- Terminal selection tests ---
+
+    #[test]
+    fn terminal_grid_area_initially_none() {
+        let app = AppState::new();
+        assert_eq!(app.terminal_grid_area, None);
+    }
+
+    #[test]
+    fn screen_to_terminal_point_none_without_grid_area() {
+        let app = AppState::new();
+        assert!(app.screen_to_terminal_point(10, 10).is_none());
+    }
+
+    #[test]
+    fn screen_to_terminal_point_converts_correctly() {
+        let mut app = AppState::new();
+        app.terminal_grid_area = Some((20, 15, 60, 10)); // grid starts at (20,15), 60x10
+
+        // Point inside the grid.
+        let point = app.screen_to_terminal_point(25, 17);
+        assert!(point.is_some());
+        let p = point.unwrap();
+        assert_eq!(p.column, Column(5)); // 25 - 20
+        assert_eq!(p.line, Line(2)); // 17 - 15, no display_offset
+    }
+
+    #[test]
+    fn screen_to_terminal_point_none_outside_grid() {
+        let mut app = AppState::new();
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        // Left of grid.
+        assert!(app.screen_to_terminal_point(19, 17).is_none());
+        // Above grid.
+        assert!(app.screen_to_terminal_point(25, 14).is_none());
+        // Right of grid.
+        assert!(app.screen_to_terminal_point(80, 17).is_none());
+        // Below grid.
+        assert!(app.screen_to_terminal_point(25, 25).is_none());
+    }
+
+    #[test]
+    fn terminal_selecting_default_false() {
+        let app = AppState::new();
+        assert!(!app.terminal_selecting);
+        assert!(app.terminal_select_start.is_none());
+    }
+
+    #[test]
+    fn mouse_down_in_terminal_grid_starts_selection() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        // Set up terminal manager with a tab.
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(60, 10, &std::env::current_dir().unwrap())
+            .unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // Click inside terminal grid.
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(evt, 100, 30);
+
+        assert!(app.terminal_selecting, "Selection drag should be active");
+        assert_eq!(app.terminal_select_start, Some((25, 17)));
+        assert!(
+            app.terminal_manager
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .has_selection(),
+            "Terminal should have an active selection"
+        );
+    }
+
+    #[test]
+    fn mouse_click_without_drag_clears_selection() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(60, 10, &std::env::current_dir().unwrap())
+            .unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // Mouse down.
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(down, 100, 30);
+        assert!(app.terminal_selecting);
+
+        // Mouse up at same position (click, no drag).
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(up, 100, 30);
+
+        assert!(!app.terminal_selecting, "Selection drag should end");
+        assert!(
+            !app.terminal_manager
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .has_selection(),
+            "Selection should be cleared on click without drag"
+        );
     }
 }

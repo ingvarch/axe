@@ -170,6 +170,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Shift+PgDn", "Scroll down"),
     ("Shift+Home", "Scroll to top"),
     ("Shift+End", "Scroll to bottom"),
+    ("Mouse drag", "Select text (copy)"),
     ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
@@ -724,7 +725,14 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
             let bg = convert_ansi_color(&cell.bg);
             let modifier = cell_flags_to_modifier(cell.flags);
 
-            let style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+            let mut style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+
+            // Apply selection highlight (inverted colors).
+            if let Some(ref sel_range) = content.selection {
+                if sel_range.contains(indexed.point) {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+            }
 
             if let Some(buf_cell) = buf.cell_mut((x, y)) {
                 buf_cell.set_char(cell.c);

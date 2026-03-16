@@ -10,6 +10,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Direction, Point};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::vte::ansi;
 use alacritty_terminal::Term;
@@ -155,6 +157,37 @@ impl TerminalTab {
         &mut self.term
     }
 
+    /// Starts a new text selection at the given grid point.
+    pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Direction) {
+        self.term.selection = Some(Selection::new(ty, point, side));
+    }
+
+    /// Extends the current selection to the given grid point.
+    ///
+    /// No-op if no selection is active.
+    pub fn update_selection(&mut self, point: Point, side: Direction) {
+        if let Some(ref mut sel) = self.term.selection {
+            sel.update(point, side);
+        }
+    }
+
+    /// Extracts the selected text as a string.
+    ///
+    /// Returns `None` if no selection is active or if it is empty.
+    pub fn selection_to_string(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    /// Clears the current selection.
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// Returns whether a selection is currently active.
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.is_some()
+    }
+
     /// Checks whether the child process is still running.
     pub fn is_alive(&mut self) -> bool {
         self.child
@@ -250,6 +283,8 @@ fn path_to_components(path: &Path) -> Vec<String> {
 mod tests {
     use super::*;
     use alacritty_terminal::grid::{Dimensions, Scroll};
+    use alacritty_terminal::index::{Column, Direction, Line, Point};
+    use alacritty_terminal::selection::SelectionType;
 
     // --- abbreviate_path tests ---
 
@@ -460,5 +495,71 @@ mod tests {
         let result = tab.write(b"echo hello\n");
         assert!(result.is_ok(), "write should succeed: {:?}", result.err());
         assert!(tab.is_alive(), "Child should still be alive after write");
+    }
+
+    // --- Selection tests ---
+
+    #[test]
+    fn start_selection_sets_selection() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+        assert!(!tab.has_selection(), "No selection initially");
+
+        tab.start_selection(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        assert!(tab.has_selection(), "Selection should be set after start");
+    }
+
+    #[test]
+    fn clear_selection_removes_selection() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+        tab.start_selection(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        assert!(tab.has_selection());
+
+        tab.clear_selection();
+        assert!(!tab.has_selection(), "Selection should be cleared");
+    }
+
+    #[test]
+    fn update_selection_does_not_panic_without_selection() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+        // Should be a no-op, not panic.
+        tab.update_selection(Point::new(Line(0), Column(5)), Direction::Right);
+        assert!(!tab.has_selection());
+    }
+
+    #[test]
+    fn selection_to_string_returns_content() {
+        let (mut tab, _reader) =
+            TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+
+        // Write content to the grid.
+        tab.process_output(b"hello world");
+
+        // Select "hello" (columns 0-4 on line 0).
+        tab.start_selection(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Direction::Left,
+        );
+        tab.update_selection(Point::new(Line(0), Column(4)), Direction::Right);
+
+        let text = tab.selection_to_string();
+        assert_eq!(text, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn selection_to_string_returns_none_without_selection() {
+        let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(tab.selection_to_string(), None);
     }
 }

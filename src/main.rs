@@ -94,6 +94,10 @@ async fn main() -> Result<()> {
         // Sync terminal PTY size with actual panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);
         if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
+            // Store grid area for mouse coordinate conversion (selection, etc.).
+            app.terminal_grid_area =
+                Some((term_rect.x, term_rect.y, term_rect.width, term_rect.height));
+
             let new_size = (term_rect.width, term_rect.height);
             if new_size != last_terminal_size && new_size.0 > 0 && new_size.1 > 0 {
                 // Update AppState so new terminal tabs use the right size.
@@ -106,6 +110,8 @@ async fn main() -> Result<()> {
                 }
                 last_terminal_size = new_size;
             }
+        } else {
+            app.terminal_grid_area = None;
         }
 
         // Wait for at least one event, then drain all pending events to prevent
