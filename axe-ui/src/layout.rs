@@ -2,6 +2,11 @@
 //!
 //! Controls the relative sizing of the file tree, editor, and terminal panels.
 
+/// Default width of the file tree panel as a percentage of total width.
+const DEFAULT_TREE_WIDTH_PCT: u16 = 20;
+/// Default height of the editor panel as a percentage of the right-side area.
+const DEFAULT_EDITOR_HEIGHT_PCT: u16 = 70;
+
 /// Manages panel size percentages for the IDE layout.
 pub struct LayoutManager {
     /// Width of the file tree panel as a percentage of total width.
@@ -17,8 +22,8 @@ pub struct LayoutManager {
 impl Default for LayoutManager {
     fn default() -> Self {
         Self {
-            tree_width_pct: 20,
-            editor_height_pct: 70,
+            tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
+            editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             show_tree: true,
             show_terminal: true,
         }

@@ -1,15 +1,29 @@
 pub mod layout;
 pub mod theme;
 
-use axe_core::{AppState, FocusTarget};
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use axe_core::{AppState, FocusTarget};
+
 use layout::LayoutManager;
 use theme::Theme;
+
+/// Width of the help overlay in columns.
+const HELP_OVERLAY_WIDTH: u16 = 40;
+/// Vertical padding added to the help overlay height (border + title + spacing).
+const HELP_OVERLAY_PADDING: u16 = 4;
+/// Minimum horizontal margin around the help overlay.
+const HELP_OVERLAY_MARGIN: u16 = 4;
+/// Minimum vertical margin around the help overlay.
+const HELP_OVERLAY_VERTICAL_MARGIN: u16 = 2;
+/// Width of the key column in help overlay lines.
+const HELP_KEY_COLUMN_WIDTH: usize = 14;
+/// Top offset for help content within the overlay inner area.
+const HELP_CONTENT_TOP_OFFSET: u16 = 1;
 
 /// Returns the border style for a panel based on whether it has focus.
 fn border_style_for(focus: &FocusTarget, panel: &FocusTarget, theme: &Theme) -> Style {
@@ -93,8 +107,9 @@ const HELP_LINES: &[(&str, &str)] = &[
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
 
-    let overlay_width = 40_u16.min(area.width.saturating_sub(4));
-    let overlay_height = (HELP_LINES.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let overlay_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(HELP_OVERLAY_MARGIN));
+    let overlay_height = (HELP_LINES.len() as u16 + HELP_OVERLAY_PADDING)
+        .min(area.height.saturating_sub(HELP_OVERLAY_VERTICAL_MARGIN));
 
     let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
         .flex(Flex::Center)
@@ -125,7 +140,7 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         .map(|(key, desc)| {
             Line::from(vec![
                 Span::styled(
-                    format!("  {key:<14}"),
+                    format!("  {key:<HELP_KEY_COLUMN_WIDTH$}"),
                     Style::default()
                         .fg(theme.panel_border_active)
                         .add_modifier(Modifier::BOLD),
@@ -139,8 +154,8 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
 
     let help_text = Paragraph::new(lines).alignment(Alignment::Left);
     let content_area = Rect {
-        y: inner.y + 1,
-        height: inner.height.saturating_sub(1),
+        y: inner.y + HELP_CONTENT_TOP_OFFSET,
+        height: inner.height.saturating_sub(HELP_CONTENT_TOP_OFFSET),
         ..inner
     };
     frame.render_widget(help_text, content_area);

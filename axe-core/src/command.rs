@@ -4,15 +4,25 @@
 /// rather than adding raw key checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Exit the application.
     Quit,
+    /// Cycle focus to the next panel.
     FocusNext,
+    /// Cycle focus to the previous panel.
     FocusPrev,
+    /// Focus the file tree panel directly.
     FocusTree,
+    /// Focus the editor panel directly.
     FocusEditor,
+    /// Focus the terminal panel directly.
     FocusTerminal,
+    /// Toggle the file tree panel visibility.
     ToggleTree,
+    /// Toggle the terminal panel visibility.
     ToggleTerminal,
+    /// Show the help overlay.
     ShowHelp,
+    /// Close the current overlay.
     CloseOverlay,
 }
 

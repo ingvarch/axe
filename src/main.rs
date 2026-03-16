@@ -1,6 +1,7 @@
 use std::io::{self, stdout};
 use std::panic;
 
+use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -16,11 +17,11 @@ struct Cli {}
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
-fn setup_terminal() -> io::Result<Term> {
+fn setup_terminal() -> Result<Term> {
     terminal::enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
-    Terminal::new(backend)
+    Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal() {
@@ -41,7 +42,7 @@ fn install_panic_hook() {
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<()> {
     Cli::parse();
 
     install_panic_hook();
