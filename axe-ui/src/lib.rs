@@ -1,13 +1,16 @@
 pub mod layout;
 pub mod theme;
 
+use alacritty_terminal::term::cell::Flags as CellFlags;
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor};
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use axe_core::{AppState, FocusTarget};
+use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
 use axe_tree::{FileTree, NodeKind, TreeAction};
 
@@ -428,6 +431,197 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
     frame.render_widget(paragraph, area);
 }
 
+// IMPACT ANALYSIS — convert_ansi_color
+// Parents: render_terminal_content() uses this to convert cell colors.
+// Children: None.
+// Siblings: Theme colors — terminal colors are independent from theme.
+
+/// Converts an alacritty_terminal ANSI color to a ratatui color.
+fn convert_ansi_color(color: &AnsiColor) -> Color {
+    match color {
+        AnsiColor::Named(named) => match named {
+            NamedColor::Black | NamedColor::DimBlack => Color::Black,
+            NamedColor::Red | NamedColor::DimRed => Color::Red,
+            NamedColor::Green | NamedColor::DimGreen => Color::Green,
+            NamedColor::Yellow | NamedColor::DimYellow => Color::Yellow,
+            NamedColor::Blue | NamedColor::DimBlue => Color::Blue,
+            NamedColor::Magenta | NamedColor::DimMagenta => Color::Magenta,
+            NamedColor::Cyan | NamedColor::DimCyan => Color::Cyan,
+            NamedColor::White | NamedColor::DimWhite => Color::White,
+            NamedColor::BrightBlack => Color::DarkGray,
+            NamedColor::BrightRed => Color::LightRed,
+            NamedColor::BrightGreen => Color::LightGreen,
+            NamedColor::BrightYellow => Color::LightYellow,
+            NamedColor::BrightBlue => Color::LightBlue,
+            NamedColor::BrightMagenta => Color::LightMagenta,
+            NamedColor::BrightCyan => Color::LightCyan,
+            NamedColor::BrightWhite => Color::White,
+            NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => {
+                Color::Reset
+            }
+            NamedColor::Background => Color::Reset,
+            NamedColor::Cursor => Color::Reset,
+        },
+        AnsiColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
+        AnsiColor::Indexed(idx) => Color::Indexed(*idx),
+    }
+}
+
+/// Converts alacritty cell flags to ratatui style modifiers.
+fn cell_flags_to_modifier(flags: CellFlags) -> Modifier {
+    let mut modifier = Modifier::empty();
+    if flags.contains(CellFlags::BOLD) {
+        modifier |= Modifier::BOLD;
+    }
+    if flags.contains(CellFlags::ITALIC) {
+        modifier |= Modifier::ITALIC;
+    }
+    if flags.intersects(CellFlags::UNDERLINE | CellFlags::DOUBLE_UNDERLINE) {
+        modifier |= Modifier::UNDERLINED;
+    }
+    if flags.contains(CellFlags::DIM) {
+        modifier |= Modifier::DIM;
+    }
+    if flags.contains(CellFlags::INVERSE) {
+        modifier |= Modifier::REVERSED;
+    }
+    if flags.contains(CellFlags::STRIKEOUT) {
+        modifier |= Modifier::CROSSED_OUT;
+    }
+    if flags.contains(CellFlags::HIDDEN) {
+        modifier |= Modifier::HIDDEN;
+    }
+    modifier
+}
+
+// IMPACT ANALYSIS — render_terminal_content
+// Parents: render_right_panels() and zoomed view call this.
+// Children: convert_ansi_color(), cell_flags_to_modifier().
+// Siblings: Terminal panel block is rendered separately — this only fills the inner area.
+
+/// Renders terminal content from the active tab into the given area.
+fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame, theme: &Theme) {
+    let tab = match mgr.active_tab() {
+        Some(tab) => tab,
+        None => return,
+    };
+
+    let term = tab.term();
+    let content = term.renderable_content();
+    let buf = frame.buffer_mut();
+
+    // Render each cell from the terminal grid into the ratatui buffer.
+    for indexed in content.display_iter {
+        let point = indexed.point;
+        let cell = &indexed.cell;
+
+        // Convert grid coordinates to buffer coordinates within the area.
+        let x = area.x + point.column.0 as u16;
+        let y = area.y + point.line.0 as u16;
+
+        // Skip cells outside the visible area.
+        if x >= area.x + area.width || y >= area.y + area.height {
+            continue;
+        }
+
+        // Skip wide char spacers — the main wide char cell covers them.
+        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
+            || cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER)
+        {
+            continue;
+        }
+
+        let fg = convert_ansi_color(&cell.fg);
+        let bg = convert_ansi_color(&cell.bg);
+        let modifier = cell_flags_to_modifier(cell.flags);
+
+        let style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+
+        if let Some(buf_cell) = buf.cell_mut((x, y)) {
+            buf_cell.set_char(cell.c);
+            buf_cell.set_style(style);
+        }
+    }
+
+    // Render cursor.
+    if content.cursor.shape != CursorShape::Hidden {
+        let cursor_point = content.cursor.point;
+        let cx = area.x + cursor_point.column.0 as u16;
+        let cy = area.y + cursor_point.line.0 as u16;
+
+        if cx < area.x + area.width && cy < area.y + area.height {
+            if let Some(buf_cell) = buf.cell_mut((cx, cy)) {
+                let cursor_style = Style::default()
+                    .fg(theme.background)
+                    .bg(theme.foreground)
+                    .add_modifier(Modifier::REVERSED);
+                buf_cell.set_style(cursor_style);
+            }
+        }
+    }
+}
+
+/// Returns the inner area of the terminal panel, if terminal is visible.
+///
+/// Used by the main loop to sync PTY size with panel dimensions.
+pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    if !layout_mgr.show_terminal {
+        return None;
+    }
+
+    if let Some(ref zoomed) = app.zoomed_panel {
+        if matches!(zoomed, FocusTarget::Terminal(_)) {
+            let vertical =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+            let block = panel_block(
+                " Terminal (zoomed) ",
+                &app.focus,
+                &FocusTarget::Terminal(0),
+                &Theme::default(),
+                false,
+            );
+            return Some(block.inner(vertical[0]));
+        }
+        return None;
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let right_area = if layout_mgr.show_tree {
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(layout_mgr.tree_width_pct),
+            Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+        ])
+        .split(main_area);
+        horizontal[1]
+    } else {
+        main_area
+    };
+
+    let right_split = Layout::vertical([
+        Constraint::Percentage(layout_mgr.editor_height_pct),
+        Constraint::Percentage(100 - layout_mgr.editor_height_pct),
+    ])
+    .split(right_area);
+
+    let term_block = panel_block(
+        " Terminal ",
+        &app.focus,
+        &FocusTarget::Terminal(0),
+        &Theme::default(),
+        false,
+    );
+    Some(term_block.inner(right_split[1]))
+}
+
 /// Renders the full IDE interface with conditional panel visibility and a status bar.
 pub fn render(app: &AppState, frame: &mut Frame) {
     let theme = Theme::default();
@@ -455,10 +649,18 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         let block = panel_block(title, &app.focus, &panel_target, &theme, resize_active);
         let inner = block.inner(main_area);
         frame.render_widget(block, main_area);
-        if matches!(zoomed, FocusTarget::Tree) {
-            if let Some(ref tree) = app.file_tree {
-                render_tree_content(tree, inner, frame, &theme);
+        match zoomed {
+            FocusTarget::Tree => {
+                if let Some(ref tree) = app.file_tree {
+                    render_tree_content(tree, inner, frame, &theme);
+                }
             }
+            FocusTarget::Terminal(_) => {
+                if let Some(ref mgr) = app.terminal_manager {
+                    render_terminal_content(mgr, inner, frame, &theme);
+                }
+            }
+            FocusTarget::Editor => {}
         }
     } else if layout_mgr.show_tree {
         let horizontal = Layout::horizontal([
@@ -529,16 +731,19 @@ fn render_right_panels(
             ),
             right_split[0],
         );
-        frame.render_widget(
-            panel_block(
-                " Terminal ",
-                &app.focus,
-                &FocusTarget::Terminal(0),
-                theme,
-                resize_active,
-            ),
-            right_split[1],
+
+        let term_block = panel_block(
+            " Terminal ",
+            &app.focus,
+            &FocusTarget::Terminal(0),
+            theme,
+            resize_active,
         );
+        let term_inner = term_block.inner(right_split[1]);
+        frame.render_widget(term_block, right_split[1]);
+        if let Some(ref mgr) = app.terminal_manager {
+            render_terminal_content(mgr, term_inner, frame, theme);
+        }
     } else {
         frame.render_widget(
             panel_block(

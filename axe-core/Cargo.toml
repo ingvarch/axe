@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+axe-terminal = { path = "../axe-terminal" }
 axe-tree = { path = "../axe-tree" }
 crossterm = "0.28"
 log = "0.4"

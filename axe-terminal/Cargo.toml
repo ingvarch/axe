@@ -4,5 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-axe-core = { path = "../axe-core" }
+alacritty_terminal = "0.25"
+anyhow = "1"
+log = "0.4"
+portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
+vte = "0.15"

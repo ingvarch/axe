@@ -92,6 +92,8 @@ pub struct AppState {
     pub editor_height_pct: u16,
     /// File tree for the project directory, if loaded.
     pub file_tree: Option<axe_tree::FileTree>,
+    /// Terminal emulator manager, if initialized.
+    pub terminal_manager: Option<axe_terminal::TerminalManager>,
     keymap: KeymapResolver,
 }
 
@@ -110,6 +112,7 @@ impl AppState {
             tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             file_tree: None,
+            terminal_manager: None,
             keymap: KeymapResolver::with_defaults(),
         }
     }
@@ -134,6 +137,15 @@ impl AppState {
     /// Signals the application to exit the event loop.
     pub fn quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// Polls terminal output from the PTY background thread and feeds it to the terminal.
+    ///
+    /// No-op if no terminal manager is initialized.
+    pub fn poll_terminal(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            mgr.poll_output();
+        }
     }
 
     /// Processes a key event by resolving it through the keymap and executing
@@ -1501,5 +1513,17 @@ mod tests {
         assert!(app.file_tree.as_ref().unwrap().show_ignored());
         app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
         assert!(!app.file_tree.as_ref().unwrap().show_ignored());
+    }
+
+    #[test]
+    fn new_has_no_terminal_manager() {
+        let app = AppState::new();
+        assert!(app.terminal_manager.is_none());
+    }
+
+    #[test]
+    fn poll_terminal_noop_without_manager() {
+        let mut app = AppState::new();
+        app.poll_terminal(); // Should not panic.
     }
 }

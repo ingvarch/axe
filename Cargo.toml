@@ -21,10 +21,12 @@ edition.workspace = true
 
 [dependencies]
 axe-core = { path = "axe-core" }
+axe-terminal = { path = "axe-terminal" }
 axe-ui = { path = "axe-ui" }
 axe-config = { path = "axe-config" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
+log = "0.4"
 ratatui = "0.29"
 tokio = { version = "1", features = ["full"] }

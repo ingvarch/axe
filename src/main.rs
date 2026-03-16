@@ -2,15 +2,21 @@ use std::io::{self, stdout};
 use std::panic;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use axe_core::AppState;
+
+/// Initial terminal size used before the first frame is rendered.
+const INITIAL_TERM_COLS: u16 = 80;
+/// Initial terminal rows for the PTY.
+const INITIAL_TERM_ROWS: u16 = 24;
 
 #[derive(Parser)]
 #[command(name = "axe", version = axe_core::version(), about = "Axe IDE")]
@@ -60,6 +66,15 @@ async fn main() -> Result<()> {
     let root = cli.path.canonicalize().unwrap_or(cli.path);
     let mut app = AppState::new_with_root(root);
 
+    // Initialize terminal emulator with default shell.
+    let mut mgr = axe_terminal::TerminalManager::new();
+    mgr.spawn_default_tab(INITIAL_TERM_COLS, INITIAL_TERM_ROWS)
+        .context("Failed to spawn terminal")?;
+    app.terminal_manager = Some(mgr);
+
+    // Track terminal panel size to detect resize.
+    let mut last_terminal_size: (u16, u16) = (0, 0);
+
     while !app.should_quit {
         let size = terminal.size()?;
 
@@ -70,7 +85,24 @@ async fn main() -> Result<()> {
             tree.set_viewport_height(inner_h as usize);
         }
 
+        // Poll terminal PTY output before drawing.
+        app.poll_terminal();
+
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
+
+        // Sync terminal PTY size with actual panel dimensions after draw.
+        let full_area = Rect::new(0, 0, size.width, size.height);
+        if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
+            let new_size = (term_rect.width, term_rect.height);
+            if new_size != last_terminal_size && new_size.0 > 0 && new_size.1 > 0 {
+                if let Some(ref mut mgr) = app.terminal_manager {
+                    if let Err(e) = mgr.resize_active(new_size.0, new_size.1) {
+                        log::warn!("Failed to resize terminal: {e}");
+                    }
+                }
+                last_terminal_size = new_size;
+            }
+        }
 
         if event::poll(std::time::Duration::from_millis(50))? {
             match event::read()? {

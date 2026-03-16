@@ -477,7 +477,7 @@ Load syntax and UI colors from TOML theme files.
 
 ## Phase 6: Integrated Terminal
 
-### Task 6.1 — Terminal: Spawn Shell & Display Output
+### Task 6.1 — Terminal: Spawn Shell & Display Output ✅ DONE
 
 Spawn a shell process in the terminal panel and display its output.
 
@@ -491,8 +491,8 @@ Spawn a shell process in the terminal panel and display its output.
 **Implementation details:**
 - Use `portable-pty` to create a PTY and spawn the shell
 - Use `alacritty_terminal` for VT parsing and terminal state management
-- Spawn a tokio task that reads PTY output and sends it as events to the main loop
-- Render the `alacritty_terminal::Term` grid as Ratatui cells
+- Background `std::thread` reads PTY output and sends it via `mpsc` channel to the main loop
+- Render the `alacritty_terminal::Term` grid as Ratatui cells with ANSI color conversion
 
 ---
 
