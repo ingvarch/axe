@@ -93,19 +93,19 @@ a highlighted border.
 
 ---
 
-### Task 1.5 — Command System & Keybinding Infrastructure
+### Task 1.5 — Command System & Keybinding Infrastructure [DONE]
 
 Replace hardcoded key checks with a proper command system. This is critical
 infrastructure — all future features will use it.
 
 **Acceptance criteria:**
-- `Command` enum exists in `axe-core` with variants: `Quit`, `FocusNext`, `FocusPrev`, `FocusTree`, `FocusEditor`, `FocusTerminal`, `ToggleTree`, `ToggleTerminal`
-- `KeymapResolver` maps `KeyEvent` → `Command`
-- Default keybindings loaded from code (not file yet)
-- `Ctrl+Q` quits (not just `q` anymore, since we'll need `q` for typing)
-- `Ctrl+B` toggles file tree visibility (panel disappears/reappears)
-- `` Ctrl+` `` toggles terminal visibility
-- All keybindings go through the command system, no more raw key checks in the event loop
+- [x] `Command` enum exists in `axe-core` with variants: `Quit`, `FocusNext`, `FocusPrev`, `FocusTree`, `FocusEditor`, `FocusTerminal`, `ToggleTree`, `ToggleTerminal`
+- [x] `KeymapResolver` maps `KeyEvent` → `Command`
+- [x] Default keybindings loaded from code (not file yet)
+- [x] `Ctrl+Q` quits (not just `q` anymore, since we'll need `q` for typing)
+- [x] `Ctrl+B` toggles file tree visibility (panel disappears/reappears)
+- [x] `` Ctrl+` `` toggles terminal visibility
+- [x] All keybindings go through the command system, no more raw key checks in the event loop
 
 **Implementation details:**
 - `KeymapResolver` is a `HashMap<(KeyModifiers, KeyCode), Command>` for now

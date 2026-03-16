@@ -1,5 +1,10 @@
 pub mod app;
+pub mod command;
+pub mod keymap;
+
 pub use app::{AppState, FocusTarget};
+pub use command::Command;
+pub use keymap::KeymapResolver;
 
 /// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {

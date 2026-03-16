@@ -18,6 +18,12 @@ pub struct Theme {
     pub status_bar_bg: Color,
     /// Status bar foreground/text color.
     pub status_bar_fg: Color,
+    /// Status bar hotkey label color (dimmed).
+    pub status_bar_key: Color,
+    /// Help overlay border color.
+    pub overlay_border: Color,
+    /// Help overlay background color.
+    pub overlay_bg: Color,
 }
 
 impl Default for Theme {
@@ -29,6 +35,9 @@ impl Default for Theme {
             panel_border_active: Color::Rgb(97, 175, 239), // #61afef
             status_bar_bg: Color::Rgb(33, 37, 43),         // #21252b
             status_bar_fg: Color::Rgb(171, 178, 191),      // #abb2bf
+            status_bar_key: Color::Rgb(130, 137, 151),     // #828997
+            overlay_border: Color::Rgb(97, 175, 239),      // #61afef
+            overlay_bg: Color::Rgb(40, 44, 52),            // #282c34
         }
     }
 }
