@@ -64,6 +64,8 @@ pub enum Command {
     TreeRename,
     /// Start delete confirmation for the selected tree node.
     TreeDelete,
+    /// Toggle file type icons in the tree panel.
+    ToggleIcons,
 }
 
 #[cfg(test)]
@@ -103,6 +105,7 @@ mod tests {
             Command::TreeCreateDir,
             Command::TreeRename,
             Command::TreeDelete,
+            Command::ToggleIcons,
         ];
 
         for (i, a) in variants.iter().enumerate() {

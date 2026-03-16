@@ -70,6 +70,11 @@ impl KeymapResolver {
             KeyCode::Char('g'),
             Command::ToggleIgnored,
         );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('i'),
+            Command::ToggleIcons,
+        );
 
         resolver
     }
@@ -199,5 +204,12 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::ToggleIgnored));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_i_toggle_icons() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::ToggleIcons));
     }
 }

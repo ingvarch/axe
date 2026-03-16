@@ -260,19 +260,21 @@ Basic file operations from the tree panel.
 
 ---
 
-### Task 3.5 — File Tree: File Icons (Nerd Font)
+### Task 3.5 — File Tree: File Icons (Nerd Font) ✅
 
 Display file type icons using Nerd Font characters.
 
 **Acceptance criteria:**
 - Each file shows an icon based on its extension (e.g., `` for Rust, `` for JS, `` for Python, `` for folders)
 - Icons are colored according to the file type
-- If Nerd Font is not available, fall back to no icons (config: `ui.font.nerd_font = false`)
+- If Nerd Font is not available, fall back to no icons (toggle: `Ctrl+I`)
 - At least 30 file type mappings (common languages + config files)
 
 **Implementation details:**
-- Create an `icons.rs` module in `axe-tree` with a `HashMap<&str, (&str, Color)>` mapping extension → (icon, color)
-- Check `config.ui.font.nerd_font` to decide whether to render icons
+- Created `axe-tree/src/icons.rs` module with `match`-based lookup (filename first, then extension)
+- `show_icons` flag on `FileTree` (default: true), toggled via `Ctrl+I` / `Command::ToggleIcons`
+- Directory icons replace arrow prefixes; each icon has its own `Color` rendered as a separate `Span`
+- 30+ file type mappings covering languages, web, config, docs, and special files
 
 ---
 

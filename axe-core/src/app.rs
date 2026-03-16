@@ -317,6 +317,11 @@ impl AppState {
                     tree.start_delete();
                 }
             }
+            Command::ToggleIcons => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.toggle_show_icons();
+                }
+            }
         }
     }
 

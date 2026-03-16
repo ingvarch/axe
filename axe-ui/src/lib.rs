@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use axe_core::{AppState, FocusTarget};
+use axe_tree::icons::{self, FileIcon};
 use axe_tree::{FileTree, NodeKind, TreeAction};
 
 use layout::LayoutManager;
@@ -98,6 +99,11 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         spans.push(Span::styled("[SHOW IGNORED]", text_style));
     }
 
+    if app.file_tree.as_ref().is_some_and(|t| t.show_icons()) {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled("[ICONS]", text_style));
+    }
+
     if app.zoomed_panel.is_some() {
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled("[ZOOM]", resize_style));
@@ -148,6 +154,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("\u{2190}/\u{2192}", "Collapse/expand"),
     ("Home/End", "First/last item"),
     ("Ctrl+G", "Toggle ignored files"),
+    ("Ctrl+I", "Toggle file icons"),
     ("n", "New file"),
     ("N", "New directory"),
     ("r", "Rename"),
@@ -249,6 +256,21 @@ fn render_delete_confirm_line(area_width: usize, theme: &Theme) -> Line<'static>
     Line::from(Span::styled(padded, style))
 }
 
+/// Returns the icon for a tree node when icons are enabled.
+fn icon_for_node(node: &axe_tree::TreeNode) -> FileIcon {
+    match &node.kind {
+        NodeKind::Directory { .. } => {
+            if node.expanded {
+                icons::DIR_OPEN_ICON
+            } else {
+                icons::DIR_CLOSED_ICON
+            }
+        }
+        NodeKind::Symlink { .. } => icons::SYMLINK_ICON,
+        NodeKind::File { .. } => icons::icon_for_file(&node.name),
+    }
+}
+
 /// Renders file tree content into the given area, with selection highlight and scrolling.
 fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
     let nodes = file_tree.visible_nodes();
@@ -257,6 +279,7 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
     let visible_count = area.height as usize;
     let action = file_tree.action();
     let area_width = area.width as usize;
+    let use_icons = file_tree.show_icons();
     let mut lines: Vec<Line> = Vec::with_capacity(visible_count);
 
     for (i, node) in nodes.iter().enumerate().skip(scroll) {
@@ -278,26 +301,7 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
             node.name.clone()
         };
 
-        let text = if node.depth == 0 {
-            format!("{indent}{display_name}")
-        } else {
-            let prefix = match &node.kind {
-                NodeKind::Directory { .. } => {
-                    if node.expanded {
-                        DIR_EXPANDED_PREFIX
-                    } else {
-                        DIR_COLLAPSED_PREFIX
-                    }
-                }
-                NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
-            };
-            format!("{indent}{prefix}{display_name}")
-        };
-
-        // Pad to full width for selection highlight.
-        let padded = format!("{:<width$}", text, width = area_width);
-
-        let mut style = if node.depth == 0 {
+        let mut name_style = if node.depth == 0 {
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD)
@@ -311,19 +315,62 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
         };
 
         if is_selected {
-            style = style.bg(theme.tree_selection_bg);
+            name_style = name_style.bg(theme.tree_selection_bg);
         }
 
         // For renaming, highlight the entire line with input style.
         if let TreeAction::Renaming { node_idx, .. } = action {
             if i == *node_idx {
-                style = style
+                name_style = name_style
                     .fg(theme.panel_border_active)
                     .bg(theme.tree_selection_bg);
             }
         }
 
-        lines.push(Line::from(Span::styled(padded, style)));
+        let line = if use_icons {
+            // Multi-span line: indent + icon (colored) + name (padded).
+            let icon = if node.depth == 0 {
+                icons::DIR_OPEN_ICON
+            } else {
+                icon_for_node(node)
+            };
+
+            let indent_span = Span::styled(indent.clone(), name_style);
+            let mut icon_style = Style::default().fg(icon.color);
+            if is_selected {
+                icon_style = icon_style.bg(theme.tree_selection_bg);
+            }
+            let icon_span = Span::styled(icon.icon, icon_style);
+
+            // Calculate remaining width for the name to pad the line.
+            let used = indent.len() + icon.icon.chars().count();
+            let remaining = area_width.saturating_sub(used);
+            let name_padded = format!("{:<width$}", display_name, width = remaining);
+            let name_span = Span::styled(name_padded, name_style);
+
+            Line::from(vec![indent_span, icon_span, name_span])
+        } else {
+            // Plain text mode (no icons) — original behavior.
+            let text = if node.depth == 0 {
+                format!("{indent}{display_name}")
+            } else {
+                let prefix = match &node.kind {
+                    NodeKind::Directory { .. } => {
+                        if node.expanded {
+                            DIR_EXPANDED_PREFIX
+                        } else {
+                            DIR_COLLAPSED_PREFIX
+                        }
+                    }
+                    NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
+                };
+                format!("{indent}{prefix}{display_name}")
+            };
+            let padded = format!("{:<width$}", text, width = area_width);
+            Line::from(Span::styled(padded, name_style))
+        };
+
+        lines.push(line);
 
         // Insert inline action lines after the selected node.
         if is_selected && lines.len() < visible_count {
@@ -813,12 +860,16 @@ mod tests {
     }
 
     #[test]
-    fn render_tree_shows_directory_prefix() {
-        let (app, _tmp) = app_with_tree();
+    fn render_tree_shows_directory_prefix_without_icons() {
+        let (mut app, _tmp) = app_with_tree();
+        // Disable icons to get plain text prefixes.
+        if let Some(ref mut tree) = app.file_tree {
+            tree.toggle_show_icons();
+        }
         let content = render_app_to_string(&app, 100, 24);
         assert!(
             content.contains('\u{25B8}'),
-            "expected collapsed dir prefix '▸' in rendered output"
+            "expected collapsed dir prefix '▸' in rendered output when icons disabled"
         );
     }
 

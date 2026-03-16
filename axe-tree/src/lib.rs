@@ -1,4 +1,5 @@
 mod filter;
+pub mod icons;
 
 pub use filter::TreeFilter;
 
@@ -53,6 +54,7 @@ pub struct FileTree {
     viewport_height: usize,
     filter: TreeFilter,
     action: TreeAction,
+    show_icons: bool,
 }
 
 impl FileTree {
@@ -100,6 +102,7 @@ impl FileTree {
             viewport_height: usize::MAX,
             filter,
             action: TreeAction::Idle,
+            show_icons: true,
         })
     }
 
@@ -285,6 +288,16 @@ impl FileTree {
     /// Returns whether ignored files are currently shown.
     pub fn show_ignored(&self) -> bool {
         self.filter.show_ignored()
+    }
+
+    /// Returns whether file icons are currently shown.
+    pub fn show_icons(&self) -> bool {
+        self.show_icons
+    }
+
+    /// Toggles display of file type icons in the tree.
+    pub fn toggle_show_icons(&mut self) {
+        self.show_icons = !self.show_icons;
     }
 
     /// Returns the current tree action state.
@@ -1479,5 +1492,23 @@ mod tests {
         tree.input_char('b');
         let result = tree.confirm_action();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn show_icons_defaults_to_true() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert!(tree.show_icons());
+    }
+
+    #[test]
+    fn toggle_show_icons_flips() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert!(tree.show_icons());
+        tree.toggle_show_icons();
+        assert!(!tree.show_icons());
+        tree.toggle_show_icons();
+        assert!(tree.show_icons());
     }
 }
