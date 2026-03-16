@@ -164,8 +164,43 @@ impl AppState {
             return;
         }
 
-        // Tree-focus key interception: arrow keys, Enter, Home, End navigate the tree.
+        // Tree-focus key interception: handle active actions, navigation, and file operations.
         if self.focus == FocusTarget::Tree && !self.show_help {
+            // Layer 1: Active action input handling — consumes ALL keys while active.
+            if let Some(ref mut tree) = self.file_tree {
+                if tree.is_action_active() {
+                    match tree.action().clone() {
+                        axe_tree::TreeAction::ConfirmDelete { .. } => match key.code {
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                let _ = tree.confirm_delete();
+                            }
+                            _ => {
+                                tree.cancel_action();
+                            }
+                        },
+                        axe_tree::TreeAction::Creating { .. }
+                        | axe_tree::TreeAction::Renaming { .. } => match key.code {
+                            KeyCode::Enter => {
+                                let _ = tree.confirm_action();
+                            }
+                            KeyCode::Esc => {
+                                tree.cancel_action();
+                            }
+                            KeyCode::Backspace => {
+                                tree.input_backspace();
+                            }
+                            KeyCode::Char(c) => {
+                                tree.input_char(c);
+                            }
+                            _ => {}
+                        },
+                        axe_tree::TreeAction::Idle => {}
+                    }
+                    return;
+                }
+            }
+
+            // Layer 2: Navigation and file operation keys.
             let tree_cmd = match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Up) => Some(Command::TreeUp),
                 (KeyModifiers::NONE, KeyCode::Down) => Some(Command::TreeDown),
@@ -174,6 +209,10 @@ impl AppState {
                 (KeyModifiers::NONE, KeyCode::Left) => Some(Command::TreeCollapseOrParent),
                 (KeyModifiers::NONE, KeyCode::Home) => Some(Command::TreeHome),
                 (KeyModifiers::NONE, KeyCode::End) => Some(Command::TreeEnd),
+                (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Command::TreeCreateFile),
+                (KeyModifiers::SHIFT, KeyCode::Char('N')) => Some(Command::TreeCreateDir),
+                (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Command::TreeRename),
+                (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Command::TreeDelete),
                 _ => None,
             };
             if let Some(cmd) = tree_cmd {
@@ -256,6 +295,26 @@ impl AppState {
             Command::ToggleIgnored => {
                 if let Some(ref mut tree) = self.file_tree {
                     tree.toggle_show_ignored();
+                }
+            }
+            Command::TreeCreateFile => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.start_create_file();
+                }
+            }
+            Command::TreeCreateDir => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.start_create_dir();
+                }
+            }
+            Command::TreeRename => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.start_rename();
+                }
+            }
+            Command::TreeDelete => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.start_delete();
                 }
             }
         }

@@ -4,7 +4,20 @@ pub use filter::TreeFilter;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+
+/// Active file operation state in the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeAction {
+    /// No active action.
+    Idle,
+    /// Creating a new file or directory. Input is the name being typed.
+    Creating { is_dir: bool, input: String },
+    /// Renaming the selected node. `node_idx` is the node being renamed.
+    Renaming { node_idx: usize, input: String },
+    /// Confirming deletion of the selected node.
+    ConfirmDelete { node_idx: usize },
+}
 
 /// Identifies what kind of filesystem entry a node represents.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +52,7 @@ pub struct FileTree {
     scroll: usize,
     viewport_height: usize,
     filter: TreeFilter,
+    action: TreeAction,
 }
 
 impl FileTree {
@@ -85,6 +99,7 @@ impl FileTree {
             scroll: 0,
             viewport_height: usize::MAX,
             filter,
+            action: TreeAction::Idle,
         })
     }
 
@@ -270,6 +285,171 @@ impl FileTree {
     /// Returns whether ignored files are currently shown.
     pub fn show_ignored(&self) -> bool {
         self.filter.show_ignored()
+    }
+
+    /// Returns the current tree action state.
+    pub fn action(&self) -> &TreeAction {
+        &self.action
+    }
+
+    /// Returns `true` if a tree action (create, rename, delete confirm) is active.
+    pub fn is_action_active(&self) -> bool {
+        !matches!(self.action, TreeAction::Idle)
+    }
+
+    /// Begins creating a new file at the current selection position.
+    pub fn start_create_file(&mut self) {
+        self.action = TreeAction::Creating {
+            is_dir: false,
+            input: String::new(),
+        };
+    }
+
+    /// Begins creating a new directory at the current selection position.
+    pub fn start_create_dir(&mut self) {
+        self.action = TreeAction::Creating {
+            is_dir: true,
+            input: String::new(),
+        };
+    }
+
+    /// Begins renaming the selected node. Noop on root (index 0).
+    pub fn start_rename(&mut self) {
+        if self.selected == 0 || self.selected >= self.nodes.len() {
+            return;
+        }
+        let name = self.nodes[self.selected].name.clone();
+        self.action = TreeAction::Renaming {
+            node_idx: self.selected,
+            input: name,
+        };
+    }
+
+    /// Begins delete confirmation for the selected node. Noop on root (index 0).
+    pub fn start_delete(&mut self) {
+        if self.selected == 0 || self.selected >= self.nodes.len() {
+            return;
+        }
+        self.action = TreeAction::ConfirmDelete {
+            node_idx: self.selected,
+        };
+    }
+
+    /// Cancels the current action, resetting to Idle.
+    pub fn cancel_action(&mut self) {
+        self.action = TreeAction::Idle;
+    }
+
+    /// Appends a character to the current input (Creating or Renaming only).
+    pub fn input_char(&mut self, c: char) {
+        match &mut self.action {
+            TreeAction::Creating { ref mut input, .. }
+            | TreeAction::Renaming { ref mut input, .. } => {
+                input.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Removes the last character from the current input.
+    pub fn input_backspace(&mut self) {
+        match &mut self.action {
+            TreeAction::Creating { ref mut input, .. }
+            | TreeAction::Renaming { ref mut input, .. } => {
+                input.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Validates a file/directory name.
+    fn validate_name(name: &str) -> Result<()> {
+        if name.is_empty() {
+            bail!("Name cannot be empty");
+        }
+        if name == "." || name == ".." {
+            bail!("Invalid name: '{name}'");
+        }
+        if name.contains('/') || name.contains('\0') {
+            bail!("Name contains invalid character");
+        }
+        Ok(())
+    }
+
+    /// Returns the parent directory path for a new file/directory operation.
+    ///
+    /// If the selected node is a directory, creates inside it.
+    /// Otherwise, creates alongside the selected file (in its parent directory).
+    fn parent_dir_for_create(&self) -> PathBuf {
+        let node = &self.nodes[self.selected];
+        if matches!(node.kind, NodeKind::Directory { .. }) {
+            node.path.clone()
+        } else {
+            node.path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| self.root.clone())
+        }
+    }
+
+    /// Confirms and executes the current action (create or rename).
+    pub fn confirm_action(&mut self) -> Result<()> {
+        match self.action.clone() {
+            TreeAction::Creating { is_dir, input } => {
+                Self::validate_name(&input)?;
+                let parent = self.parent_dir_for_create();
+                let new_path = parent.join(&input);
+                if is_dir {
+                    std::fs::create_dir(&new_path).with_context(|| {
+                        format!("Failed to create directory: {}", new_path.display())
+                    })?;
+                } else {
+                    std::fs::write(&new_path, "").with_context(|| {
+                        format!("Failed to create file: {}", new_path.display())
+                    })?;
+                }
+                self.action = TreeAction::Idle;
+                self.rebuild_tree();
+                Ok(())
+            }
+            TreeAction::Renaming { node_idx, input } => {
+                Self::validate_name(&input)?;
+                if node_idx >= self.nodes.len() {
+                    bail!("Invalid node index");
+                }
+                let old_path = &self.nodes[node_idx].path;
+                let new_path = old_path
+                    .parent()
+                    .map(|p| p.join(&input))
+                    .unwrap_or_else(|| PathBuf::from(&input));
+                std::fs::rename(old_path, &new_path)
+                    .with_context(|| format!("Failed to rename: {}", old_path.display()))?;
+                self.action = TreeAction::Idle;
+                self.rebuild_tree();
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Confirms and executes a delete operation.
+    pub fn confirm_delete(&mut self) -> Result<()> {
+        if let TreeAction::ConfirmDelete { node_idx } = self.action {
+            if node_idx >= self.nodes.len() {
+                bail!("Invalid node index");
+            }
+            let path = &self.nodes[node_idx].path;
+            if path.is_dir() {
+                std::fs::remove_dir_all(path)
+                    .with_context(|| format!("Failed to delete directory: {}", path.display()))?;
+            } else {
+                std::fs::remove_file(path)
+                    .with_context(|| format!("Failed to delete file: {}", path.display()))?;
+            }
+            self.action = TreeAction::Idle;
+            self.rebuild_tree();
+        }
+        Ok(())
     }
 
     /// Rebuilds the tree from scratch: collapses all, reloads root children.
@@ -1044,5 +1224,260 @@ mod tests {
             !names.contains(&"secret.txt"),
             "file ignored by nested .gitignore should be hidden"
         );
+    }
+
+    // --- Tree action tests ---
+
+    #[test]
+    fn start_create_file_sets_action() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        assert_eq!(
+            tree.action(),
+            &TreeAction::Creating {
+                is_dir: false,
+                input: String::new()
+            }
+        );
+        assert!(tree.is_action_active());
+    }
+
+    #[test]
+    fn start_create_dir_sets_action() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_dir();
+        assert_eq!(
+            tree.action(),
+            &TreeAction::Creating {
+                is_dir: true,
+                input: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn start_rename_sets_action_with_name() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "beta"
+        let name = tree.selected_node().unwrap().name.clone();
+        tree.start_rename();
+        assert_eq!(
+            tree.action(),
+            &TreeAction::Renaming {
+                node_idx: 1,
+                input: name
+            }
+        );
+    }
+
+    #[test]
+    fn start_rename_noop_on_root() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0);
+        tree.start_rename();
+        assert_eq!(tree.action(), &TreeAction::Idle);
+    }
+
+    #[test]
+    fn start_delete_sets_action() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "beta"
+        tree.start_delete();
+        assert_eq!(tree.action(), &TreeAction::ConfirmDelete { node_idx: 1 });
+    }
+
+    #[test]
+    fn start_delete_noop_on_root() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0);
+        tree.start_delete();
+        assert_eq!(tree.action(), &TreeAction::Idle);
+    }
+
+    #[test]
+    fn cancel_action_resets_to_idle() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        assert!(tree.is_action_active());
+        tree.cancel_action();
+        assert_eq!(tree.action(), &TreeAction::Idle);
+        assert!(!tree.is_action_active());
+    }
+
+    #[test]
+    fn input_char_appends_to_creating() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        tree.input_char('h');
+        tree.input_char('i');
+        assert_eq!(
+            tree.action(),
+            &TreeAction::Creating {
+                is_dir: false,
+                input: "hi".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn input_char_appends_to_renaming() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down();
+        tree.start_rename();
+        tree.input_char('2');
+        if let TreeAction::Renaming { input, .. } = tree.action() {
+            assert!(input.ends_with('2'));
+        } else {
+            panic!("expected Renaming action");
+        }
+    }
+
+    #[test]
+    fn input_backspace_removes_last_char() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        tree.input_char('a');
+        tree.input_char('b');
+        tree.input_backspace();
+        assert_eq!(
+            tree.action(),
+            &TreeAction::Creating {
+                is_dir: false,
+                input: "a".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn confirm_create_file_creates_on_filesystem() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select root (directory) — will create inside root
+        tree.start_create_file();
+        tree.input_char('n');
+        tree.input_char('e');
+        tree.input_char('w');
+        tree.confirm_action().unwrap();
+        assert!(tmp.path().join("new").exists());
+        assert_eq!(tree.action(), &TreeAction::Idle);
+        // Tree should contain the new file
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"new"));
+    }
+
+    #[test]
+    fn confirm_create_dir_creates_on_filesystem() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_dir();
+        tree.input_char('d');
+        tree.input_char('i');
+        tree.input_char('r');
+        tree.confirm_action().unwrap();
+        assert!(tmp.path().join("dir").is_dir());
+        assert_eq!(tree.action(), &TreeAction::Idle);
+    }
+
+    #[test]
+    fn confirm_rename_renames_on_filesystem() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select "alpha.txt" — it's a file at depth 1
+        // Nodes: root(0), beta(1), delta(2), .hidden(3), alpha.txt(4), gamma.rs(5)
+        let alpha_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "alpha.txt")
+            .unwrap();
+        for _ in 0..alpha_idx {
+            tree.move_down();
+        }
+        tree.start_rename();
+        // Clear existing name and type new one
+        // input is pre-filled with "alpha.txt", we need to clear and retype
+        for _ in 0.."alpha.txt".len() {
+            tree.input_backspace();
+        }
+        for c in "renamed.txt".chars() {
+            tree.input_char(c);
+        }
+        tree.confirm_action().unwrap();
+        assert!(!tmp.path().join("alpha.txt").exists());
+        assert!(tmp.path().join("renamed.txt").exists());
+    }
+
+    #[test]
+    fn confirm_delete_removes_file() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let alpha_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "alpha.txt")
+            .unwrap();
+        for _ in 0..alpha_idx {
+            tree.move_down();
+        }
+        tree.start_delete();
+        tree.confirm_delete().unwrap();
+        assert!(!tmp.path().join("alpha.txt").exists());
+        assert_eq!(tree.action(), &TreeAction::Idle);
+    }
+
+    #[test]
+    fn confirm_delete_removes_directory() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.move_down(); // select "beta" directory
+        assert_eq!(tree.selected_node().unwrap().name, "beta");
+        tree.start_delete();
+        tree.confirm_delete().unwrap();
+        assert!(!tmp.path().join("beta").exists());
+    }
+
+    #[test]
+    fn confirm_create_with_empty_name_fails() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        // Don't type anything — empty input
+        let result = tree.confirm_action();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn confirm_create_with_invalid_name_fails() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.start_create_file();
+        tree.input_char('.');
+        // Name is "." which is invalid
+        let result = tree.confirm_action();
+        assert!(result.is_err());
+
+        // Also test ".."
+        tree.start_create_file();
+        tree.input_char('.');
+        tree.input_char('.');
+        let result = tree.confirm_action();
+        assert!(result.is_err());
+
+        // Also test name with "/"
+        tree.start_create_file();
+        tree.input_char('a');
+        tree.input_char('/');
+        tree.input_char('b');
+        let result = tree.confirm_action();
+        assert!(result.is_err());
     }
 }

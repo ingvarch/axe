@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use axe_core::{AppState, FocusTarget};
-use axe_tree::{FileTree, NodeKind};
+use axe_tree::{FileTree, NodeKind, TreeAction};
 
 use layout::LayoutManager;
 use theme::Theme;
@@ -148,6 +148,10 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("\u{2190}/\u{2192}", "Collapse/expand"),
     ("Home/End", "First/last item"),
     ("Ctrl+G", "Toggle ignored files"),
+    ("n", "New file"),
+    ("N", "New directory"),
+    ("r", "Rename"),
+    ("d", "Delete"),
     ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
@@ -220,20 +224,62 @@ const DIR_EXPANDED_PREFIX: &str = "▾ ";
 /// Prefix for files (space for alignment with directory arrows).
 const FILE_PREFIX: &str = "  ";
 
+/// Renders an inline input line for tree actions (create/rename).
+fn render_inline_input_line(
+    indent: &str,
+    input: &str,
+    area_width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let text = format!("{indent}  > {input}|");
+    let padded = format!("{:<width$}", text, width = area_width);
+    let style = Style::default()
+        .fg(theme.panel_border_active)
+        .bg(theme.tree_selection_bg);
+    Line::from(Span::styled(padded, style))
+}
+
+/// Renders a delete confirmation line.
+fn render_delete_confirm_line(area_width: usize, theme: &Theme) -> Line<'static> {
+    let text = "  Delete? [y/N]";
+    let padded = format!("{:<width$}", text, width = area_width);
+    let style = Style::default()
+        .fg(theme.panel_border_active)
+        .bg(theme.tree_selection_bg);
+    Line::from(Span::styled(padded, style))
+}
+
 /// Renders file tree content into the given area, with selection highlight and scrolling.
 fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
     let nodes = file_tree.visible_nodes();
     let scroll = file_tree.scroll();
     let selected = file_tree.selected();
     let visible_count = area.height as usize;
+    let action = file_tree.action();
+    let area_width = area.width as usize;
     let mut lines: Vec<Line> = Vec::with_capacity(visible_count);
 
-    for (i, node) in nodes.iter().enumerate().skip(scroll).take(visible_count) {
+    for (i, node) in nodes.iter().enumerate().skip(scroll) {
+        if lines.len() >= visible_count {
+            break;
+        }
+
         let indent = " ".repeat(TREE_INDENT * node.depth);
         let is_selected = i == selected;
 
+        // For renaming: replace the name with the input field.
+        let display_name = if let TreeAction::Renaming { node_idx, input } = action {
+            if i == *node_idx {
+                format!("{input}|")
+            } else {
+                node.name.clone()
+            }
+        } else {
+            node.name.clone()
+        };
+
         let text = if node.depth == 0 {
-            format!("{indent}{}", node.name)
+            format!("{indent}{display_name}")
         } else {
             let prefix = match &node.kind {
                 NodeKind::Directory { .. } => {
@@ -245,11 +291,11 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
                 }
                 NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
             };
-            format!("{indent}{prefix}{}", node.name)
+            format!("{indent}{prefix}{display_name}")
         };
 
         // Pad to full width for selection highlight.
-        let padded = format!("{:<width$}", text, width = area.width as usize);
+        let padded = format!("{:<width$}", text, width = area_width);
 
         let mut style = if node.depth == 0 {
             Style::default()
@@ -268,7 +314,29 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
             style = style.bg(theme.tree_selection_bg);
         }
 
+        // For renaming, highlight the entire line with input style.
+        if let TreeAction::Renaming { node_idx, .. } = action {
+            if i == *node_idx {
+                style = style
+                    .fg(theme.panel_border_active)
+                    .bg(theme.tree_selection_bg);
+            }
+        }
+
         lines.push(Line::from(Span::styled(padded, style)));
+
+        // Insert inline action lines after the selected node.
+        if is_selected && lines.len() < visible_count {
+            match action {
+                TreeAction::Creating { input, .. } => {
+                    lines.push(render_inline_input_line(&indent, input, area_width, theme));
+                }
+                TreeAction::ConfirmDelete { .. } => {
+                    lines.push(render_delete_confirm_line(area_width, theme));
+                }
+                _ => {}
+            }
+        }
     }
 
     let paragraph = Paragraph::new(lines);
@@ -590,7 +658,7 @@ mod tests {
     fn render_help_overlay_shows_keybindings() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 30);
+        let content = render_app_to_string(&app, 80, 36);
         assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");

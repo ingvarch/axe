@@ -241,7 +241,7 @@ Respect `.gitignore` rules when displaying the file tree.
 
 ---
 
-### Task 3.4 — File Tree: Create, Delete, Rename
+### Task 3.4 — File Tree: Create, Delete, Rename [DONE]
 
 Basic file operations from the tree panel.
 

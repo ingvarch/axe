@@ -56,6 +56,14 @@ pub enum Command {
     TreeEnd,
     /// Toggle visibility of gitignored files in the file tree.
     ToggleIgnored,
+    /// Start creating a new file in the tree.
+    TreeCreateFile,
+    /// Start creating a new directory in the tree.
+    TreeCreateDir,
+    /// Start renaming the selected tree node.
+    TreeRename,
+    /// Start delete confirmation for the selected tree node.
+    TreeDelete,
 }
 
 #[cfg(test)]
@@ -91,6 +99,10 @@ mod tests {
             Command::TreeHome,
             Command::TreeEnd,
             Command::ToggleIgnored,
+            Command::TreeCreateFile,
+            Command::TreeCreateDir,
+            Command::TreeRename,
+            Command::TreeDelete,
         ];
 
         for (i, a) in variants.iter().enumerate() {
