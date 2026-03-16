@@ -38,6 +38,11 @@ pub const SYMLINK_ICON: FileIcon = FileIcon {
     color: Color::Rgb(198, 120, 221),
 };
 
+// IMPACT ANALYSIS — icon_for_file
+// Parents: icon_for_node() in axe-ui calls this for File nodes during tree rendering.
+// Children: extension_from(), icon_for_extension() — internal helpers.
+// Siblings: DIR_OPEN_ICON/DIR_CLOSED_ICON/SYMLINK_ICON — used for non-file nodes.
+
 /// Returns the appropriate icon for a file based on its name and extension.
 ///
 /// Checks special filenames first (case-insensitive), then falls back to
@@ -264,7 +269,7 @@ fn icon_for_extension(ext: &str) -> FileIcon {
             icon: " ",
             color: Color::Rgb(124, 139, 157),
         },
-        // Docker-compose
+        // Files ending in .dockerfile
         "dockerfile" => FileIcon {
             icon: "󰡨 ",
             color: Color::Rgb(56, 145, 211),

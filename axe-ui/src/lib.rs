@@ -256,6 +256,11 @@ fn render_delete_confirm_line(area_width: usize, theme: &Theme) -> Line<'static>
     Line::from(Span::styled(padded, style))
 }
 
+// IMPACT ANALYSIS — icon_for_node
+// Parents: build_icon_line() uses this to pick the icon for each tree node.
+// Children: None — purely visual.
+// Siblings: icon_for_file() in axe-tree::icons — delegates to it for file nodes.
+
 /// Returns the icon for a tree node when icons are enabled.
 fn icon_for_node(node: &axe_tree::TreeNode) -> FileIcon {
     match &node.kind {
@@ -270,6 +275,71 @@ fn icon_for_node(node: &axe_tree::TreeNode) -> FileIcon {
         NodeKind::File { .. } => icons::icon_for_file(&node.name),
     }
 }
+
+/// Builds a multi-span tree line with icon when icons are enabled.
+fn build_icon_line(
+    node: &axe_tree::TreeNode,
+    indent: &str,
+    display_name: &str,
+    name_style: Style,
+    is_selected: bool,
+    area_width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let icon = if node.depth == 0 {
+        icons::DIR_OPEN_ICON
+    } else {
+        icon_for_node(node)
+    };
+
+    let indent_span = Span::styled(indent.to_owned(), name_style);
+    let mut icon_style = Style::default().fg(icon.color);
+    if is_selected {
+        icon_style = icon_style.bg(theme.tree_selection_bg);
+    }
+    let icon_span = Span::styled(icon.icon, icon_style);
+
+    let used = indent.len() + icon.icon.chars().count();
+    let remaining = area_width.saturating_sub(used);
+    let name_padded = format!("{:<width$}", display_name, width = remaining);
+    let name_span = Span::styled(name_padded, name_style);
+
+    Line::from(vec![indent_span, icon_span, name_span])
+}
+
+/// Builds a plain-text tree line without icons.
+fn build_plain_line(
+    node: &axe_tree::TreeNode,
+    indent: &str,
+    display_name: &str,
+    name_style: Style,
+    area_width: usize,
+) -> Line<'static> {
+    let text = if node.depth == 0 {
+        format!("{indent}{display_name}")
+    } else {
+        let prefix = match &node.kind {
+            NodeKind::Directory { .. } => {
+                if node.expanded {
+                    DIR_EXPANDED_PREFIX
+                } else {
+                    DIR_COLLAPSED_PREFIX
+                }
+            }
+            NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
+        };
+        format!("{indent}{prefix}{display_name}")
+    };
+    let padded = format!("{:<width$}", text, width = area_width);
+    Line::from(Span::styled(padded, name_style))
+}
+
+// IMPACT ANALYSIS — render_tree_content
+// Parents: render() calls this for tree panel content (normal and zoomed views).
+// Children: build_icon_line(), build_plain_line(), render_inline_input_line(),
+//           render_delete_confirm_line().
+// Siblings: Tree actions (create/rename/delete) inject inline input lines.
+//           show_icons toggle changes rendering path.
 
 /// Renders file tree content into the given area, with selection highlight and scrolling.
 fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
@@ -290,7 +360,6 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
         let indent = " ".repeat(TREE_INDENT * node.depth);
         let is_selected = i == selected;
 
-        // For renaming: replace the name with the input field.
         let display_name = if let TreeAction::Renaming { node_idx, input } = action {
             if i == *node_idx {
                 format!("{input}|")
@@ -318,7 +387,6 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
             name_style = name_style.bg(theme.tree_selection_bg);
         }
 
-        // For renaming, highlight the entire line with input style.
         if let TreeAction::Renaming { node_idx, .. } = action {
             if i == *node_idx {
                 name_style = name_style
@@ -328,51 +396,21 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
         }
 
         let line = if use_icons {
-            // Multi-span line: indent + icon (colored) + name (padded).
-            let icon = if node.depth == 0 {
-                icons::DIR_OPEN_ICON
-            } else {
-                icon_for_node(node)
-            };
-
-            let indent_span = Span::styled(indent.clone(), name_style);
-            let mut icon_style = Style::default().fg(icon.color);
-            if is_selected {
-                icon_style = icon_style.bg(theme.tree_selection_bg);
-            }
-            let icon_span = Span::styled(icon.icon, icon_style);
-
-            // Calculate remaining width for the name to pad the line.
-            let used = indent.len() + icon.icon.chars().count();
-            let remaining = area_width.saturating_sub(used);
-            let name_padded = format!("{:<width$}", display_name, width = remaining);
-            let name_span = Span::styled(name_padded, name_style);
-
-            Line::from(vec![indent_span, icon_span, name_span])
+            build_icon_line(
+                node,
+                &indent,
+                &display_name,
+                name_style,
+                is_selected,
+                area_width,
+                theme,
+            )
         } else {
-            // Plain text mode (no icons) — original behavior.
-            let text = if node.depth == 0 {
-                format!("{indent}{display_name}")
-            } else {
-                let prefix = match &node.kind {
-                    NodeKind::Directory { .. } => {
-                        if node.expanded {
-                            DIR_EXPANDED_PREFIX
-                        } else {
-                            DIR_COLLAPSED_PREFIX
-                        }
-                    }
-                    NodeKind::File { .. } | NodeKind::Symlink { .. } => FILE_PREFIX,
-                };
-                format!("{indent}{prefix}{display_name}")
-            };
-            let padded = format!("{:<width$}", text, width = area_width);
-            Line::from(Span::styled(padded, name_style))
+            build_plain_line(node, &indent, &display_name, name_style, area_width)
         };
 
         lines.push(line);
 
-        // Insert inline action lines after the selected node.
         if is_selected && lines.len() < visible_count {
             match action {
                 TreeAction::Creating { input, .. } => {

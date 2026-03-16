@@ -295,6 +295,11 @@ impl FileTree {
         self.show_icons
     }
 
+    // IMPACT ANALYSIS — toggle_show_icons
+    // Parents: Command::ToggleIcons dispatched from Ctrl+I in app.rs.
+    // Children: None — only flips a bool. Rendering reads show_icons() next frame.
+    // Siblings: show_ignored toggle — similar pattern, independent flag.
+
     /// Toggles display of file type icons in the tree.
     pub fn toggle_show_icons(&mut self) {
         self.show_icons = !self.show_icons;
