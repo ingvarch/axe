@@ -323,7 +323,7 @@ Navigate within the file using keyboard.
 
 ---
 
-### Task 4.3 — Editor: Text Insertion & Deletion
+### Task 4.3 — Editor: Text Insertion & Deletion ✅
 
 Basic text editing: type characters, delete, backspace, enter.
 
@@ -389,7 +389,7 @@ Text selection and clipboard operations.
 
 ---
 
-### Task 4.6 — Editor: Search in File (Ctrl+F)
+### Task 4.6 — Editor: Search in File (Ctrl+F) ✅
 
 Find text within the current buffer.
 

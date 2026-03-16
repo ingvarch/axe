@@ -1,11 +1,13 @@
 pub mod app;
 pub mod command;
 pub mod keymap;
+pub mod search;
 
 pub use app::{AppState, DragBorder, FocusTarget, MouseDragState, ResizeModeState};
 pub use axe_tree::FileTree;
 pub use command::Command;
 pub use keymap::KeymapResolver;
+pub use search::SearchState;
 
 /// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {

@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use axe_core::{AppState, FocusTarget};
+use axe_core::{AppState, FocusTarget, SearchState};
 use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
@@ -212,6 +212,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("d", "Delete"),
     ("", ""),
     ("--- Editor ---", ""),
+    ("Ctrl+F", "Find in file"),
     ("Shift+Arrows", "Select text"),
     ("Ctrl+A", "Select all"),
     ("Ctrl+C", "Copy"),
@@ -1150,6 +1151,64 @@ fn gutter_width(line_count: usize) -> u16 {
     digits + GUTTER_PADDING
 }
 
+/// Renders the search bar in a 1-row area at the top of the editor content.
+///
+/// Layout: `Find: [query|] [3 of 17] [Aa] [.*]`
+fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme: &Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let bar_bg = theme.status_bar_bg;
+    let bar_fg = theme.foreground;
+    let dim_fg = theme.status_bar_key;
+    let active_fg = theme.search_active_match_bg;
+
+    let label_style = Style::default().fg(dim_fg).bg(bar_bg);
+    let query_style = Style::default().fg(bar_fg).bg(bar_bg);
+    let count_style = Style::default().fg(dim_fg).bg(bar_bg);
+
+    let case_style = if search.case_sensitive {
+        Style::default().fg(active_fg).bg(bar_bg)
+    } else {
+        Style::default().fg(dim_fg).bg(bar_bg)
+    };
+    let regex_style = if search.regex_mode {
+        Style::default().fg(active_fg).bg(bar_bg)
+    } else {
+        Style::default().fg(dim_fg).bg(bar_bg)
+    };
+
+    let count_display = search.match_count_display();
+
+    let mut spans = vec![
+        Span::styled(" Find: ", label_style),
+        Span::styled(&search.query, query_style),
+        Span::styled("\u{2502}", query_style), // cursor pipe
+    ];
+
+    if !count_display.is_empty() {
+        spans.push(Span::styled(format!(" {count_display}"), count_style));
+    }
+
+    spans.push(Span::styled(" [Aa]", case_style));
+    spans.push(Span::styled(" [.*]", regex_style));
+
+    // Pad the rest of the bar with background.
+    let used: usize = spans.iter().map(|s| s.content.len()).sum();
+    let remaining = (area.width as usize).saturating_sub(used);
+    if remaining > 0 {
+        spans.push(Span::styled(
+            " ".repeat(remaining),
+            Style::default().bg(bar_bg),
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(vec![line]).style(Style::default().bg(bar_bg));
+    frame.render_widget(paragraph, area);
+}
+
 // IMPACT ANALYSIS — render_editor_content
 // Parents: render_right_panels() calls this with the inner area of the editor block.
 // Children: reads EditorBuffer via active_buffer() — cursor, scroll_row, scroll_col.
@@ -1162,10 +1221,36 @@ fn render_editor_content(
     frame: &mut Frame,
     theme: &Theme,
     editor_focused: bool,
+    search: Option<&SearchState>,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+
+    // If search is active, split off 1 row at the top for the search bar.
+    let (search_area, content_area_full) = if search.is_some() && area.height > 1 {
+        let search_rect = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        let content_rect = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height - 1,
+        };
+        (Some(search_rect), content_rect)
+    } else {
+        (None, area)
+    };
+
+    if let Some((search_rect, search_state)) = search_area.zip(search) {
+        render_search_bar(search_state, search_rect, frame, theme);
+    }
+
+    let area = content_area_full;
 
     let gutter_w = gutter_width(buffer.line_count());
     let content_w = area.width.saturating_sub(gutter_w);
@@ -1230,12 +1315,19 @@ fn render_editor_content(
         }
     });
 
-    // Render file content with scroll offset, current-line background, and selection highlight.
+    // Render file content with scroll offset, current-line background,
+    // selection highlight, and search match highlighting.
     let content_style = Style::default().fg(theme.foreground).bg(theme.background);
     let cursor_line_style = Style::default()
         .fg(theme.foreground)
         .bg(theme.cursor_line_bg);
     let selection_style = Style::default().fg(theme.foreground).bg(theme.selection_bg);
+    let search_match_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.search_match_bg);
+    let search_active_style = Style::default()
+        .fg(theme.search_active_match_fg)
+        .bg(theme.search_active_match_bg);
 
     let content_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
@@ -1257,10 +1349,30 @@ fn render_editor_content(
                     .take(content_w as usize)
                     .collect();
 
-                // Check if this line has any selection.
+                // Collect highlight ranges: (col_start, col_end, style) in display coords.
+                let mut highlights: Vec<(usize, usize, Style)> = Vec::new();
+
+                // Search match highlights.
+                if let Some(s) = search {
+                    for (idx, m) in s.matches.iter().enumerate() {
+                        if m.row == file_line {
+                            let hs = m.col_start.saturating_sub(scroll_col);
+                            let he = m.col_end.saturating_sub(scroll_col).min(content_w as usize);
+                            if he > hs {
+                                let style = if idx == s.current {
+                                    search_active_style
+                                } else {
+                                    search_match_style
+                                };
+                                highlights.push((hs, he, style));
+                            }
+                        }
+                    }
+                }
+
+                // Selection highlight (takes priority over search matches).
                 if let Some((sr, sc, er, ec)) = sel_range {
                     if file_line >= sr && file_line <= er {
-                        // This line overlaps the selection. Compute column range.
                         let line_sel_start = if file_line == sr {
                             sc.saturating_sub(scroll_col)
                         } else {
@@ -1271,36 +1383,49 @@ fn render_editor_content(
                         } else {
                             content_w as usize
                         };
-                        // Pad display to full width for selection rendering on partial lines.
-                        let padded = format!("{:<width$}", display, width = content_w as usize);
-                        let chars: Vec<char> = padded.chars().collect();
-                        let sel_start = line_sel_start.min(chars.len());
-                        let sel_end = line_sel_end.min(chars.len());
-
-                        let mut spans = Vec::new();
-                        if sel_start > 0 {
-                            let before: String = chars[..sel_start].iter().collect();
-                            spans.push(Span::styled(before, base_style));
-                        }
-                        if sel_end > sel_start {
-                            let selected: String = chars[sel_start..sel_end].iter().collect();
-                            spans.push(Span::styled(selected, selection_style));
-                        }
-                        if sel_end < chars.len() {
-                            let after: String = chars[sel_end..].iter().collect();
-                            spans.push(Span::styled(after, base_style));
-                        }
-                        return Line::from(spans);
+                        highlights.push((line_sel_start, line_sel_end, selection_style));
                     }
                 }
 
-                // No selection on this line — render normally.
-                let padded = if is_cursor_line {
-                    format!("{:<width$}", display, width = content_w as usize)
-                } else {
-                    display
-                };
-                Line::from(Span::styled(padded, base_style))
+                if highlights.is_empty() {
+                    // No highlights — render normally.
+                    let padded = if is_cursor_line {
+                        format!("{:<width$}", display, width = content_w as usize)
+                    } else {
+                        display
+                    };
+                    return Line::from(Span::styled(padded, base_style));
+                }
+
+                // Build spans from highlights. Later highlights override earlier ones.
+                let padded = format!("{:<width$}", display, width = content_w as usize);
+                let chars: Vec<char> = padded.chars().collect();
+                let len = chars.len();
+
+                // Create a per-character style map.
+                let mut char_styles: Vec<Style> = vec![base_style; len];
+                for (hs, he, style) in &highlights {
+                    let start = (*hs).min(len);
+                    let end = (*he).min(len);
+                    for cs in &mut char_styles[start..end] {
+                        *cs = *style;
+                    }
+                }
+
+                // Compress consecutive same-style chars into spans.
+                let mut spans = Vec::new();
+                let mut run_start = 0;
+                while run_start < len {
+                    let run_style = char_styles[run_start];
+                    let mut run_end = run_start + 1;
+                    while run_end < len && char_styles[run_end] == run_style {
+                        run_end += 1;
+                    }
+                    let s: String = chars[run_start..run_end].iter().collect();
+                    spans.push(Span::styled(s, run_style));
+                    run_start = run_end;
+                }
+                Line::from(spans)
             } else {
                 Line::from("")
             }
@@ -1354,7 +1479,14 @@ fn render_right_panels(
         frame.render_widget(editor_block, right_split[0]);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
-            render_editor_content(buffer, editor_inner, frame, theme, focused);
+            render_editor_content(
+                buffer,
+                editor_inner,
+                frame,
+                theme,
+                focused,
+                app.search.as_ref(),
+            );
         }
 
         let term_block = panel_block(
@@ -1381,7 +1513,14 @@ fn render_right_panels(
         frame.render_widget(editor_block, area);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
-            render_editor_content(buffer, editor_inner, frame, theme, focused);
+            render_editor_content(
+                buffer,
+                editor_inner,
+                frame,
+                theme,
+                focused,
+                app.search.as_ref(),
+            );
         }
     }
 }

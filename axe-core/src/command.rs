@@ -154,6 +154,18 @@ pub enum Command {
     EditorCut,
     /// Paste from the system clipboard at the cursor position.
     EditorPaste,
+    /// Open or focus the in-file search bar.
+    EditorFind,
+    /// Close the search bar.
+    SearchClose,
+    /// Jump to the next search match.
+    SearchNextMatch,
+    /// Jump to the previous search match.
+    SearchPrevMatch,
+    /// Toggle case sensitivity in search.
+    SearchToggleCase,
+    /// Toggle regex mode in search.
+    SearchToggleRegex,
 }
 
 #[cfg(test)]
@@ -239,6 +251,12 @@ mod tests {
             Command::EditorCopy,
             Command::EditorCut,
             Command::EditorPaste,
+            Command::EditorFind,
+            Command::SearchClose,
+            Command::SearchNextMatch,
+            Command::SearchPrevMatch,
+            Command::SearchToggleCase,
+            Command::SearchToggleRegex,
         ];
 
         for (i, a) in variants.iter().enumerate() {

@@ -38,27 +38,36 @@ pub struct Theme {
     pub cursor_line_bg: Color,
     /// Background color for selected text.
     pub selection_bg: Color,
+    /// Background color for search match highlights.
+    pub search_match_bg: Color,
+    /// Background color for the currently active search match.
+    pub search_active_match_bg: Color,
+    /// Foreground color for the currently active search match (dark for contrast).
+    pub search_active_match_fg: Color,
 }
 
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            background: Color::Rgb(40, 44, 52),            // #282c34
-            foreground: Color::Rgb(171, 178, 191),         // #abb2bf
-            panel_border: Color::Rgb(76, 82, 99),          // #4c5263
-            panel_border_active: Color::Rgb(97, 175, 239), // #61afef
-            status_bar_bg: Color::Rgb(33, 37, 43),         // #21252b
-            status_bar_fg: Color::Rgb(171, 178, 191),      // #abb2bf
-            status_bar_key: Color::Rgb(130, 137, 151),     // #828997
-            overlay_border: Color::Rgb(97, 175, 239),      // #61afef
-            overlay_bg: Color::Rgb(40, 44, 52),            // #282c34
-            resize_border: Color::Rgb(229, 192, 123),      // #e5c07b (yellow)
-            tree_selection_bg: Color::Rgb(50, 55, 65),     // slightly lighter than bg
-            gutter_bg: Color::Rgb(35, 39, 46),             // #23272e — slightly darker than bg
-            line_number: Color::Rgb(76, 82, 99),           // #4c5263 — dim
-            line_number_active: Color::Rgb(171, 178, 191), // #abb2bf — bright
-            cursor_line_bg: Color::Rgb(45, 50, 60),        // subtle highlight
-            selection_bg: Color::Rgb(67, 76, 94),          // #434c5e — medium blue-grey
+            background: Color::Rgb(40, 44, 52),                // #282c34
+            foreground: Color::Rgb(171, 178, 191),             // #abb2bf
+            panel_border: Color::Rgb(76, 82, 99),              // #4c5263
+            panel_border_active: Color::Rgb(97, 175, 239),     // #61afef
+            status_bar_bg: Color::Rgb(33, 37, 43),             // #21252b
+            status_bar_fg: Color::Rgb(171, 178, 191),          // #abb2bf
+            status_bar_key: Color::Rgb(130, 137, 151),         // #828997
+            overlay_border: Color::Rgb(97, 175, 239),          // #61afef
+            overlay_bg: Color::Rgb(40, 44, 52),                // #282c34
+            resize_border: Color::Rgb(229, 192, 123),          // #e5c07b (yellow)
+            tree_selection_bg: Color::Rgb(50, 55, 65),         // slightly lighter than bg
+            gutter_bg: Color::Rgb(35, 39, 46),                 // #23272e — slightly darker than bg
+            line_number: Color::Rgb(76, 82, 99),               // #4c5263 — dim
+            line_number_active: Color::Rgb(171, 178, 191),     // #abb2bf — bright
+            cursor_line_bg: Color::Rgb(45, 50, 60),            // subtle highlight
+            selection_bg: Color::Rgb(67, 76, 94),              // #434c5e — medium blue-grey
+            search_match_bg: Color::Rgb(60, 60, 30),           // subtle dark yellow tint
+            search_active_match_bg: Color::Rgb(229, 192, 123), // #e5c07b — bright warm yellow
+            search_active_match_fg: Color::Rgb(40, 44, 52),    // dark for contrast on bright bg
         }
     }
 }
@@ -103,6 +112,23 @@ mod tests {
         assert_ne!(
             theme.selection_bg, theme.cursor_line_bg,
             "selection_bg should differ from cursor_line_bg"
+        );
+    }
+
+    #[test]
+    fn search_colors_differ_from_background() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.search_match_bg, theme.background,
+            "search_match_bg should differ from background"
+        );
+        assert_ne!(
+            theme.search_active_match_bg, theme.background,
+            "search_active_match_bg should differ from background"
+        );
+        assert_ne!(
+            theme.search_match_bg, theme.search_active_match_bg,
+            "search match colors should differ from each other"
         );
     }
 

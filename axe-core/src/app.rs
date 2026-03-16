@@ -10,6 +10,7 @@ use axe_tree::NodeKind;
 
 use crate::command::Command;
 use crate::keymap::KeymapResolver;
+use crate::search::SearchState;
 
 /// Default width of the file tree panel as a percentage of total width.
 const DEFAULT_TREE_WIDTH_PCT: u16 = 20;
@@ -144,6 +145,8 @@ pub struct AppState {
     clipboard: Option<arboard::Clipboard>,
     /// Whether an editor text selection drag is currently in progress.
     editor_selecting: bool,
+    /// Active search state, if the search bar is open.
+    pub search: Option<SearchState>,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -178,6 +181,7 @@ impl AppState {
             editor_inner_area: None,
             last_edit_time: None,
             clipboard: None,
+            search: None,
             editor_selecting: false,
             terminal_selecting: false,
             terminal_select_start: None,
@@ -299,6 +303,52 @@ impl AppState {
                 self.execute(cmd);
             }
             return;
+        }
+
+        // Search bar active: intercept keys for search input before editor keys.
+        if self.search.is_some() && self.focus == FocusTarget::Editor && !self.show_help {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    self.execute(Command::SearchClose);
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    self.execute(Command::SearchNextMatch);
+                    return;
+                }
+                (KeyModifiers::SHIFT, KeyCode::Enter) => {
+                    self.execute(Command::SearchPrevMatch);
+                    return;
+                }
+                (KeyModifiers::ALT, KeyCode::Char('c')) => {
+                    self.execute(Command::SearchToggleCase);
+                    return;
+                }
+                (KeyModifiers::ALT, KeyCode::Char('r')) => {
+                    self.execute(Command::SearchToggleRegex);
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace) => {
+                    if let Some(ref mut search) = self.search {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            search.input_backspace(buf);
+                        }
+                    }
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Char(c))
+                | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                    if let Some(ref mut search) = self.search {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            search.input_char(c, buf);
+                        }
+                    }
+                    return;
+                }
+                _ => {
+                    // Let Ctrl+F, Ctrl+Q, etc. fall through to global keymap.
+                }
+            }
         }
 
         // Editor-focus key interception: cursor movement and navigation.
@@ -772,6 +822,77 @@ impl AppState {
                         buf.ensure_cursor_visible(h, w);
                     }
                     self.last_edit_time = Some(Instant::now());
+                }
+            }
+            // IMPACT ANALYSIS — Search commands
+            // Parents: KeyEvent → Ctrl+F / search interception layer → these commands
+            // Children: SearchState (created/modified), cursor position (match navigation)
+            // Siblings: Selection (cleared on search open), editor key interception
+            //           (search layer runs before editor layer when active)
+            Command::EditorFind => {
+                if self.search.is_none() {
+                    let mut search = SearchState::new();
+                    // Pre-fill from selection if available.
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(text) = buf.selected_text() {
+                            // Use only the first line for pre-fill.
+                            let first_line = text.lines().next().unwrap_or("").to_string();
+                            if !first_line.is_empty() {
+                                search.query = first_line;
+                                search.update_matches(buf);
+                                let row = buf.cursor.row;
+                                let col = buf.cursor.col;
+                                search.nearest_match_from(row, col);
+                            }
+                        }
+                    }
+                    self.search = Some(search);
+                }
+                // If already open, no-op (focus stays on search bar).
+            }
+            Command::SearchClose => {
+                self.search = None;
+            }
+            Command::SearchNextMatch => {
+                let (h, w) = self.editor_viewport();
+                if let Some(ref mut search) = self.search {
+                    search.next_match();
+                    if let Some(m) = search.current_match().cloned() {
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.cursor.row = m.row;
+                            buf.cursor.col = m.col_start;
+                            buf.clear_selection();
+                            buf.ensure_cursor_visible(h, w);
+                        }
+                    }
+                }
+            }
+            Command::SearchPrevMatch => {
+                let (h, w) = self.editor_viewport();
+                if let Some(ref mut search) = self.search {
+                    search.prev_match();
+                    if let Some(m) = search.current_match().cloned() {
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.cursor.row = m.row;
+                            buf.cursor.col = m.col_start;
+                            buf.clear_selection();
+                            buf.ensure_cursor_visible(h, w);
+                        }
+                    }
+                }
+            }
+            Command::SearchToggleCase => {
+                if let Some(ref mut search) = self.search {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        search.toggle_case(buf);
+                    }
+                }
+            }
+            Command::SearchToggleRegex => {
+                if let Some(ref mut search) = self.search {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        search.toggle_regex(buf);
+                    }
                 }
             }
         }
@@ -3054,5 +3175,154 @@ mod tests {
         app.status_message = Some(("test".to_string(), Instant::now() - Duration::from_secs(5)));
         app.expire_status_message();
         assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn editor_find_opens_search() {
+        let mut app = AppState::new();
+        assert!(app.search.is_none());
+        app.execute(Command::EditorFind);
+        assert!(app.search.is_some());
+    }
+
+    #[test]
+    fn search_close_clears_search() {
+        let mut app = AppState::new();
+        app.execute(Command::EditorFind);
+        assert!(app.search.is_some());
+        app.execute(Command::SearchClose);
+        assert!(app.search.is_none());
+    }
+
+    #[test]
+    fn search_input_updates_query() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello world\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::EditorFind);
+
+        // Simulate typing "he" via key events.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.query, "he");
+        assert_eq!(search.matches.len(), 1);
+    }
+
+    #[test]
+    fn search_next_match_moves_cursor() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"aaa\naaa\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::EditorFind);
+
+        // Type "aaa" to find matches.
+        if let Some(ref mut search) = app.search {
+            if let Some(buf) = app.buffer_manager.active_buffer() {
+                search.input_char('a', buf);
+                search.input_char('a', buf);
+                search.input_char('a', buf);
+            }
+        }
+
+        // Navigate to next match.
+        app.execute(Command::SearchNextMatch);
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.current, 1);
+        assert_eq!(buf.cursor.row, 1);
+    }
+
+    #[test]
+    fn search_prev_match_moves_cursor_back() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"aaa\naaa\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::EditorFind);
+
+        if let Some(ref mut search) = app.search {
+            if let Some(buf) = app.buffer_manager.active_buffer() {
+                search.input_char('a', buf);
+                search.input_char('a', buf);
+                search.input_char('a', buf);
+            }
+        }
+
+        // prev from 0 wraps to last.
+        app.execute(Command::SearchPrevMatch);
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.current, 1);
+    }
+
+    #[test]
+    fn search_wraps_around() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"aa\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::EditorFind);
+
+        if let Some(ref mut search) = app.search {
+            if let Some(buf) = app.buffer_manager.active_buffer() {
+                search.input_char('a', buf);
+            }
+        }
+
+        // 2 matches: a at col 0 and a at col 1
+        let count = app.search.as_ref().unwrap().matches.len();
+        assert_eq!(count, 2);
+
+        // next twice wraps back to 0.
+        app.execute(Command::SearchNextMatch);
+        app.execute(Command::SearchNextMatch);
+        assert_eq!(app.search.as_ref().unwrap().current, 0);
+    }
+
+    #[test]
+    fn editor_find_prefills_selection() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello world hello\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+
+        // Select "hello" (first 5 chars) via selection commands.
+        for _ in 0..5 {
+            app.execute(Command::EditorSelectRight);
+        }
+
+        app.execute(Command::EditorFind);
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.query, "hello");
+        assert_eq!(search.matches.len(), 2);
+    }
+
+    #[test]
+    fn search_esc_closes_via_key_event() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::EditorFind);
+        assert!(app.search.is_some());
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.search.is_none());
     }
 }
