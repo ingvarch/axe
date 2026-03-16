@@ -28,6 +28,12 @@ pub struct Theme {
     pub resize_border: Color,
     /// Background color for selected tree row.
     pub tree_selection_bg: Color,
+    /// Background color for the line number gutter.
+    pub gutter_bg: Color,
+    /// Foreground color for non-active line numbers.
+    pub line_number: Color,
+    /// Foreground color for the active (cursor) line number.
+    pub line_number_active: Color,
 }
 
 impl Default for Theme {
@@ -44,6 +50,9 @@ impl Default for Theme {
             overlay_bg: Color::Rgb(40, 44, 52),            // #282c34
             resize_border: Color::Rgb(229, 192, 123),      // #e5c07b (yellow)
             tree_selection_bg: Color::Rgb(50, 55, 65),     // slightly lighter than bg
+            gutter_bg: Color::Rgb(35, 39, 46),             // #23272e — slightly darker than bg
+            line_number: Color::Rgb(76, 82, 99),           // #4c5263 — dim
+            line_number_active: Color::Rgb(171, 178, 191), // #abb2bf — bright
         }
     }
 }
@@ -56,6 +65,17 @@ mod tests {
     fn default_theme_has_distinct_border_colors() {
         let theme = Theme::default();
         assert_ne!(theme.panel_border, theme.panel_border_active);
+    }
+
+    #[test]
+    fn default_theme_gutter_colors_are_set() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.gutter_bg, theme.background,
+            "gutter_bg should differ from background"
+        );
+        assert_ne!(theme.line_number, Color::Black);
+        assert_ne!(theme.line_number_active, Color::Black);
     }
 
     #[test]

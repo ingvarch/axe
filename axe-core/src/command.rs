@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 /// Commands that can be dispatched through the keybinding system.
 ///
 /// Each variant represents a discrete action. New features add new variants
@@ -82,6 +84,8 @@ pub enum Command {
     TerminalScrollTop,
     /// Scroll terminal to the bottom (current output).
     TerminalScrollBottom,
+    /// Open a file in the editor from the given path.
+    OpenFile(PathBuf),
 }
 
 #[cfg(test)]
@@ -131,6 +135,7 @@ mod tests {
             Command::TerminalScrollPageDown,
             Command::TerminalScrollTop,
             Command::TerminalScrollBottom,
+            Command::OpenFile(PathBuf::from("/tmp/test")),
         ];
 
         for (i, a) in variants.iter().enumerate() {

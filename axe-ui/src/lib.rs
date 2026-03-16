@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use axe_core::{AppState, FocusTarget};
+use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
 use axe_tree::{FileTree, NodeKind, TreeAction};
@@ -96,6 +97,18 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         .add_modifier(Modifier::BOLD);
 
     let mut spans = vec![Span::styled(format!(" Axe v{version}"), text_style)];
+
+    if let Some(buffer) = app.buffer_manager.active_buffer() {
+        let name = buffer.file_name().unwrap_or("[untitled]");
+        let lines = buffer.line_count();
+        let ftype = buffer.file_type();
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(name.to_string(), text_style));
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(format!("{lines} lines"), text_style));
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(ftype.to_string(), text_style));
+    }
 
     if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
         spans.push(Span::styled(" | ", key_style));
@@ -996,6 +1009,86 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     }
 }
 
+/// Minimum gutter padding (1 space each side of the line number).
+const GUTTER_PADDING: u16 = 2;
+
+/// Calculates gutter width: digits needed for the largest line number + padding.
+fn gutter_width(line_count: usize) -> u16 {
+    let digits = line_count.max(1).ilog10() as u16 + 1;
+    digits + GUTTER_PADDING
+}
+
+// IMPACT ANALYSIS — render_editor_content
+// Parents: render_right_panels() calls this with the inner area of the editor block.
+// Children: reads EditorBuffer via active_buffer().
+// Siblings: render_terminal_content (similar pattern, independent).
+/// Renders the file content with line numbers inside the editor panel.
+fn render_editor_content(buffer: &EditorBuffer, area: Rect, frame: &mut Frame, theme: &Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let gutter_w = gutter_width(buffer.line_count());
+    let content_w = area.width.saturating_sub(gutter_w);
+
+    let gutter_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: gutter_w,
+        height: area.height,
+    };
+    let content_area = Rect {
+        x: area.x + gutter_w,
+        y: area.y,
+        width: content_w,
+        height: area.height,
+    };
+
+    let gutter_style = Style::default().fg(theme.line_number).bg(theme.gutter_bg);
+
+    let visible_lines = area.height as usize;
+
+    // Render gutter (line numbers).
+    let gutter_lines: Vec<Line<'_>> = (0..visible_lines)
+        .map(|i| {
+            let line_num = i + 1;
+            if line_num <= buffer.line_count() {
+                Line::from(format!(
+                    "{:>width$} ",
+                    line_num,
+                    width = (gutter_w - 1) as usize
+                ))
+            } else {
+                Line::from(format!("{:>width$}", "~", width = gutter_w as usize))
+            }
+        })
+        .collect();
+
+    let gutter_paragraph = Paragraph::new(gutter_lines).style(gutter_style);
+    frame.render_widget(gutter_paragraph, gutter_area);
+
+    // Render file content.
+    let content_style = Style::default().fg(theme.foreground).bg(theme.background);
+
+    let content_lines: Vec<Line<'_>> = (0..visible_lines)
+        .map(|i| {
+            if let Some(rope_line) = buffer.line_at(i) {
+                let text: String = rope_line.chars().collect();
+                // Trim trailing newline for display.
+                let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
+                // Clip to available width.
+                let display: String = trimmed.chars().take(content_w as usize).collect();
+                Line::from(display)
+            } else {
+                Line::from("")
+            }
+        })
+        .collect();
+
+    let content_paragraph = Paragraph::new(content_lines).style(content_style);
+    frame.render_widget(content_paragraph, content_area);
+}
+
 /// Renders the right-side panels (editor and optionally terminal) in the given area.
 fn render_right_panels(
     app: &AppState,
@@ -1012,16 +1105,18 @@ fn render_right_panels(
         ])
         .split(area);
 
-        frame.render_widget(
-            panel_block(
-                " Editor ",
-                &app.focus,
-                &FocusTarget::Editor,
-                theme,
-                resize_active,
-            ),
-            right_split[0],
+        let editor_block = panel_block(
+            " Editor ",
+            &app.focus,
+            &FocusTarget::Editor,
+            theme,
+            resize_active,
         );
+        let editor_inner = editor_block.inner(right_split[0]);
+        frame.render_widget(editor_block, right_split[0]);
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_editor_content(buffer, editor_inner, frame, theme);
+        }
 
         let term_block = panel_block(
             " Terminal ",
@@ -1036,16 +1131,18 @@ fn render_right_panels(
             render_terminal_content(mgr, term_inner, frame, theme);
         }
     } else {
-        frame.render_widget(
-            panel_block(
-                " Editor ",
-                &app.focus,
-                &FocusTarget::Editor,
-                theme,
-                resize_active,
-            ),
-            area,
+        let editor_block = panel_block(
+            " Editor ",
+            &app.focus,
+            &FocusTarget::Editor,
+            theme,
+            resize_active,
         );
+        let editor_inner = editor_block.inner(area);
+        frame.render_widget(editor_block, area);
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_editor_content(buffer, editor_inner, frame, theme);
+        }
     }
 }
 
@@ -1447,5 +1544,72 @@ mod tests {
         let (app, _tmp) = app_with_tree();
         let content = render_app_to_string(&app, 100, 24);
         assert!(content.contains("src"), "expected 'src' directory in tree");
+    }
+
+    // --- Editor content rendering tests ---
+
+    #[test]
+    fn gutter_width_calculation() {
+        assert_eq!(gutter_width(1), 3); // "1 " = 1 digit + 2 padding
+        assert_eq!(gutter_width(9), 3); // "9 " = 1 digit + 2 padding
+        assert_eq!(gutter_width(10), 4); // "10 " = 2 digits + 2 padding
+        assert_eq!(gutter_width(99), 4);
+        assert_eq!(gutter_width(100), 5); // "100 " = 3 digits + 2 padding
+        assert_eq!(gutter_width(999), 5);
+    }
+
+    fn app_with_open_file() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file_path = tmp.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.execute(axe_core::Command::OpenFile(file_path));
+        (app, tmp)
+    }
+
+    #[test]
+    fn render_editor_shows_line_numbers() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains('1'), "expected line number 1 in editor");
+        assert!(content.contains('2'), "expected line number 2 in editor");
+    }
+
+    #[test]
+    fn render_editor_shows_file_content() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("fn main()"),
+            "expected file content in editor, got: {content}"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_filename() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 120, 24);
+        assert!(
+            content.contains("test.rs"),
+            "expected filename in status bar"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_line_count() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 120, 24);
+        assert!(content.contains("lines"), "expected 'lines' in status bar");
+    }
+
+    #[test]
+    fn status_bar_shows_file_type() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 120, 24);
+        assert!(
+            content.contains("Rust"),
+            "expected 'Rust' file type in status bar"
+        );
     }
 }

@@ -4,5 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-axe-core = { path = "../axe-core" }
-serde = { version = "1", features = ["derive"] }
+ropey = "1"
+anyhow = "1"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

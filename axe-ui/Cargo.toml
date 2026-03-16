@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 alacritty_terminal = "0.25"
 axe-core = { path = "../axe-core" }
+axe-editor = { path = "../axe-editor" }
 axe-terminal = { path = "../axe-terminal" }
 axe-tree = { path = "../axe-tree" }
 ratatui = "0.29"

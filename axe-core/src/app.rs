@@ -5,6 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 
+use axe_tree::NodeKind;
+
 use crate::command::Command;
 use crate::keymap::KeymapResolver;
 
@@ -112,6 +114,8 @@ pub struct AppState {
     pub last_terminal_cols: u16,
     /// Last known terminal panel height in rows.
     pub last_terminal_rows: u16,
+    /// Editor buffer manager holding all open file buffers.
+    pub buffer_manager: axe_editor::BufferManager,
     /// Terminal grid area in screen coordinates (x, y, width, height).
     ///
     /// Updated each frame from `terminal_inner_rect()` in main.rs.
@@ -141,6 +145,7 @@ impl AppState {
             tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             file_tree: None,
+            buffer_manager: axe_editor::BufferManager::new(),
             terminal_manager: None,
             project_root: None,
             last_terminal_cols: DEFAULT_TERMINAL_COLS,
@@ -395,7 +400,20 @@ impl AppState {
                     tree.move_down();
                 }
             }
+            // IMPACT ANALYSIS — TreeToggle with file open
+            // Parents: KeyEvent(Enter) when tree focused -> Command::TreeToggle
+            // Children: BufferManager::open_file() -> UI render, FocusTarget::Editor
+            // Siblings: Tree selection (unchanged), terminal (unaffected)
             Command::TreeToggle => {
+                if let Some(ref tree) = self.file_tree {
+                    if let Some(node) = tree.selected_node() {
+                        if matches!(node.kind, NodeKind::File { .. }) {
+                            let path = node.path.clone();
+                            self.execute(Command::OpenFile(path));
+                            return;
+                        }
+                    }
+                }
                 if let Some(ref mut tree) = self.file_tree {
                     let _ = tree.toggle();
                 }
@@ -465,6 +483,14 @@ impl AppState {
             Command::TerminalScrollBottom => {
                 self.terminal_scroll(alacritty_terminal::grid::Scroll::Bottom);
             }
+            // IMPACT ANALYSIS — OpenFile
+            // Parents: TreeToggle on file node, future: command palette, fuzzy finder
+            // Children: BufferManager adds buffer, focus switches to Editor
+            // Siblings: Tree state (unchanged), terminal (unchanged)
+            Command::OpenFile(path) => match self.buffer_manager.open_file(&path) {
+                Ok(()) => self.focus = FocusTarget::Editor,
+                Err(e) => log::warn!("Failed to open file: {e}"),
+            },
         }
     }
 
@@ -2189,5 +2215,63 @@ mod tests {
                 .has_selection(),
             "Selection should be cleared on click without drag"
         );
+    }
+
+    // --- BufferManager integration tests ---
+
+    #[test]
+    fn new_app_has_empty_buffer_manager() {
+        let app = AppState::new();
+        assert_eq!(app.buffer_manager.buffer_count(), 0);
+    }
+
+    #[test]
+    fn execute_open_file_adds_buffer() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+
+        assert!(app.buffer_manager.active_buffer().is_some());
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    #[test]
+    fn execute_open_file_switches_focus() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Tree);
+        app.execute(Command::OpenFile(tmp.path().to_path_buf()));
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn tree_toggle_on_file_opens_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        assert!(app.file_tree.is_some());
+
+        // Move down to the file (first child after root dir).
+        app.execute(Command::TreeDown);
+
+        // Verify we selected the file.
+        let node = app.file_tree.as_ref().unwrap().selected_node().unwrap();
+        assert!(
+            matches!(node.kind, NodeKind::File { .. }),
+            "expected file node, got {:?}",
+            node.kind
+        );
+
+        // TreeToggle on a file should open it.
+        app.execute(Command::TreeToggle);
+        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
     }
 }
