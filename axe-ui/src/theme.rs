@@ -24,6 +24,8 @@ pub struct Theme {
     pub overlay_border: Color,
     /// Help overlay background color.
     pub overlay_bg: Color,
+    /// Border color used in resize mode.
+    pub resize_border: Color,
 }
 
 impl Default for Theme {
@@ -38,6 +40,7 @@ impl Default for Theme {
             status_bar_key: Color::Rgb(130, 137, 151),     // #828997
             overlay_border: Color::Rgb(97, 175, 239),      // #61afef
             overlay_bg: Color::Rgb(40, 44, 52),            // #282c34
+            resize_border: Color::Rgb(229, 192, 123),      // #e5c07b (yellow)
         }
     }
 }

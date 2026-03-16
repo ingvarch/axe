@@ -1,7 +1,25 @@
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::command::Command;
 use crate::keymap::KeymapResolver;
+
+/// Default width of the file tree panel as a percentage of total width.
+const DEFAULT_TREE_WIDTH_PCT: u16 = 20;
+/// Default height of the editor panel as a percentage of the right-side area.
+const DEFAULT_EDITOR_HEIGHT_PCT: u16 = 70;
+/// Percentage change per resize step.
+const RESIZE_STEP: u16 = 2;
+/// Minimum allowed panel size percentage.
+const MIN_PANEL_PCT: u16 = 10;
+/// Maximum allowed panel size percentage.
+const MAX_PANEL_PCT: u16 = 90;
+
+/// State for the panel resize mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResizeModeState {
+    /// Whether resize mode is currently active.
+    pub active: bool,
+}
 
 /// Identifies which panel currently has keyboard focus.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,6 +66,9 @@ pub struct AppState {
     pub show_tree: bool,
     pub show_terminal: bool,
     pub show_help: bool,
+    pub resize_mode: ResizeModeState,
+    pub tree_width_pct: u16,
+    pub editor_height_pct: u16,
     keymap: KeymapResolver,
 }
 
@@ -60,6 +81,9 @@ impl AppState {
             show_tree: true,
             show_terminal: true,
             show_help: false,
+            resize_mode: ResizeModeState::default(),
+            tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
+            editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             keymap: KeymapResolver::with_defaults(),
         }
     }
@@ -72,9 +96,31 @@ impl AppState {
     /// Processes a key event by resolving it through the keymap and executing
     /// the resulting command, if any.
     ///
-    /// When a help overlay is open, only Quit, ShowHelp, and CloseOverlay
-    /// commands are processed; all other keys are consumed silently.
+    /// When resize mode is active, arrow keys and special keys are intercepted
+    /// before normal dispatch. When a help overlay is open, only Quit, ShowHelp,
+    /// and CloseOverlay commands are processed; all other keys are consumed silently.
     pub fn handle_key_event(&mut self, key: KeyEvent) {
+        // Resize mode intercepts keys before normal keymap resolution.
+        if self.resize_mode.active {
+            let cmd = match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Left) => Some(Command::ResizeLeft),
+                (KeyModifiers::NONE, KeyCode::Right) => Some(Command::ResizeRight),
+                (KeyModifiers::NONE, KeyCode::Up) => Some(Command::ResizeUp),
+                (KeyModifiers::NONE, KeyCode::Down) => Some(Command::ResizeDown),
+                (KeyModifiers::NONE, KeyCode::Char('=')) => Some(Command::EqualizeLayout),
+                (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Enter) => {
+                    Some(Command::ExitResizeMode)
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('q'))
+                | (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Command::Quit),
+                _ => None, // All other keys consumed silently
+            };
+            if let Some(cmd) = cmd {
+                self.execute(cmd);
+            }
+            return;
+        }
+
         if let Some(cmd) = self.keymap.resolve(&key) {
             if self.show_help {
                 match cmd {
@@ -102,7 +148,44 @@ impl AppState {
             Command::ToggleTerminal => self.toggle_terminal(),
             Command::ShowHelp => self.show_help = !self.show_help,
             Command::CloseOverlay => self.show_help = false,
+            Command::EnterResizeMode => self.resize_mode.active = true,
+            Command::ExitResizeMode => self.resize_mode.active = false,
+            Command::ResizeLeft => self.resize_horizontal(-1),
+            Command::ResizeRight => self.resize_horizontal(1),
+            Command::ResizeUp => self.resize_vertical(-1),
+            Command::ResizeDown => self.resize_vertical(1),
+            Command::EqualizeLayout => self.equalize_layout(),
         }
+    }
+
+    /// Adjusts tree width by `direction` steps (+1 = grow, -1 = shrink).
+    /// Only applies when the Tree panel is focused.
+    fn resize_horizontal(&mut self, direction: i16) {
+        if self.focus != FocusTarget::Tree {
+            return;
+        }
+        let new_pct = (self.tree_width_pct as i16 + direction * RESIZE_STEP as i16)
+            .clamp(MIN_PANEL_PCT as i16, MAX_PANEL_PCT as i16);
+        self.tree_width_pct = new_pct as u16;
+    }
+
+    /// Adjusts the editor/terminal split by moving the border in the arrow direction.
+    /// Up = border moves up (editor shrinks, terminal grows).
+    /// Down = border moves down (editor grows, terminal shrinks).
+    /// Only applies when the Editor or Terminal panel is focused.
+    fn resize_vertical(&mut self, direction: i16) {
+        if self.focus == FocusTarget::Tree {
+            return;
+        }
+        let new_pct = (self.editor_height_pct as i16 + direction * RESIZE_STEP as i16)
+            .clamp(MIN_PANEL_PCT as i16, MAX_PANEL_PCT as i16);
+        self.editor_height_pct = new_pct as u16;
+    }
+
+    /// Resets all panel sizes to their defaults.
+    fn equalize_layout(&mut self) {
+        self.tree_width_pct = DEFAULT_TREE_WIDTH_PCT;
+        self.editor_height_pct = DEFAULT_EDITOR_HEIGHT_PCT;
     }
 
     /// Cycles focus forward, skipping hidden panels.
@@ -167,7 +250,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::KeyEvent;
 
     // --- AppState basic tests ---
 
@@ -521,5 +604,242 @@ mod tests {
         app.focus = FocusTarget::Tree;
         app.execute(Command::FocusPrev);
         assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    // --- Resize mode defaults ---
+
+    #[test]
+    fn resize_mode_inactive_by_default() {
+        let app = AppState::new();
+        assert!(!app.resize_mode.active);
+    }
+
+    #[test]
+    fn default_tree_width_pct_is_20() {
+        let app = AppState::new();
+        assert_eq!(app.tree_width_pct, 20);
+    }
+
+    #[test]
+    fn default_editor_height_pct_is_70() {
+        let app = AppState::new();
+        assert_eq!(app.editor_height_pct, 70);
+    }
+
+    // --- Resize command execution ---
+
+    #[test]
+    fn enter_resize_mode_activates() {
+        let mut app = AppState::new();
+        app.execute(Command::EnterResizeMode);
+        assert!(app.resize_mode.active);
+    }
+
+    #[test]
+    fn exit_resize_mode_deactivates() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.execute(Command::ExitResizeMode);
+        assert!(!app.resize_mode.active);
+    }
+
+    #[test]
+    fn resize_left_decreases_tree_width() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        let original = app.tree_width_pct;
+        app.execute(Command::ResizeLeft);
+        assert_eq!(app.tree_width_pct, original - 2);
+    }
+
+    #[test]
+    fn resize_right_increases_tree_width() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        let original = app.tree_width_pct;
+        app.execute(Command::ResizeRight);
+        assert_eq!(app.tree_width_pct, original + 2);
+    }
+
+    #[test]
+    fn resize_up_decreases_editor_height() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let original = app.editor_height_pct;
+        app.execute(Command::ResizeUp);
+        // Up = border moves up = editor shrinks
+        assert_eq!(app.editor_height_pct, original - 2);
+    }
+
+    #[test]
+    fn resize_down_increases_editor_height() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let original = app.editor_height_pct;
+        app.execute(Command::ResizeDown);
+        // Down = border moves down = editor grows
+        assert_eq!(app.editor_height_pct, original + 2);
+    }
+
+    #[test]
+    fn resize_clamps_at_minimum() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        app.tree_width_pct = 10;
+        app.execute(Command::ResizeLeft);
+        assert_eq!(app.tree_width_pct, 10);
+    }
+
+    #[test]
+    fn resize_clamps_at_maximum() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        app.tree_width_pct = 90;
+        app.execute(Command::ResizeRight);
+        assert_eq!(app.tree_width_pct, 90);
+    }
+
+    #[test]
+    fn equalize_layout_resets_defaults() {
+        let mut app = AppState::new();
+        app.tree_width_pct = 50;
+        app.editor_height_pct = 50;
+        app.execute(Command::EqualizeLayout);
+        assert_eq!(app.tree_width_pct, 20);
+        assert_eq!(app.editor_height_pct, 70);
+    }
+
+    #[test]
+    fn resize_left_noop_when_editor_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let original = app.tree_width_pct;
+        app.execute(Command::ResizeLeft);
+        assert_eq!(app.tree_width_pct, original);
+    }
+
+    #[test]
+    fn resize_up_noop_when_tree_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        let original = app.editor_height_pct;
+        app.execute(Command::ResizeUp);
+        assert_eq!(app.editor_height_pct, original);
+    }
+
+    #[test]
+    fn resize_up_moves_border_up_when_terminal_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        let original = app.editor_height_pct;
+        app.execute(Command::ResizeUp);
+        // Up = border moves up = editor shrinks, terminal grows
+        assert_eq!(app.editor_height_pct, original - 2);
+    }
+
+    #[test]
+    fn resize_down_moves_border_down_when_terminal_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        let original = app.editor_height_pct;
+        app.execute(Command::ResizeDown);
+        // Down = border moves down = editor grows, terminal shrinks
+        assert_eq!(app.editor_height_pct, original + 2);
+    }
+
+    // --- Resize mode key routing ---
+
+    #[test]
+    fn resize_mode_arrow_left_resizes() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.focus = FocusTarget::Tree;
+        let original = app.tree_width_pct;
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.tree_width_pct, original - 2);
+    }
+
+    #[test]
+    fn resize_mode_arrow_right_resizes() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.focus = FocusTarget::Tree;
+        let original = app.tree_width_pct;
+        app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.tree_width_pct, original + 2);
+    }
+
+    #[test]
+    fn resize_mode_arrow_up_resizes() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.focus = FocusTarget::Editor;
+        let original = app.editor_height_pct;
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        // Up = border moves up = editor shrinks
+        assert_eq!(app.editor_height_pct, original - 2);
+    }
+
+    #[test]
+    fn resize_mode_arrow_down_resizes() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.focus = FocusTarget::Editor;
+        let original = app.editor_height_pct;
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // Down = border moves down = editor grows
+        assert_eq!(app.editor_height_pct, original + 2);
+    }
+
+    #[test]
+    fn resize_mode_esc_exits() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.resize_mode.active);
+    }
+
+    #[test]
+    fn resize_mode_enter_exits() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.resize_mode.active);
+    }
+
+    #[test]
+    fn resize_mode_equals_equalizes() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.tree_width_pct = 50;
+        app.editor_height_pct = 50;
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE));
+        assert_eq!(app.tree_width_pct, 20);
+        assert_eq!(app.editor_height_pct, 70);
+    }
+
+    #[test]
+    fn resize_mode_blocks_focus_commands() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.focus = FocusTarget::Editor;
+        // Tab should not cycle focus while resize mode is active
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn resize_mode_allows_quit() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn handle_ctrl_r_enters_resize_mode() {
+        let mut app = AppState::new();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(app.resize_mode.active);
     }
 }

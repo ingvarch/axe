@@ -55,6 +55,11 @@ impl KeymapResolver {
         );
         resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('h'), Command::ShowHelp);
         resolver.bind(KeyModifiers::NONE, KeyCode::Esc, Command::CloseOverlay);
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('r'),
+            Command::EnterResizeMode,
+        );
 
         resolver
     }
@@ -163,5 +168,12 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         assert_eq!(resolver.resolve(&key), Some(Command::CloseOverlay));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_r_enters_resize_mode() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EnterResizeMode));
     }
 }

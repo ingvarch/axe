@@ -24,6 +24,20 @@ pub enum Command {
     ShowHelp,
     /// Close the current overlay.
     CloseOverlay,
+    /// Enter panel resize mode.
+    EnterResizeMode,
+    /// Exit panel resize mode.
+    ExitResizeMode,
+    /// Resize the active panel leftward.
+    ResizeLeft,
+    /// Resize the active panel rightward.
+    ResizeRight,
+    /// Resize the active panel upward.
+    ResizeUp,
+    /// Resize the active panel downward.
+    ResizeDown,
+    /// Reset all panels to default sizes.
+    EqualizeLayout,
 }
 
 #[cfg(test)]
@@ -43,6 +57,13 @@ mod tests {
             Command::ToggleTerminal,
             Command::ShowHelp,
             Command::CloseOverlay,
+            Command::EnterResizeMode,
+            Command::ExitResizeMode,
+            Command::ResizeLeft,
+            Command::ResizeRight,
+            Command::ResizeUp,
+            Command::ResizeDown,
+            Command::EqualizeLayout,
         ];
 
         for (i, a) in variants.iter().enumerate() {

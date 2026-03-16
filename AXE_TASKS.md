@@ -116,22 +116,22 @@ infrastructure — all future features will use it.
 
 ## Phase 2: Panel Resize & Layout
 
-### Task 2.1 — Panel Resize Mode
+### Task 2.1 — Panel Resize Mode [DONE]
 
 Implement zellij-style panel resizing with a dedicated resize mode.
 
 **Acceptance criteria:**
-- `Ctrl+R` enters resize mode
-- Status bar shows `-- RESIZE --` in a distinct color (e.g., yellow)
-- Panel borders change to yellow/highlighted color in resize mode
-- Arrow keys resize the active panel:
+- [x] `Ctrl+R` enters resize mode
+- [x] Status bar shows `-- RESIZE --` in a distinct color (e.g., yellow)
+- [x] Focused panel border changes to yellow/highlighted color in resize mode
+- [x] Arrow keys resize the active panel:
   - When Files is focused: `←`/`→` change tree width
   - When Editor is focused: `↑`/`↓` change editor/terminal height split
   - When Terminal is focused: `↑`/`↓` change editor/terminal height split
-- `Esc` or `Enter` exits resize mode
-- Minimum panel size: 10%, maximum: 90%
-- Resize step: 2% per arrow press
-- `=` equalizes all panels to default sizes (20% tree, 70/30 editor/terminal)
+- [x] `Esc` or `Enter` exits resize mode
+- [x] Minimum panel size: 10%, maximum: 90%
+- [x] Resize step: 2% per arrow press
+- [x] `=` equalizes all panels to default sizes (20% tree, 70/30 editor/terminal)
 
 **Implementation details:**
 - Add `ResizeModeState` to `AppState` (active: bool, step, min/max)

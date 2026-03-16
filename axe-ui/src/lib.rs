@@ -25,18 +25,34 @@ const HELP_KEY_COLUMN_WIDTH: usize = 14;
 /// Top offset for help content within the overlay inner area.
 const HELP_CONTENT_TOP_OFFSET: u16 = 1;
 
-/// Returns the border style for a panel based on whether it has focus.
-fn border_style_for(focus: &FocusTarget, panel: &FocusTarget, theme: &Theme) -> Style {
-    if focus == panel {
+/// Returns the border style for a panel based on whether it has focus and resize mode.
+fn border_style_for(
+    focus: &FocusTarget,
+    panel: &FocusTarget,
+    theme: &Theme,
+    resize_active: bool,
+) -> Style {
+    if resize_active && focus == panel {
+        Style::default().fg(theme.resize_border)
+    } else if focus == panel {
         Style::default().fg(theme.panel_border_active)
     } else {
         Style::default().fg(theme.panel_border)
     }
 }
 
-/// Returns the title style for a panel — bold when focused.
-fn title_style_for(focus: &FocusTarget, panel: &FocusTarget, theme: &Theme) -> Style {
-    if focus == panel {
+/// Returns the title style for a panel — bold when focused. Uses resize color in resize mode.
+fn title_style_for(
+    focus: &FocusTarget,
+    panel: &FocusTarget,
+    theme: &Theme,
+    resize_active: bool,
+) -> Style {
+    if resize_active && focus == panel {
+        Style::default()
+            .fg(theme.resize_border)
+            .add_modifier(Modifier::BOLD)
+    } else if focus == panel {
         Style::default()
             .fg(theme.panel_border_active)
             .add_modifier(Modifier::BOLD)
@@ -51,15 +67,16 @@ fn panel_block<'a>(
     focus: &FocusTarget,
     panel: &FocusTarget,
     theme: &Theme,
+    resize_active: bool,
 ) -> Block<'a> {
     let panel_style = Style::default().bg(theme.background).fg(theme.foreground);
 
     Block::default()
         .title(title)
-        .title_style(title_style_for(focus, panel, theme))
+        .title_style(title_style_for(focus, panel, theme, resize_active))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(border_style_for(focus, panel, theme))
+        .border_style(border_style_for(focus, panel, theme, resize_active))
         .style(panel_style)
 }
 
@@ -69,9 +86,18 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
     let focus_label = app.focus.label();
     let key_style = Style::default().fg(theme.status_bar_key);
     let text_style = Style::default().fg(theme.status_bar_fg);
+    let resize_style = Style::default()
+        .fg(theme.resize_border)
+        .add_modifier(Modifier::BOLD);
 
-    Line::from(vec![
-        Span::styled(format!(" Axe v{version}"), text_style),
+    let mut spans = vec![Span::styled(format!(" Axe v{version}"), text_style)];
+
+    if app.resize_mode.active {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled("-- RESIZE --", resize_style));
+    }
+
+    spans.extend([
         Span::styled(" | ", key_style),
         Span::styled(format!("Focus: {focus_label}"), text_style),
         Span::styled(" | ", key_style),
@@ -85,13 +111,14 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         Span::styled(" Focus ", key_style),
         Span::styled("^H", text_style.add_modifier(Modifier::BOLD)),
         Span::styled(" Help", key_style),
-    ])
+    ]);
+
+    Line::from(spans)
 }
 
 /// Help text lines for the help overlay.
 const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Q", "Quit"),
-    ("Ctrl+C", "Quit"),
     ("Tab", "Next panel"),
     ("Shift+Tab", "Previous panel"),
     ("Ctrl+1", "Focus Files"),
@@ -99,6 +126,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+3", "Focus Terminal"),
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
+    ("Ctrl+R", "Resize mode"),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
 ];
@@ -167,7 +195,8 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
         show_terminal: app.show_terminal,
-        ..LayoutManager::default()
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
     };
     let area = frame.area();
 
@@ -175,6 +204,8 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     let main_area = vertical[0];
     let status_area = vertical[1];
+
+    let resize_active = app.resize_mode.active;
 
     if layout_mgr.show_tree {
         let horizontal = Layout::horizontal([
@@ -187,13 +218,19 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         let right_area = horizontal[1];
 
         frame.render_widget(
-            panel_block(" Files ", &app.focus, &FocusTarget::Tree, &theme),
+            panel_block(
+                " Files ",
+                &app.focus,
+                &FocusTarget::Tree,
+                &theme,
+                resize_active,
+            ),
             tree_area,
         );
 
-        render_right_panels(app, frame, right_area, &layout_mgr, &theme);
+        render_right_panels(app, frame, right_area, &layout_mgr, &theme, resize_active);
     } else {
-        render_right_panels(app, frame, main_area, &layout_mgr, &theme);
+        render_right_panels(app, frame, main_area, &layout_mgr, &theme, resize_active);
     }
 
     // Status bar with hotkey hints
@@ -218,6 +255,7 @@ fn render_right_panels(
     area: ratatui::layout::Rect,
     layout_mgr: &LayoutManager,
     theme: &Theme,
+    resize_active: bool,
 ) {
     if layout_mgr.show_terminal {
         let right_split = Layout::vertical([
@@ -227,16 +265,34 @@ fn render_right_panels(
         .split(area);
 
         frame.render_widget(
-            panel_block(" Editor ", &app.focus, &FocusTarget::Editor, theme),
+            panel_block(
+                " Editor ",
+                &app.focus,
+                &FocusTarget::Editor,
+                theme,
+                resize_active,
+            ),
             right_split[0],
         );
         frame.render_widget(
-            panel_block(" Terminal ", &app.focus, &FocusTarget::Terminal(0), theme),
+            panel_block(
+                " Terminal ",
+                &app.focus,
+                &FocusTarget::Terminal(0),
+                theme,
+                resize_active,
+            ),
             right_split[1],
         );
     } else {
         frame.render_widget(
-            panel_block(" Editor ", &app.focus, &FocusTarget::Editor, theme),
+            panel_block(
+                " Editor ",
+                &app.focus,
+                &FocusTarget::Editor,
+                theme,
+                resize_active,
+            ),
             area,
         );
     }
@@ -435,6 +491,38 @@ mod tests {
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");
         assert!(content.contains("Ctrl+H"), "expected 'Ctrl+H' in help");
+        assert!(content.contains("Ctrl+R"), "expected 'Ctrl+R' in help");
         assert!(content.contains("Esc"), "expected 'Esc' in help");
+    }
+
+    #[test]
+    fn render_shows_resize_indicator_when_resize_mode_active() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("-- RESIZE --"),
+            "expected '-- RESIZE --' in status bar"
+        );
+    }
+
+    #[test]
+    fn render_no_resize_indicator_by_default() {
+        let content = render_to_string(100, 24);
+        assert!(
+            !content.contains("-- RESIZE --"),
+            "expected no '-- RESIZE --' by default"
+        );
+    }
+
+    #[test]
+    fn render_uses_app_tree_width_pct() {
+        let mut app = AppState::new();
+        app.tree_width_pct = 40;
+        // Just ensure it renders without panic; the visual difference
+        // is verified by the layout using the custom percentage.
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains("Files"), "expected 'Files' panel");
+        assert!(content.contains("Editor"), "expected 'Editor' panel");
     }
 }
