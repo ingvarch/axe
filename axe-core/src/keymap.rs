@@ -60,6 +60,11 @@ impl KeymapResolver {
             KeyCode::Char('r'),
             Command::EnterResizeMode,
         );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('z'),
+            Command::ZoomPanel,
+        );
 
         resolver
     }
@@ -175,5 +180,12 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::EnterResizeMode));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_z_zoom_panel() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::ZoomPanel));
     }
 }

@@ -141,7 +141,7 @@ Implement zellij-style panel resizing with a dedicated resize mode.
 
 ---
 
-### Task 2.2 — Mouse Resize (Drag Panel Borders)
+### Task 2.2 — Mouse Resize (Drag Panel Borders) [DONE]
 
 Allow resizing panels by clicking and dragging borders.
 
@@ -161,7 +161,7 @@ Allow resizing panels by clicking and dragging borders.
 
 ---
 
-### Task 2.3 — Zoom Panel Toggle
+### Task 2.3 — Zoom Panel Toggle [DONE]
 
 Maximize the active panel to fill the entire screen.
 

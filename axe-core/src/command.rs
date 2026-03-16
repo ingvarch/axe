@@ -38,6 +38,8 @@ pub enum Command {
     ResizeDown,
     /// Reset all panels to default sizes.
     EqualizeLayout,
+    /// Toggle zoom on the focused panel.
+    ZoomPanel,
 }
 
 #[cfg(test)]
@@ -64,6 +66,7 @@ mod tests {
             Command::ResizeUp,
             Command::ResizeDown,
             Command::EqualizeLayout,
+            Command::ZoomPanel,
         ];
 
         for (i, a) in variants.iter().enumerate() {

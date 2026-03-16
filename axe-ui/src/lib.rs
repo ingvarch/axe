@@ -92,6 +92,11 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
 
     let mut spans = vec![Span::styled(format!(" Axe v{version}"), text_style)];
 
+    if app.zoomed_panel.is_some() {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled("[ZOOM]", resize_style));
+    }
+
     if app.resize_mode.active {
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled("-- RESIZE --", resize_style));
@@ -127,6 +132,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
     ("Ctrl+R", "Resize mode"),
+    ("Ctrl+Z", "Zoom panel"),
     ("Click panel", "Focus panel"),
     ("Drag border", "Resize panel"),
     ("Ctrl+H", "Toggle this help"),
@@ -209,7 +215,17 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     let resize_active = app.resize_mode.active;
 
-    if layout_mgr.show_tree {
+    if let Some(ref zoomed) = app.zoomed_panel {
+        let (title, panel_target) = match zoomed {
+            FocusTarget::Tree => (" Files (zoomed) ", FocusTarget::Tree),
+            FocusTarget::Editor => (" Editor (zoomed) ", FocusTarget::Editor),
+            FocusTarget::Terminal(id) => (" Terminal (zoomed) ", FocusTarget::Terminal(*id)),
+        };
+        frame.render_widget(
+            panel_block(title, &app.focus, &panel_target, &theme, resize_active),
+            main_area,
+        );
+    } else if layout_mgr.show_tree {
         let horizontal = Layout::horizontal([
             Constraint::Percentage(layout_mgr.tree_width_pct),
             Constraint::Percentage(100 - layout_mgr.tree_width_pct),
@@ -514,6 +530,91 @@ mod tests {
         assert!(
             !content.contains("-- RESIZE --"),
             "expected no '-- RESIZE --' by default"
+        );
+    }
+
+    // --- Zoom rendering tests ---
+
+    #[test]
+    fn render_zoomed_shows_only_focused_panel() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.zoomed_panel = Some(FocusTarget::Editor);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains("Editor"), "expected 'Editor' panel");
+        assert!(
+            !content.contains("Files"),
+            "expected 'Files' hidden when editor is zoomed"
+        );
+        assert!(
+            !content.contains("Terminal"),
+            "expected 'Terminal' hidden when editor is zoomed"
+        );
+    }
+
+    #[test]
+    fn render_zoomed_tree_shows_only_tree() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Tree;
+        app.zoomed_panel = Some(FocusTarget::Tree);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains("Files"), "expected 'Files' panel");
+        assert!(
+            !content.contains("Editor"),
+            "expected 'Editor' hidden when tree is zoomed"
+        );
+        assert!(
+            !content.contains("Terminal"),
+            "expected 'Terminal' hidden when tree is zoomed"
+        );
+    }
+
+    #[test]
+    fn render_zoomed_terminal_shows_only_terminal() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Terminal(0);
+        app.zoomed_panel = Some(FocusTarget::Terminal(0));
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(content.contains("Terminal"), "expected 'Terminal' panel");
+        assert!(
+            !content.contains("Files"),
+            "expected 'Files' hidden when terminal is zoomed"
+        );
+        assert!(
+            !content.contains("Editor"),
+            "expected 'Editor' hidden when terminal is zoomed"
+        );
+    }
+
+    #[test]
+    fn render_zoom_indicator_in_status_bar() {
+        let mut app = AppState::new();
+        app.zoomed_panel = Some(FocusTarget::Editor);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("[ZOOM]"),
+            "expected '[ZOOM]' in status bar when zoomed"
+        );
+    }
+
+    #[test]
+    fn render_no_zoom_indicator_by_default() {
+        let content = render_to_string(100, 24);
+        assert!(
+            !content.contains("[ZOOM]"),
+            "expected no '[ZOOM]' by default"
+        );
+    }
+
+    #[test]
+    fn render_zoomed_panel_title_has_suffix() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.zoomed_panel = Some(FocusTarget::Editor);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("(zoomed)"),
+            "expected '(zoomed)' suffix in panel title"
         );
     }
 

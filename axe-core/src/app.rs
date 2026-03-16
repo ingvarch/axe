@@ -84,6 +84,7 @@ pub struct AppState {
     pub show_help: bool,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
+    pub zoomed_panel: Option<FocusTarget>,
     pub tree_width_pct: u16,
     pub editor_height_pct: u16,
     keymap: KeymapResolver,
@@ -100,6 +101,7 @@ impl AppState {
             show_help: false,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
+            zoomed_panel: None,
             tree_width_pct: DEFAULT_TREE_WIDTH_PCT,
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             keymap: KeymapResolver::with_defaults(),
@@ -173,6 +175,7 @@ impl AppState {
             Command::ResizeUp => self.resize_vertical(-1),
             Command::ResizeDown => self.resize_vertical(1),
             Command::EqualizeLayout => self.equalize_layout(),
+            Command::ZoomPanel => self.toggle_zoom(),
         }
     }
 
@@ -303,6 +306,20 @@ impl AppState {
         }
 
         FocusTarget::Editor
+    }
+
+    /// Toggles zoom on the focused panel.
+    ///
+    /// - `None` -> zoom current focus
+    /// - `Some(x)` where `x == focus` -> un-zoom
+    /// - `Some(_)` -> switch zoom to current focus
+    fn toggle_zoom(&mut self) {
+        self.resize_mode.active = false;
+        if self.zoomed_panel.as_ref() == Some(&self.focus) {
+            self.zoomed_panel = None;
+        } else {
+            self.zoomed_panel = Some(self.focus.clone());
+        }
     }
 
     /// Resets all panel sizes to their defaults.
@@ -1167,6 +1184,59 @@ mod tests {
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 29);
         app.handle_mouse_event(evt, 100, 30);
         assert_eq!(app.focus, FocusTarget::Tree);
+    }
+
+    // --- Zoom panel tests ---
+
+    #[test]
+    fn zoomed_panel_none_by_default() {
+        let app = AppState::new();
+        assert_eq!(app.zoomed_panel, None);
+    }
+
+    #[test]
+    fn zoom_panel_sets_zoomed_to_current_focus() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::ZoomPanel);
+        assert_eq!(app.zoomed_panel, Some(FocusTarget::Editor));
+    }
+
+    #[test]
+    fn zoom_panel_again_unzooms() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::ZoomPanel);
+        app.execute(Command::ZoomPanel);
+        assert_eq!(app.zoomed_panel, None);
+    }
+
+    #[test]
+    fn zoom_panel_switches_zoom_to_new_focus() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::ZoomPanel);
+        app.focus = FocusTarget::Tree;
+        app.execute(Command::ZoomPanel);
+        assert_eq!(app.zoomed_panel, Some(FocusTarget::Tree));
+    }
+
+    #[test]
+    fn zoom_panel_exits_resize_mode() {
+        let mut app = AppState::new();
+        app.resize_mode.active = true;
+        app.execute(Command::ZoomPanel);
+        assert!(!app.resize_mode.active);
+    }
+
+    #[test]
+    fn handle_key_ctrl_z_toggles_zoom() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.zoomed_panel, Some(FocusTarget::Editor));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.zoomed_panel, None);
     }
 
     #[test]
