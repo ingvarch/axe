@@ -51,19 +51,19 @@ screen, and handle `q` to quit. This is the foundation everything else builds on
 
 ---
 
-### Task 1.3 — Three-Panel Layout (Static)
+### Task 1.3 — Three-Panel Layout (Static) [DONE]
 
 Render three panels: file tree (left), editor (top-right), terminal (bottom-right).
 No content yet — just colored borders with panel titles.
 
 **Acceptance criteria:**
-- Three panels visible with rounded borders
-- Left panel: title "Files", takes ~20% width
-- Top-right panel: title "Editor", takes ~70% of remaining height
-- Bottom-right panel: title "Terminal", takes ~30% of remaining height
-- Bottom status bar: shows "Axe IDE v0.1.0 | Press q to quit"
-- Layout adjusts on terminal resize
-- Different border colors for active vs inactive panels (just visual, no focus logic yet)
+- [x] Three panels visible with rounded borders
+- [x] Left panel: title "Files", takes ~20% width
+- [x] Top-right panel: title "Editor", takes ~70% of remaining height
+- [x] Bottom-right panel: title "Terminal", takes ~30% of remaining height
+- [x] Bottom status bar: shows "Axe IDE v0.1.0 | Press q to quit"
+- [x] Layout adjusts on terminal resize
+- [x] Different border colors for active vs inactive panels (just visual, no focus logic yet)
 
 **Implementation details:**
 - Use `ratatui::layout::Layout` with `Constraint::Percentage`

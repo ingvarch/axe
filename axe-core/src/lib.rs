@@ -1,6 +1,7 @@
 pub mod app;
 pub use app::AppState;
 
+/// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

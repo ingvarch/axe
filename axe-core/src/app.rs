@@ -1,18 +1,22 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// Central application state shared across all subsystems.
 pub struct AppState {
     pub should_quit: bool,
 }
 
 impl AppState {
+    /// Creates a new `AppState` with default values.
     pub fn new() -> Self {
         Self { should_quit: false }
     }
 
+    /// Signals the application to exit the event loop.
     pub fn quit(&mut self) {
         self.should_quit = true;
     }
 
+    /// Processes a key event and updates application state accordingly.
     pub fn handle_key_event(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Char('q')) => self.quit(),

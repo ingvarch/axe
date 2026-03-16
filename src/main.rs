@@ -3,9 +3,7 @@ use std::panic;
 
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::terminal::{
-    self, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -26,8 +24,12 @@ fn setup_terminal() -> io::Result<Term> {
 }
 
 fn restore_terminal() {
-    let _ = terminal::disable_raw_mode();
-    let _ = stdout().execute(LeaveAlternateScreen);
+    if let Err(e) = terminal::disable_raw_mode() {
+        eprintln!("Failed to disable raw mode: {e}");
+    }
+    if let Err(e) = stdout().execute(LeaveAlternateScreen) {
+        eprintln!("Failed to leave alternate screen: {e}");
+    }
 }
 
 fn install_panic_hook() {
