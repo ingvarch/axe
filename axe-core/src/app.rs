@@ -77,6 +77,11 @@ impl FocusTarget {
     }
 }
 
+/// Default terminal size used when the actual panel size is not yet known.
+const DEFAULT_TERMINAL_COLS: u16 = 80;
+/// Default terminal rows used when the actual panel size is not yet known.
+const DEFAULT_TERMINAL_ROWS: u16 = 24;
+
 /// Central application state shared across all subsystems.
 pub struct AppState {
     pub should_quit: bool,
@@ -96,6 +101,12 @@ pub struct AppState {
     pub file_tree: Option<axe_tree::FileTree>,
     /// Terminal emulator manager, if initialized.
     pub terminal_manager: Option<axe_terminal::TerminalManager>,
+    /// Project root directory for spawning new terminals.
+    pub project_root: Option<PathBuf>,
+    /// Last known terminal panel width in columns.
+    pub last_terminal_cols: u16,
+    /// Last known terminal panel height in rows.
+    pub last_terminal_rows: u16,
     keymap: KeymapResolver,
 }
 
@@ -116,6 +127,9 @@ impl AppState {
             editor_height_pct: DEFAULT_EDITOR_HEIGHT_PCT,
             file_tree: None,
             terminal_manager: None,
+            project_root: None,
+            last_terminal_cols: DEFAULT_TERMINAL_COLS,
+            last_terminal_rows: DEFAULT_TERMINAL_ROWS,
             keymap: KeymapResolver::with_defaults(),
         }
     }
@@ -124,7 +138,7 @@ impl AppState {
     ///
     /// If the directory cannot be read, logs a warning and falls back to no file tree.
     pub fn new_with_root(root: PathBuf) -> Self {
-        let file_tree = match axe_tree::FileTree::new(root) {
+        let file_tree = match axe_tree::FileTree::new(root.clone()) {
             Ok(tree) => Some(tree),
             Err(e) => {
                 log::warn!("Failed to load file tree: {e}");
@@ -133,6 +147,7 @@ impl AppState {
         };
         Self {
             file_tree,
+            project_root: Some(root),
             ..Self::new()
         }
     }
@@ -145,10 +160,32 @@ impl AppState {
 
     /// Polls terminal output from the PTY background thread and feeds it to the terminal.
     ///
-    /// No-op if no terminal manager is initialized.
+    /// Automatically closes tabs whose child processes have exited (e.g. user typed `exit`
+    /// or pressed Ctrl+D in the shell). Updates focus accordingly.
     pub fn poll_terminal(&mut self) {
         if let Some(ref mut mgr) = self.terminal_manager {
-            mgr.poll_output();
+            let exited = mgr.poll_output();
+            if !exited.is_empty() {
+                // Close exited tabs back-to-front (indices are sorted descending).
+                for idx in exited {
+                    if let Err(e) = mgr.close_tab(idx) {
+                        log::warn!("Failed to close exited terminal tab {idx}: {e}");
+                    }
+                }
+
+                if mgr.has_tabs() {
+                    // Still have tabs — sync focus to the new active tab.
+                    if matches!(self.focus, FocusTarget::Terminal(_)) {
+                        self.focus = FocusTarget::Terminal(mgr.active_index());
+                    }
+                } else {
+                    // Last tab closed — hide terminal panel, move focus to editor.
+                    self.show_terminal = false;
+                    if matches!(self.focus, FocusTarget::Terminal(_)) {
+                        self.focus = FocusTarget::Editor;
+                    }
+                }
+            }
         }
     }
 
@@ -386,6 +423,9 @@ impl AppState {
                     tree.toggle_show_icons();
                 }
             }
+            Command::NewTerminalTab => self.new_terminal_tab(),
+            Command::CloseTerminalTab => self.close_terminal_tab(),
+            Command::ActivateTerminalTab(idx) => self.activate_terminal_tab(idx),
         }
     }
 
@@ -431,6 +471,14 @@ impl AppState {
                 let col = mouse.column;
                 let row = mouse.row;
 
+                // Tab bar click takes priority — its row overlaps with border tolerance.
+                if self.show_terminal {
+                    if let Some(tab_idx) = self.tab_bar_hit(col, row, screen_width, main_height) {
+                        self.activate_terminal_tab(tab_idx);
+                        return;
+                    }
+                }
+
                 // Check vertical border (tree/editor boundary)
                 if self.show_tree {
                     let border_x =
@@ -462,7 +510,7 @@ impl AppState {
                     }
                 }
 
-                // No border hit — focus the clicked panel
+                // No border or tab bar hit — focus the clicked panel
                 if row < main_height {
                     self.focus = self.panel_at(col, row, screen_width, main_height);
                 }
@@ -518,6 +566,47 @@ impl AppState {
         FocusTarget::Editor
     }
 
+    /// Checks if a click landed on the terminal tab bar and returns the tab index.
+    ///
+    /// The tab bar is the first row inside the terminal panel border.
+    /// Returns `None` if the click is outside the tab bar or if there's no terminal manager.
+    fn tab_bar_hit(
+        &self,
+        col: u16,
+        row: u16,
+        screen_width: u16,
+        main_height: u16,
+    ) -> Option<usize> {
+        let mgr = self.terminal_manager.as_ref()?;
+        if !mgr.has_tabs() {
+            return None;
+        }
+
+        // Compute terminal panel position.
+        let term_x_start = if self.show_tree {
+            (u32::from(screen_width) * u32::from(self.tree_width_pct) / 100) as u16
+        } else {
+            0
+        };
+        let term_y_start =
+            (u32::from(main_height) * u32::from(self.editor_height_pct) / 100) as u16;
+
+        // The tab bar row is at term_y_start + 1 (after the top border).
+        let tab_bar_row = term_y_start + 1;
+        if row != tab_bar_row {
+            return None;
+        }
+
+        // The tab bar content starts at term_x_start + 1 (after the left border).
+        let tab_bar_x_start = term_x_start + 1;
+        if col < tab_bar_x_start {
+            return None;
+        }
+
+        let x_offset = (col - tab_bar_x_start) as usize;
+        mgr.tab_at_x_offset(x_offset)
+    }
+
     /// Toggles zoom on the focused panel.
     ///
     /// - `None` -> zoom current focus
@@ -536,6 +625,67 @@ impl AppState {
             self.zoomed_panel = None;
         } else {
             self.zoomed_panel = Some(self.focus.clone());
+        }
+    }
+
+    /// Creates a new terminal tab and focuses it.
+    ///
+    /// No-op if the terminal panel is hidden — the user should toggle the panel first.
+    fn new_terminal_tab(&mut self) {
+        if !self.show_terminal {
+            return;
+        }
+
+        let cwd = self
+            .project_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        if let Some(ref mut mgr) = self.terminal_manager {
+            match mgr.spawn_tab(self.last_terminal_cols, self.last_terminal_rows, &cwd) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create terminal tab: {e}");
+                }
+            }
+        } else {
+            // No manager yet — create one with a first tab.
+            let mut mgr = axe_terminal::TerminalManager::new();
+            match mgr.spawn_tab(self.last_terminal_cols, self.last_terminal_rows, &cwd) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                    self.terminal_manager = Some(mgr);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create terminal tab: {e}");
+                }
+            }
+        }
+    }
+
+    /// Closes the active terminal tab.
+    fn close_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let active = mgr.active_index();
+            if let Err(e) = mgr.close_tab(active) {
+                log::warn!("Failed to close terminal tab: {e}");
+                return;
+            }
+            self.focus = FocusTarget::Terminal(mgr.active_index());
+        }
+    }
+
+    /// Activates a specific terminal tab by index. No-op if the index is out of range.
+    fn activate_terminal_tab(&mut self, idx: usize) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            if idx < mgr.tab_count() {
+                mgr.activate_tab(idx);
+                self.focus = FocusTarget::Terminal(idx);
+            }
         }
     }
 
@@ -589,10 +739,20 @@ impl AppState {
     }
 
     /// Toggles the terminal panel visibility.
-    /// If the terminal is currently focused, moves focus to the editor.
+    ///
+    /// When showing the panel and there are no tabs, automatically spawns one.
+    /// When hiding, moves focus to Editor if terminal was focused.
     fn toggle_terminal(&mut self) {
         self.show_terminal = !self.show_terminal;
-        if !self.show_terminal && matches!(self.focus, FocusTarget::Terminal(_)) {
+        if self.show_terminal {
+            let has_tabs = self
+                .terminal_manager
+                .as_ref()
+                .is_some_and(|mgr| mgr.has_tabs());
+            if !has_tabs {
+                self.new_terminal_tab();
+            }
+        } else if matches!(self.focus, FocusTarget::Terminal(_)) {
             self.focus = FocusTarget::Editor;
         }
     }

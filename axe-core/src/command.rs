@@ -68,6 +68,12 @@ pub enum Command {
     TreeDelete,
     /// Toggle file type icons in the tree panel.
     ToggleIcons,
+    /// Create a new terminal tab.
+    NewTerminalTab,
+    /// Close the active terminal tab.
+    CloseTerminalTab,
+    /// Activate a specific terminal tab by index (0-based).
+    ActivateTerminalTab(usize),
 }
 
 #[cfg(test)]
@@ -109,6 +115,10 @@ mod tests {
             Command::TreeRename,
             Command::TreeDelete,
             Command::ToggleIcons,
+            Command::NewTerminalTab,
+            Command::CloseTerminalTab,
+            Command::ActivateTerminalTab(0),
+            Command::ActivateTerminalTab(1),
         ];
 
         for (i, a) in variants.iter().enumerate() {

@@ -162,6 +162,11 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("r", "Rename"),
     ("d", "Delete"),
     ("", ""),
+    ("--- Terminal ---", ""),
+    ("Alt+T", "New terminal tab"),
+    ("Alt+W", "Close terminal tab"),
+    ("Alt+1-9", "Switch to tab N"),
+    ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
 ];
@@ -549,13 +554,94 @@ fn cell_flags_to_modifier(flags: CellFlags) -> Modifier {
     modifier
 }
 
+// IMPACT ANALYSIS — render_terminal_tab_bar
+// Parents: render_terminal_panel() calls this when tabs exist.
+// Children: None — purely visual.
+// Siblings: render_terminal_grid() renders the content below the tab bar.
+
+/// Renders the terminal tab bar showing all open tabs.
+fn render_terminal_tab_bar(mgr: &TerminalManager, area: Rect, frame: &mut Frame, theme: &Theme) {
+    let titles = mgr.tab_titles();
+    let active = mgr.active_index();
+
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, title) in titles.iter().enumerate() {
+        let label = format!("[{}:{}]", i + 1, title);
+        let style = if i == active {
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM)
+        };
+        spans.push(Span::styled(label, style));
+        if i + 1 < titles.len() {
+            spans.push(Span::raw(" "));
+        }
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+/// Renders the "No terminals" message when all tabs are closed.
+fn render_no_terminals_message(area: Rect, frame: &mut Frame, theme: &Theme) {
+    let text = Line::from(vec![
+        Span::styled(
+            "No terminals",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled(
+            " -- Alt+T to create",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+    ]);
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+    let centered_area = Rect {
+        y: area.y + area.height / 2,
+        height: 1,
+        ..area
+    };
+    frame.render_widget(paragraph, centered_area);
+}
+
 // IMPACT ANALYSIS — render_terminal_content
 // Parents: render_right_panels() and zoomed view call this.
-// Children: convert_ansi_color(), cell_flags_to_modifier().
+// Children: convert_ansi_color(), cell_flags_to_modifier(), render_terminal_tab_bar(),
+//           render_no_terminals_message().
 // Siblings: Terminal panel block is rendered separately — this only fills the inner area.
 
-/// Renders terminal content from the active tab into the given area.
+/// Renders terminal content (tab bar + active tab grid) into the given area.
 fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame, theme: &Theme) {
+    if !mgr.has_tabs() {
+        render_no_terminals_message(area, frame, theme);
+        return;
+    }
+
+    // Split area: 1 row for tab bar, rest for terminal grid.
+    let (tab_bar_area, grid_area) = if mgr.tab_count() > 0 && area.height > 1 {
+        let tab_bar = Rect { height: 1, ..area };
+        let grid = Rect {
+            y: area.y + 1,
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        (Some(tab_bar), grid)
+    } else {
+        (None, area)
+    };
+
+    if let Some(tab_bar) = tab_bar_area {
+        render_terminal_tab_bar(mgr, tab_bar, frame, theme);
+    }
+
     let tab = match mgr.active_tab() {
         Some(tab) => tab,
         None => return,
@@ -570,12 +656,12 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
         let point = indexed.point;
         let cell = &indexed.cell;
 
-        // Convert grid coordinates to buffer coordinates within the area.
-        let x = area.x + point.column.0 as u16;
-        let y = area.y + point.line.0 as u16;
+        // Convert grid coordinates to buffer coordinates within the grid area.
+        let x = grid_area.x + point.column.0 as u16;
+        let y = grid_area.y + point.line.0 as u16;
 
         // Skip cells outside the visible area.
-        if x >= area.x + area.width || y >= area.y + area.height {
+        if x >= grid_area.x + grid_area.width || y >= grid_area.y + grid_area.height {
             continue;
         }
 
@@ -601,10 +687,10 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
     // Render cursor.
     if content.cursor.shape != CursorShape::Hidden {
         let cursor_point = content.cursor.point;
-        let cx = area.x + cursor_point.column.0 as u16;
-        let cy = area.y + cursor_point.line.0 as u16;
+        let cx = grid_area.x + cursor_point.column.0 as u16;
+        let cy = grid_area.y + cursor_point.line.0 as u16;
 
-        if cx < area.x + area.width && cy < area.y + area.height {
+        if cx < grid_area.x + grid_area.width && cy < grid_area.y + grid_area.height {
             if let Some(buf_cell) = buf.cell_mut((cx, cy)) {
                 let cursor_style = Style::default()
                     .fg(theme.background)
@@ -616,9 +702,10 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
     }
 }
 
-/// Returns the inner area of the terminal panel, if terminal is visible.
+/// Returns the inner area of the terminal panel (excluding tab bar), if terminal is visible.
 ///
 /// Used by the main loop to sync PTY size with panel dimensions.
+/// Subtracts 1 row for the tab bar when the terminal manager has tabs.
 pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
@@ -631,6 +718,11 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         return None;
     }
 
+    let has_tabs = app
+        .terminal_manager
+        .as_ref()
+        .is_some_and(|mgr| mgr.has_tabs());
+
     if let Some(ref zoomed) = app.zoomed_panel {
         if matches!(zoomed, FocusTarget::Terminal(_)) {
             let vertical =
@@ -642,7 +734,8 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
                 &Theme::default(),
                 false,
             );
-            return Some(block.inner(vertical[0]));
+            let inner = block.inner(vertical[0]);
+            return Some(subtract_tab_bar_row(inner, has_tabs));
         }
         return None;
     }
@@ -674,7 +767,21 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         &Theme::default(),
         false,
     );
-    Some(term_block.inner(right_split[1]))
+    let inner = term_block.inner(right_split[1]);
+    Some(subtract_tab_bar_row(inner, has_tabs))
+}
+
+/// Subtracts 1 row from a rect to account for the terminal tab bar.
+fn subtract_tab_bar_row(rect: Rect, has_tabs: bool) -> Rect {
+    if has_tabs && rect.height > 1 {
+        Rect {
+            y: rect.y + 1,
+            height: rect.height.saturating_sub(1),
+            ..rect
+        }
+    } else {
+        rect
+    }
 }
 
 /// Renders the full IDE interface with conditional panel visibility and a status bar.
@@ -1005,7 +1112,7 @@ mod tests {
     fn render_help_overlay_shows_keybindings() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 36);
+        let content = render_app_to_string(&app, 80, 44);
         assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");

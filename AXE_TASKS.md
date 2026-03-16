@@ -515,7 +515,7 @@ Pass keyboard input to the terminal shell.
 
 ---
 
-### Task 6.3 — Terminal: Multiple Tabs
+### Task 6.3 — Terminal: Multiple Tabs ✅
 
 Support multiple terminal instances with tabs.
 

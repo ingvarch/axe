@@ -7,7 +7,7 @@
 //           Resize events from the main loop call tab.resize().
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
@@ -71,7 +71,7 @@ impl TerminalTab {
         let processor = ansi::Processor::new();
 
         let tab = Self {
-            title: shell,
+            title: abbreviate_path(cwd),
             master,
             writer,
             child,
@@ -135,6 +135,11 @@ impl TerminalTab {
         &self.title
     }
 
+    /// Kills the child process.
+    pub fn kill(&mut self) -> Result<()> {
+        self.child.kill().context("Failed to kill terminal process")
+    }
+
     /// Checks whether the child process is still running.
     pub fn is_alive(&mut self) -> bool {
         self.child
@@ -144,10 +149,148 @@ impl TerminalTab {
     }
 }
 
+/// Abbreviates a path for display in tab titles.
+///
+/// Rules:
+/// - Home directory prefix is replaced with `~`
+/// - All intermediate components (between `~` and the last) are shortened to their first character
+/// - The last component is always shown in full
+///
+/// Examples (assuming home = `/Users/igor`):
+/// - `/Users/igor` → `~`
+/// - `/Users/igor/Repos` → `~/Repos`
+/// - `/Users/igor/Repos/ingvarch` → `~/R/ingvarch`
+/// - `/Users/igor/Repos/ingvarch/axe` → `~/R/i/axe`
+/// - `/tmp/build` → `/t/build`
+fn abbreviate_path(path: &Path) -> String {
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+
+    let (use_tilde, components): (bool, Vec<String>) = match home {
+        Some(ref home_path) => {
+            if let Ok(relative) = path.strip_prefix(home_path) {
+                let comps: Vec<String> = relative
+                    .components()
+                    .filter_map(|c| {
+                        if let std::path::Component::Normal(s) = c {
+                            Some(s.to_string_lossy().into_owned())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (true, comps)
+            } else {
+                (false, path_to_components(path))
+            }
+        }
+        None => (false, path_to_components(path)),
+    };
+
+    if components.is_empty() {
+        return if use_tilde {
+            "~".to_string()
+        } else {
+            "/".to_string()
+        };
+    }
+
+    let mut parts: Vec<String> = Vec::with_capacity(components.len() + 1);
+    if use_tilde {
+        parts.push("~".to_string());
+    }
+
+    let last = components.len() - 1;
+    for (i, comp) in components.iter().enumerate() {
+        if i == last {
+            parts.push(comp.clone());
+        } else {
+            // Abbreviate to first character.
+            let first_char = comp.chars().next().unwrap_or('?');
+            parts.push(first_char.to_string());
+        }
+    }
+
+    if use_tilde {
+        parts.join("/")
+    } else {
+        // Absolute path: prefix with /
+        format!("/{}", parts.join("/"))
+    }
+}
+
+/// Extracts Normal components from an absolute path as strings.
+fn path_to_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|c| {
+            if let std::path::Component::Normal(s) = c {
+                Some(s.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alacritty_terminal::grid::Dimensions;
+
+    // --- abbreviate_path tests ---
+
+    #[test]
+    fn abbreviate_path_home_dir() {
+        let home = std::env::var("HOME").unwrap();
+        let result = abbreviate_path(Path::new(&home));
+        assert_eq!(result, "~");
+    }
+
+    #[test]
+    fn abbreviate_path_one_level_below_home() {
+        let home = std::env::var("HOME").unwrap();
+        let path = PathBuf::from(&home).join("Repos");
+        let result = abbreviate_path(&path);
+        assert_eq!(result, "~/Repos");
+    }
+
+    #[test]
+    fn abbreviate_path_two_levels_below_home() {
+        let home = std::env::var("HOME").unwrap();
+        let path = PathBuf::from(&home).join("Repos").join("ingvarch");
+        let result = abbreviate_path(&path);
+        assert_eq!(result, "~/R/ingvarch");
+    }
+
+    #[test]
+    fn abbreviate_path_three_levels_below_home() {
+        let home = std::env::var("HOME").unwrap();
+        let path = PathBuf::from(&home)
+            .join("Repos")
+            .join("ingvarch")
+            .join("axe");
+        let result = abbreviate_path(&path);
+        assert_eq!(result, "~/R/i/axe");
+    }
+
+    #[test]
+    fn abbreviate_path_outside_home() {
+        let result = abbreviate_path(Path::new("/tmp/build"));
+        assert_eq!(result, "/t/build");
+    }
+
+    #[test]
+    fn abbreviate_path_root() {
+        let result = abbreviate_path(Path::new("/"));
+        assert_eq!(result, "/");
+    }
+
+    #[test]
+    fn abbreviate_path_single_component() {
+        let result = abbreviate_path(Path::new("/usr"));
+        assert_eq!(result, "/usr");
+    }
+
+    // --- TerminalTab tests ---
 
     #[test]
     fn new_creates_valid_tab() {
@@ -162,6 +305,14 @@ mod tests {
         assert_eq!(tab.last_cols, 80);
         assert_eq!(tab.last_rows, 24);
         assert!(tab.is_alive(), "Child should be alive after creation");
+    }
+
+    #[test]
+    fn new_tab_title_is_abbreviated_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        let (tab, _reader) = TerminalTab::new(80, 24, &cwd).unwrap();
+        let expected = abbreviate_path(&cwd);
+        assert_eq!(tab.title(), expected);
     }
 
     #[test]
@@ -209,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn title_returns_shell_name() {
+    fn title_returns_nonempty() {
         let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         assert!(!tab.title().is_empty(), "Tab title should not be empty");
     }

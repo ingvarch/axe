@@ -96,6 +96,9 @@ async fn main() -> Result<()> {
         if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
             let new_size = (term_rect.width, term_rect.height);
             if new_size != last_terminal_size && new_size.0 > 0 && new_size.1 > 0 {
+                // Update AppState so new terminal tabs use the right size.
+                app.last_terminal_cols = new_size.0;
+                app.last_terminal_rows = new_size.1;
                 if let Some(ref mut mgr) = app.terminal_manager {
                     if let Err(e) = mgr.resize_active(new_size.0, new_size.1) {
                         log::warn!("Failed to resize terminal: {e}");

@@ -78,6 +78,28 @@ impl KeymapResolver {
             Command::ToggleIcons,
         );
 
+        // Terminal tab management — using Alt to avoid Ctrl+Shift unreliability
+        // in terminal emulators (many report Ctrl+Shift+T as plain Ctrl+T).
+        resolver.bind(
+            KeyModifiers::ALT,
+            KeyCode::Char('t'),
+            Command::NewTerminalTab,
+        );
+        resolver.bind(
+            KeyModifiers::ALT,
+            KeyCode::Char('w'),
+            Command::CloseTerminalTab,
+        );
+
+        // Alt+1-9: direct terminal tab access (1-indexed for the user, 0-indexed internally).
+        for i in 1..=9u8 {
+            resolver.bind(
+                KeyModifiers::ALT,
+                KeyCode::Char((b'0' + i) as char),
+                Command::ActivateTerminalTab((i - 1) as usize),
+            );
+        }
+
         resolver
     }
 
@@ -220,5 +242,49 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::ToggleIcons));
+    }
+
+    #[test]
+    fn default_bindings_alt_t_new_terminal_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::NewTerminalTab));
+    }
+
+    #[test]
+    fn default_bindings_alt_w_close_terminal_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::CloseTerminalTab));
+    }
+
+    #[test]
+    fn default_bindings_alt_1_activates_terminal_tab_0() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
+        assert_eq!(
+            resolver.resolve(&key),
+            Some(Command::ActivateTerminalTab(0))
+        );
+    }
+
+    #[test]
+    fn default_bindings_alt_9_activates_terminal_tab_8() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('9'), KeyModifiers::ALT);
+        assert_eq!(
+            resolver.resolve(&key),
+            Some(Command::ActivateTerminalTab(8))
+        );
+    }
+
+    #[test]
+    fn default_bindings_alt_5_activates_terminal_tab_4() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT);
+        assert_eq!(
+            resolver.resolve(&key),
+            Some(Command::ActivateTerminalTab(4))
+        );
     }
 }
