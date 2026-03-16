@@ -365,7 +365,7 @@ Undo and redo support for all edits.
 
 ---
 
-### Task 4.5 — Editor: Selection, Copy, Cut, Paste ✅
+### Task 4.5 — Editor: Selection, Copy, Cut, Paste
 
 Text selection and clipboard operations.
 
@@ -410,7 +410,7 @@ Find text within the current buffer.
 
 ---
 
-### Task 4.7 — Editor: Multiple Buffers & Tab Bar
+### Task 4.7 — Editor: Multiple Buffers & Tab Bar ✅
 
 Support multiple open files with a tab bar.
 

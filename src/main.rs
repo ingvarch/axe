@@ -100,6 +100,14 @@ async fn main() -> Result<()> {
         // Sync panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);
 
+        // Update editor tab bar area for mouse click detection on tabs.
+        if let Some(tab_rect) = axe_ui::editor_tab_bar_rect(&app, full_area) {
+            app.editor_tab_bar_area =
+                Some((tab_rect.x, tab_rect.y, tab_rect.width, tab_rect.height));
+        } else {
+            app.editor_tab_bar_area = None;
+        }
+
         // Update editor content area for viewport-dependent cursor movement.
         if let Some(editor_rect) = axe_ui::editor_inner_rect(&app, full_area) {
             app.editor_inner_area = Some((

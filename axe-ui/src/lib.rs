@@ -213,6 +213,8 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("", ""),
     ("--- Editor ---", ""),
     ("Ctrl+F", "Find in file"),
+    ("Alt+]/[", "Next/prev buffer"),
+    ("Ctrl+W", "Close buffer"),
     ("Shift+Arrows", "Select text"),
     ("Ctrl+A", "Select all"),
     ("Ctrl+C", "Copy"),
@@ -346,6 +348,80 @@ fn render_quit_overlay(frame: &mut Frame, theme: &Theme) {
     let content_area = Rect {
         y: inner.y + inner.height / 2,
         height: 1,
+        ..inner
+    };
+    frame.render_widget(paragraph, content_area);
+}
+
+/// Width of the close-buffer confirmation overlay in columns.
+const CLOSE_BUFFER_OVERLAY_WIDTH: u16 = 36;
+/// Height of the close-buffer confirmation overlay in rows.
+const CLOSE_BUFFER_OVERLAY_HEIGHT: u16 = 7;
+
+/// Renders a centered close-buffer confirmation dialog.
+///
+/// Shows the filename being closed and a warning about unsaved changes.
+fn render_close_buffer_overlay(app: &AppState, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = CLOSE_BUFFER_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
+    let overlay_height = CLOSE_BUFFER_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Close Buffer ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    let file_name = app
+        .buffer_manager
+        .active_buffer()
+        .and_then(|b| b.file_name())
+        .unwrap_or("[untitled]");
+
+    let lines = vec![
+        Line::from(Span::styled(
+            file_name,
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Unsaved changes will be lost."),
+        Line::from(vec![
+            Span::raw("Close? "),
+            Span::styled(
+                "(y/N)",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
+    let content_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
         ..inner
     };
     frame.render_widget(paragraph, content_area);
@@ -960,6 +1036,92 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
 /// Computes the editor content area rect (after borders and gutter).
 ///
 /// Used by main.rs to sync `AppState::editor_inner_area` each frame.
+/// Returns the screen rectangle for the editor tab bar, or `None` if the tab
+/// bar is not visible (single buffer or editor not shown).
+///
+/// The tab bar occupies the first row of the editor panel inner area when
+/// multiple buffers are open.
+pub fn editor_tab_bar_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    if app.buffer_manager.buffer_count() <= 1 {
+        return None;
+    }
+
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    // If zoomed to a non-editor panel, editor is not visible.
+    if let Some(ref zoomed) = app.zoomed_panel {
+        if !matches!(zoomed, FocusTarget::Editor) {
+            return None;
+        }
+        let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        let block = panel_block(
+            editor_title(app, true),
+            &app.focus,
+            &FocusTarget::Editor,
+            &Theme::default(),
+            false,
+        );
+        let inner = block.inner(vertical[0]);
+        if inner.height <= 2 {
+            return None;
+        }
+        return Some(Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        });
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let right_area = if layout_mgr.show_tree {
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(layout_mgr.tree_width_pct),
+            Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+        ])
+        .split(main_area);
+        horizontal[1]
+    } else {
+        main_area
+    };
+
+    let editor_outer = if layout_mgr.show_terminal {
+        let right_split = Layout::vertical([
+            Constraint::Percentage(layout_mgr.editor_height_pct),
+            Constraint::Percentage(100 - layout_mgr.editor_height_pct),
+        ])
+        .split(right_area);
+        right_split[0]
+    } else {
+        right_area
+    };
+
+    let block = panel_block(
+        editor_title(app, false),
+        &app.focus,
+        &FocusTarget::Editor,
+        &Theme::default(),
+        false,
+    );
+    let inner = block.inner(editor_outer);
+    if inner.height <= 2 {
+        return None;
+    }
+    Some(Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    })
+}
+
 pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
@@ -982,7 +1144,12 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
             &Theme::default(),
             false,
         );
-        let inner = block.inner(vertical[0]);
+        let mut inner = block.inner(vertical[0]);
+        // Account for tab bar row when multiple buffers are open.
+        if app.buffer_manager.buffer_count() > 1 && inner.height > 2 {
+            inner.y += 1;
+            inner.height = inner.height.saturating_sub(1);
+        }
         let gutter_w = app
             .buffer_manager
             .active_buffer()
@@ -1028,7 +1195,12 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         &Theme::default(),
         false,
     );
-    let inner = block.inner(editor_outer);
+    let mut inner = block.inner(editor_outer);
+    // Account for tab bar row when multiple buffers are open.
+    if app.buffer_manager.buffer_count() > 1 && inner.height > 2 {
+        inner.y += 1;
+        inner.height = inner.height.saturating_sub(1);
+    }
     let gutter_w = app
         .buffer_manager
         .active_buffer()
@@ -1095,7 +1267,28 @@ pub fn render(app: &AppState, frame: &mut Frame) {
                     render_terminal_content(mgr, inner, frame, &theme);
                 }
             }
-            FocusTarget::Editor => {}
+            FocusTarget::Editor => {
+                if let Some(buffer) = app.buffer_manager.active_buffer() {
+                    let focused = app.focus == FocusTarget::Editor;
+                    let tab_bar = if app.buffer_manager.buffer_count() > 1 {
+                        Some((
+                            app.buffer_manager.buffers(),
+                            app.buffer_manager.active_index(),
+                        ))
+                    } else {
+                        None
+                    };
+                    render_editor_content(
+                        buffer,
+                        inner,
+                        frame,
+                        &theme,
+                        focused,
+                        app.search.as_ref(),
+                        tab_bar,
+                    );
+                }
+            }
         }
     } else if layout_mgr.show_tree {
         let horizontal = Layout::horizontal([
@@ -1135,7 +1328,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     frame.render_widget(status_bar, status_area);
 
     // Overlays (on top of everything)
-    if app.confirm_quit {
+    if app.confirm_close_buffer {
+        render_close_buffer_overlay(app, frame, &theme);
+    } else if app.confirm_quit {
         render_quit_overlay(frame, &theme);
     } else if app.show_help {
         render_help_overlay(frame, &theme);
@@ -1209,6 +1404,79 @@ fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme:
     frame.render_widget(paragraph, area);
 }
 
+// IMPACT ANALYSIS — render_tab_bar
+// Parents: render_editor_content() calls this when multiple buffers are open.
+// Children: reads EditorBuffer::file_name() and modified flag for each buffer.
+// Siblings: render_search_bar (similar 1-row bar pattern, independent).
+/// Renders the buffer tab bar in a 1-row area above the editor content.
+///
+/// Each tab shows: ` filename.ext ` or ` filename.ext [+] `.
+/// Active tab uses the active tab style; inactive tabs use dim style.
+fn render_tab_bar(
+    buffers: &[EditorBuffer],
+    active_index: usize,
+    area: Rect,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let active_style = Style::default()
+        .fg(theme.panel_border_active)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default()
+        .fg(theme.foreground)
+        .add_modifier(Modifier::DIM);
+
+    let mut spans: Vec<Span<'_>> = Vec::new();
+    let mut total_width: usize = 0;
+    let max_width = area.width as usize;
+
+    for (i, buf) in buffers.iter().enumerate() {
+        let name = buf.file_name().unwrap_or("untitled");
+        let label = if buf.modified {
+            format!("[{}:{}+]", i + 1, name)
+        } else {
+            format!("[{}:{}]", i + 1, name)
+        };
+
+        let tab_width = label.len();
+        if total_width + tab_width > max_width {
+            break;
+        }
+
+        let style = if i == active_index {
+            active_style
+        } else {
+            inactive_style
+        };
+
+        spans.push(Span::styled(label, style));
+        total_width += tab_width;
+
+        // Space between tabs.
+        if i + 1 < buffers.len() && total_width < max_width {
+            spans.push(Span::raw(" "));
+            total_width += 1;
+        }
+    }
+
+    // Fill remaining space with background.
+    let remaining = max_width.saturating_sub(total_width);
+    if remaining > 0 {
+        spans.push(Span::styled(
+            " ".repeat(remaining),
+            Style::default().bg(theme.tab_bar_bg),
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(vec![line]).style(Style::default().bg(theme.tab_bar_bg));
+    frame.render_widget(paragraph, area);
+}
+
 // IMPACT ANALYSIS — render_editor_content
 // Parents: render_right_panels() calls this with the inner area of the editor block.
 // Children: reads EditorBuffer via active_buffer() — cursor, scroll_row, scroll_col.
@@ -1222,10 +1490,35 @@ fn render_editor_content(
     theme: &Theme,
     editor_focused: bool,
     search: Option<&SearchState>,
+    tab_bar: Option<(&[EditorBuffer], usize)>,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+
+    // Tab bar: steal 1 row when multiple buffers are open.
+    let area = if let Some((buffers, active_idx)) = tab_bar {
+        if area.height > 2 {
+            let tab_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            };
+            let rest = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height - 1,
+            };
+            render_tab_bar(buffers, active_idx, tab_rect, frame, theme);
+            rest
+        } else {
+            area
+        }
+    } else {
+        area
+    };
 
     // If search is active, split off 1 row at the top for the search bar.
     let (search_area, content_area_full) = if search.is_some() && area.height > 1 {
@@ -1479,6 +1772,14 @@ fn render_right_panels(
         frame.render_widget(editor_block, right_split[0]);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
+            let tab_bar = if app.buffer_manager.buffer_count() > 1 {
+                Some((
+                    app.buffer_manager.buffers(),
+                    app.buffer_manager.active_index(),
+                ))
+            } else {
+                None
+            };
             render_editor_content(
                 buffer,
                 editor_inner,
@@ -1486,6 +1787,7 @@ fn render_right_panels(
                 theme,
                 focused,
                 app.search.as_ref(),
+                tab_bar,
             );
         }
 
@@ -1513,6 +1815,14 @@ fn render_right_panels(
         frame.render_widget(editor_block, area);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
+            let tab_bar = if app.buffer_manager.buffer_count() > 1 {
+                Some((
+                    app.buffer_manager.buffers(),
+                    app.buffer_manager.active_index(),
+                ))
+            } else {
+                None
+            };
             render_editor_content(
                 buffer,
                 editor_inner,
@@ -1520,6 +1830,7 @@ fn render_right_panels(
                 theme,
                 focused,
                 app.search.as_ref(),
+                tab_bar,
             );
         }
     }
@@ -1715,7 +2026,7 @@ mod tests {
     fn render_help_overlay_shows_keybindings() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 44);
+        let content = render_app_to_string(&app, 80, 60);
         assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");
@@ -1742,6 +2053,26 @@ mod tests {
         assert!(
             !content.contains("y/N"),
             "quit overlay should not appear by default"
+        );
+    }
+
+    #[test]
+    fn render_close_buffer_overlay_when_confirm_close() {
+        let mut app = AppState::new();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+        app.execute(axe_core::Command::OpenFile(tmp.path().to_path_buf()));
+        app.buffer_manager.active_buffer_mut().unwrap().modified = true;
+        app.confirm_close_buffer = true;
+        let content = render_app_to_string(&app, 80, 24);
+        assert!(
+            content.contains("Unsaved"),
+            "expected 'Unsaved' in close-buffer overlay"
+        );
+        assert!(
+            content.contains("y/N"),
+            "expected 'y/N' in close-buffer overlay"
         );
     }
 
@@ -1990,5 +2321,125 @@ mod tests {
             content.contains("Rust"),
             "expected 'Rust' file type in status bar"
         );
+    }
+
+    // --- Tab bar rendering tests ---
+
+    fn app_with_two_files() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file1 = tmp.path().join("main.rs");
+        let file2 = tmp.path().join("lib.rs");
+        std::fs::write(&file1, "fn main() {}\n").unwrap();
+        std::fs::write(&file2, "pub fn lib() {}\n").unwrap();
+
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.execute(axe_core::Command::OpenFile(file1));
+        app.execute(axe_core::Command::OpenFile(file2));
+        (app, tmp)
+    }
+
+    #[test]
+    fn tab_bar_not_shown_with_single_buffer() {
+        let (app, _tmp) = app_with_open_file();
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+        let content = render_app_to_string(&app, 100, 24);
+        // With a single buffer, there should be no tab bar.
+        // The file content should still be visible.
+        assert!(
+            content.contains("fn main()"),
+            "expected file content with single buffer"
+        );
+    }
+
+    #[test]
+    fn tab_bar_shown_with_multiple_buffers() {
+        let (app, _tmp) = app_with_two_files();
+        assert_eq!(app.buffer_manager.buffer_count(), 2);
+        let content = render_app_to_string(&app, 100, 24);
+        // Both filenames should appear in the tab bar.
+        assert!(content.contains("main.rs"), "expected 'main.rs' in tab bar");
+        assert!(content.contains("lib.rs"), "expected 'lib.rs' in tab bar");
+    }
+
+    #[test]
+    fn tab_bar_shows_modified_indicator() {
+        let (mut app, _tmp) = app_with_two_files();
+        // Modify the active buffer.
+        app.execute(axe_core::Command::EditorInsertChar('x'));
+        let content = render_app_to_string(&app, 100, 24);
+        // Format: "[2:lib.rs+]" — "+" before closing bracket indicates modified.
+        assert!(
+            content.contains("+]"),
+            "expected '+]' modified indicator in tab bar"
+        );
+    }
+
+    #[test]
+    fn render_tab_bar_uses_theme_colors() {
+        let buffers = vec![EditorBuffer::new()];
+        let theme = Theme::default();
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 1,
+                };
+                render_tab_bar(&buffers, 0, area, frame, &theme);
+            })
+            .unwrap();
+        // Verify it renders without panic and the active tab color is applied.
+        let buf = terminal.backend().buffer();
+        let cell = &buf[(0, 0)];
+        // The first (and only) tab is active, so it uses panel_border_active fg.
+        assert_eq!(
+            cell.fg, theme.panel_border_active,
+            "expected panel_border_active on active tab"
+        );
+    }
+
+    #[test]
+    fn editor_inner_rect_accounts_for_tab_bar() {
+        let (app, _tmp) = app_with_two_files();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 24,
+        };
+        let rect_multi = editor_inner_rect(&app, area);
+
+        // Compare with single buffer.
+        let (app_single, _tmp2) = app_with_open_file();
+        let rect_single = editor_inner_rect(&app_single, area);
+
+        // With multiple buffers, the editor content rect should start 1 row lower.
+        assert!(
+            rect_multi.is_some() && rect_single.is_some(),
+            "expected both rects to be Some"
+        );
+        let multi = rect_multi.unwrap();
+        let single = rect_single.unwrap();
+        assert_eq!(
+            multi.y,
+            single.y + 1,
+            "expected tab bar to shift editor content down by 1 row"
+        );
+        assert_eq!(
+            multi.height,
+            single.height - 1,
+            "expected tab bar to reduce editor content height by 1"
+        );
+    }
+
+    #[test]
+    fn help_lines_contain_tab_keybindings() {
+        let has_next_buffer = HELP_LINES.iter().any(|(k, _)| *k == "Alt+]/[");
+        let has_close_buffer = HELP_LINES.iter().any(|(k, _)| *k == "Ctrl+W");
+        assert!(has_next_buffer, "expected 'Alt+]/[' in HELP_LINES");
+        assert!(has_close_buffer, "expected 'Ctrl+W' in HELP_LINES");
     }
 }

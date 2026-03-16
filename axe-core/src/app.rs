@@ -104,6 +104,8 @@ pub struct AppState {
     pub show_help: bool,
     /// Whether the quit confirmation dialog is visible.
     pub confirm_quit: bool,
+    /// Whether the "close modified buffer?" confirmation dialog is visible.
+    pub confirm_close_buffer: bool,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
     /// Which panel is currently zoomed to full screen, if any.
@@ -136,6 +138,11 @@ pub struct AppState {
     /// Updated each frame from `editor_inner_rect()` in main.rs.
     /// Used for viewport calculations and mouse coordinate conversion.
     pub editor_inner_area: Option<(u16, u16, u16, u16)>,
+    /// Editor tab bar area in screen coordinates (x, y, width, height).
+    ///
+    /// Set each frame by the UI when tab bar is visible.
+    /// Used for detecting mouse clicks on editor buffer tabs.
+    pub editor_tab_bar_area: Option<(u16, u16, u16, u16)>,
     /// Timestamp of the last edit operation, used for autosave debouncing.
     pub last_edit_time: Option<Instant>,
     /// System clipboard for copy/paste operations.
@@ -165,6 +172,7 @@ impl AppState {
             show_terminal: true,
             show_help: false,
             confirm_quit: false,
+            confirm_close_buffer: false,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
             zoomed_panel: None,
@@ -179,6 +187,7 @@ impl AppState {
             terminal_grid_area: None,
             status_message: None,
             editor_inner_area: None,
+            editor_tab_bar_area: None,
             last_edit_time: None,
             clipboard: None,
             search: None,
@@ -281,6 +290,19 @@ impl AppState {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => self.execute(Command::Quit),
                 _ => self.confirm_quit = false,
+            }
+            return;
+        }
+
+        // Close-buffer confirmation dialog intercepts all keys.
+        if self.confirm_close_buffer {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.execute(Command::ConfirmCloseBuffer);
+                }
+                _ => {
+                    self.execute(Command::CancelCloseBuffer);
+                }
             }
             return;
         }
@@ -895,6 +917,38 @@ impl AppState {
                     }
                 }
             }
+            Command::NextBuffer => {
+                self.search = None;
+                self.buffer_manager.next_buffer();
+            }
+            Command::PrevBuffer => {
+                self.search = None;
+                self.buffer_manager.prev_buffer();
+            }
+            Command::ActivateBuffer(idx) => {
+                self.search = None;
+                self.buffer_manager.set_active(idx);
+            }
+            Command::CloseBuffer => {
+                if let Some(buf) = self.buffer_manager.active_buffer() {
+                    if buf.modified {
+                        self.confirm_close_buffer = true;
+                    } else {
+                        let idx = self.buffer_manager.active_index();
+                        self.buffer_manager.close_buffer(idx);
+                        self.search = None;
+                    }
+                }
+            }
+            Command::ConfirmCloseBuffer => {
+                self.confirm_close_buffer = false;
+                let idx = self.buffer_manager.active_index();
+                self.buffer_manager.close_buffer(idx);
+                self.search = None;
+            }
+            Command::CancelCloseBuffer => {
+                self.confirm_close_buffer = false;
+            }
         }
     }
 
@@ -976,6 +1030,17 @@ impl AppState {
                     if row.abs_diff(border_y) <= BORDER_TOLERANCE {
                         self.mouse_drag.border = Some(DragBorder::Horizontal);
                         return;
+                    }
+                }
+
+                // Editor tab bar click: switch to the clicked buffer tab.
+                if let Some((tx, ty, tw, _th)) = self.editor_tab_bar_area {
+                    if row == ty && col >= tx && col < tx + tw {
+                        if let Some(idx) = self.editor_tab_index_at_col(col - tx) {
+                            self.execute(Command::ActivateBuffer(idx));
+                            self.focus = FocusTarget::Editor;
+                            return;
+                        }
                     }
                 }
 
@@ -1360,6 +1425,42 @@ impl AppState {
                 self.focus = FocusTarget::Terminal(idx);
             }
         }
+    }
+
+    // IMPACT ANALYSIS — editor_tab_index_at_col
+    // Parents: handle_mouse_event() calls this when a click lands on the editor tab bar row.
+    // Children: reads buffer_manager.buffers() for tab names and modified flags.
+    // Siblings: render_tab_bar in axe-ui (must use identical tab width calculation).
+    // Risk: None — stateless helper, cannot corrupt state.
+
+    /// Determines which editor tab is at the given column offset within the tab bar.
+    ///
+    /// Walks buffer names to find which tab occupies the column position.
+    /// Returns `None` if the column is past all tabs.
+    fn editor_tab_index_at_col(&self, col: u16) -> Option<usize> {
+        let mut x: u16 = 0;
+        let buf_count = self.buffer_manager.buffers().len();
+        for (i, buf) in self.buffer_manager.buffers().iter().enumerate() {
+            let name = buf.file_name().unwrap_or("untitled");
+            // Format: "[N:name]" or "[N:name+]"
+            let num_width = (i + 1).ilog10() as u16 + 1;
+            let tab_width = if buf.modified {
+                // "[" + num + ":" + name + "+" + "]"
+                1 + num_width + 1 + name.len() as u16 + 1 + 1
+            } else {
+                // "[" + num + ":" + name + "]"
+                1 + num_width + 1 + name.len() as u16 + 1
+            };
+            if col >= x && col < x + tab_width {
+                return Some(i);
+            }
+            x += tab_width;
+            // Space between tabs.
+            if i + 1 < buf_count {
+                x += 1;
+            }
+        }
+        None
     }
 
     // IMPACT ANALYSIS — screen_to_editor_pos
@@ -3324,5 +3425,213 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.search.is_none());
+    }
+
+    // --- Buffer tab management tests ---
+
+    fn open_two_temp_files(app: &mut AppState) {
+        let mut tmp1 = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp1, b"file1\n").unwrap();
+        std::io::Write::flush(&mut tmp1).unwrap();
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp2, b"file2\n").unwrap();
+        std::io::Write::flush(&mut tmp2).unwrap();
+
+        app.buffer_manager
+            .open_file(tmp1.path())
+            .expect("open file1");
+        app.buffer_manager
+            .open_file(tmp2.path())
+            .expect("open file2");
+
+        // Leak so paths remain valid.
+        let _ = tmp1.into_temp_path();
+        let _ = tmp2.into_temp_path();
+    }
+
+    #[test]
+    fn next_buffer_switches_active() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        // After opening two files, active is 1 (last opened).
+        assert_eq!(app.buffer_manager.active_index(), 1);
+        app.execute(Command::NextBuffer);
+        assert_eq!(app.buffer_manager.active_index(), 0);
+    }
+
+    #[test]
+    fn prev_buffer_switches_active() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        app.buffer_manager.set_active(0);
+        assert_eq!(app.buffer_manager.active_index(), 0);
+        app.execute(Command::PrevBuffer);
+        assert_eq!(app.buffer_manager.active_index(), 1);
+    }
+
+    #[test]
+    fn close_buffer_unmodified_removes() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+
+        app.execute(Command::CloseBuffer);
+        assert_eq!(app.buffer_manager.buffer_count(), 0);
+    }
+
+    #[test]
+    fn close_buffer_modified_shows_confirmation() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.buffer_manager.active_buffer_mut().unwrap().modified = true;
+
+        app.execute(Command::CloseBuffer);
+        assert!(app.confirm_close_buffer);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    #[test]
+    fn confirm_close_buffer_removes() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.buffer_manager.active_buffer_mut().unwrap().modified = true;
+
+        app.execute(Command::CloseBuffer);
+        assert!(app.confirm_close_buffer);
+
+        app.execute(Command::ConfirmCloseBuffer);
+        assert!(!app.confirm_close_buffer);
+        assert_eq!(app.buffer_manager.buffer_count(), 0);
+    }
+
+    #[test]
+    fn cancel_close_buffer_keeps_buffer() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.buffer_manager.active_buffer_mut().unwrap().modified = true;
+
+        app.execute(Command::CloseBuffer);
+        assert!(app.confirm_close_buffer);
+
+        app.execute(Command::CancelCloseBuffer);
+        assert!(!app.confirm_close_buffer);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    #[test]
+    fn activate_buffer_switches() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        assert_eq!(app.buffer_manager.active_index(), 1);
+
+        app.execute(Command::ActivateBuffer(0));
+        assert_eq!(app.buffer_manager.active_index(), 0);
+    }
+
+    #[test]
+    fn switching_buffer_clears_search() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorFind);
+        assert!(app.search.is_some());
+
+        app.execute(Command::NextBuffer);
+        assert!(app.search.is_none());
+    }
+
+    #[test]
+    fn close_buffer_confirmation_intercepts_keys() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.buffer_manager.active_buffer_mut().unwrap().modified = true;
+
+        app.execute(Command::CloseBuffer);
+        assert!(app.confirm_close_buffer);
+
+        // Pressing 'n' should cancel the confirmation and keep the buffer.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(!app.confirm_close_buffer);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    // --- Editor tab bar mouse click tests ---
+
+    #[test]
+    fn editor_tab_index_at_col_finds_correct_tab() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        // Two buffers are open. Format: "[1:name]" = 1 + 1 + 1 + name.len() + 1
+        // First tab starts at col 0.
+        let idx0 = app.editor_tab_index_at_col(0);
+        assert_eq!(idx0, Some(0), "col 0 should be inside first tab");
+
+        // First tab width = "[1:" + name + "]" = 3 + name.len() + 1, then 1 space separator.
+        let name0 = app.buffer_manager.buffers()[0].file_name().unwrap().len();
+        let first_tab_width = 3 + name0 as u16 + 1; // "[1:name]"
+        let second_tab_start = first_tab_width + 1; // +1 for space between tabs
+        let idx1 = app.editor_tab_index_at_col(second_tab_start);
+        assert_eq!(
+            idx1,
+            Some(1),
+            "col at second tab start should be second tab"
+        );
+    }
+
+    #[test]
+    fn editor_tab_index_at_col_returns_none_past_tabs() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        // Very large column past all tabs.
+        let idx = app.editor_tab_index_at_col(500);
+        assert_eq!(idx, None, "col far past all tabs should return None");
+    }
+
+    #[test]
+    fn mouse_click_on_editor_tab_switches_buffer() {
+        let mut app = AppState::new();
+        open_two_temp_files(&mut app);
+        // After opening two files, active index is 1 (last opened).
+        assert_eq!(app.buffer_manager.active_index(), 1);
+
+        // Set up editor tab bar area at screen row 5, starting at column 2.
+        app.editor_tab_bar_area = Some((2, 5, 80, 1));
+
+        // Click on first tab (col 2, row 5) => relative col 0 => first tab.
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse_event(mouse, 100, 30);
+
+        assert_eq!(
+            app.buffer_manager.active_index(),
+            0,
+            "clicking first tab should activate buffer 0"
+        );
+        assert_eq!(app.focus, FocusTarget::Editor);
     }
 }

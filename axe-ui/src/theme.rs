@@ -44,6 +44,14 @@ pub struct Theme {
     pub search_active_match_bg: Color,
     /// Foreground color for the currently active search match (dark for contrast).
     pub search_active_match_fg: Color,
+    /// Background color for the tab bar row.
+    pub tab_bar_bg: Color,
+    /// Background color for the active tab.
+    pub tab_active_bg: Color,
+    /// Foreground color for the active tab.
+    pub tab_active_fg: Color,
+    /// Foreground color for inactive tabs.
+    pub tab_inactive_fg: Color,
 }
 
 impl Default for Theme {
@@ -68,6 +76,10 @@ impl Default for Theme {
             search_match_bg: Color::Rgb(60, 60, 30),           // subtle dark yellow tint
             search_active_match_bg: Color::Rgb(229, 192, 123), // #e5c07b — bright warm yellow
             search_active_match_fg: Color::Rgb(40, 44, 52),    // dark for contrast on bright bg
+            tab_bar_bg: Color::Rgb(33, 37, 43),                // #21252b — same as status bar
+            tab_active_bg: Color::Rgb(40, 44, 52),             // #282c34 — same as editor bg
+            tab_active_fg: Color::Rgb(171, 178, 191),          // #abb2bf — bright foreground
+            tab_inactive_fg: Color::Rgb(130, 137, 151),        // #828997 — dim foreground
         }
     }
 }
@@ -129,6 +141,19 @@ mod tests {
         assert_ne!(
             theme.search_match_bg, theme.search_active_match_bg,
             "search match colors should differ from each other"
+        );
+    }
+
+    #[test]
+    fn tab_colors_are_set() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.tab_active_bg, theme.tab_bar_bg,
+            "active tab should stand out from bar"
+        );
+        assert_ne!(
+            theme.tab_active_fg, theme.tab_inactive_fg,
+            "active/inactive tab text should differ"
         );
     }
 

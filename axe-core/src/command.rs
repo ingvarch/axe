@@ -154,6 +154,18 @@ pub enum Command {
     EditorCut,
     /// Paste from the system clipboard at the cursor position.
     EditorPaste,
+    /// Switch to the next open buffer tab.
+    NextBuffer,
+    /// Switch to the previous open buffer tab.
+    PrevBuffer,
+    /// Close the active buffer (prompts if modified).
+    CloseBuffer,
+    /// Confirm closing a modified buffer without saving.
+    ConfirmCloseBuffer,
+    /// Cancel the close-buffer confirmation dialog.
+    CancelCloseBuffer,
+    /// Switch to a specific buffer tab by index (0-based).
+    ActivateBuffer(usize),
     /// Open or focus the in-file search bar.
     EditorFind,
     /// Close the search bar.
@@ -251,6 +263,13 @@ mod tests {
             Command::EditorCopy,
             Command::EditorCut,
             Command::EditorPaste,
+            Command::NextBuffer,
+            Command::PrevBuffer,
+            Command::CloseBuffer,
+            Command::ConfirmCloseBuffer,
+            Command::CancelCloseBuffer,
+            Command::ActivateBuffer(0),
+            Command::ActivateBuffer(1),
             Command::EditorFind,
             Command::SearchClose,
             Command::SearchNextMatch,

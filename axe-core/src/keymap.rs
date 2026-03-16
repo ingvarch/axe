@@ -121,6 +121,16 @@ impl KeymapResolver {
             Command::EditorFind,
         );
 
+        // Buffer tab management — Alt+] / Alt+[ to avoid terminal emulator conflicts
+        // (Ctrl+Tab is intercepted by many terminals like Rio, iTerm2, etc.)
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char(']'), Command::NextBuffer);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('['), Command::PrevBuffer);
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('w'),
+            Command::CloseBuffer,
+        );
+
         // Terminal tab management — using Alt to avoid Ctrl+Shift unreliability
         // in terminal emulators (many report Ctrl+Shift+T as plain Ctrl+T).
         resolver.bind(
@@ -431,6 +441,27 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::EditorFind));
+    }
+
+    #[test]
+    fn default_bindings_alt_bracket_right_next_buffer() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::NextBuffer));
+    }
+
+    #[test]
+    fn default_bindings_alt_bracket_left_prev_buffer() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::PrevBuffer));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_w_close_buffer() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::CloseBuffer));
     }
 
     #[test]
