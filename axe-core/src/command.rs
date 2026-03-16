@@ -4,8 +4,10 @@
 /// rather than adding raw key checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Exit the application.
+    /// Exit the application immediately (used from confirmation dialog).
     Quit,
+    /// Request quit — shows a confirmation dialog.
+    RequestQuit,
     /// Cycle focus to the next panel.
     FocusNext,
     /// Cycle focus to the previous panel.
@@ -76,6 +78,7 @@ mod tests {
     fn command_variants_are_distinct() {
         let variants: Vec<Command> = vec![
             Command::Quit,
+            Command::RequestQuit,
             Command::FocusNext,
             Command::FocusPrev,
             Command::FocusTree,

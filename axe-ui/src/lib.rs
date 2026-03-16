@@ -139,7 +139,6 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
 /// Help text lines for the help overlay.
 const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Q", "Quit"),
-    ("Tab", "Next panel"),
     ("Shift+Tab", "Previous panel"),
     ("Ctrl+1", "Focus Files"),
     ("Ctrl+2", "Focus Editor"),
@@ -223,6 +222,62 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         ..inner
     };
     frame.render_widget(help_text, content_area);
+}
+
+/// Width of the quit confirmation overlay in columns.
+const QUIT_OVERLAY_WIDTH: u16 = 30;
+/// Height of the quit confirmation overlay in rows.
+const QUIT_OVERLAY_HEIGHT: u16 = 5;
+
+/// Renders a centered quit confirmation dialog.
+fn render_quit_overlay(frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = QUIT_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
+    let overlay_height = QUIT_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Quit ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    let text = Line::from(vec![
+        Span::raw("Are you sure? "),
+        Span::styled(
+            "(y/N)",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+    let content_area = Rect {
+        y: inner.y + inner.height / 2,
+        height: 1,
+        ..inner
+    };
+    frame.render_widget(paragraph, content_area);
 }
 
 /// Indentation width per nesting level in the file tree.
@@ -699,8 +754,10 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     );
     frame.render_widget(status_bar, status_area);
 
-    // Help overlay (on top of everything)
-    if app.show_help {
+    // Overlays (on top of everything)
+    if app.confirm_quit {
+        render_quit_overlay(frame, &theme);
+    } else if app.show_help {
         render_help_overlay(frame, &theme);
     }
 }
@@ -955,6 +1012,27 @@ mod tests {
         assert!(content.contains("Ctrl+H"), "expected 'Ctrl+H' in help");
         assert!(content.contains("Ctrl+R"), "expected 'Ctrl+R' in help");
         assert!(content.contains("Esc"), "expected 'Esc' in help");
+    }
+
+    #[test]
+    fn render_quit_overlay_when_confirm_quit() {
+        let mut app = AppState::new();
+        app.confirm_quit = true;
+        let content = render_app_to_string(&app, 80, 24);
+        assert!(
+            content.contains("y/N"),
+            "expected 'y/N' in quit confirmation overlay"
+        );
+    }
+
+    #[test]
+    fn render_no_quit_overlay_by_default() {
+        let app = AppState::new();
+        let content = render_app_to_string(&app, 80, 24);
+        assert!(
+            !content.contains("y/N"),
+            "quit overlay should not appear by default"
+        );
     }
 
     #[test]

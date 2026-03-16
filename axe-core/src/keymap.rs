@@ -24,9 +24,11 @@ impl KeymapResolver {
     pub fn with_defaults() -> Self {
         let mut resolver = Self::new();
 
-        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('q'), Command::Quit);
-        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('c'), Command::Quit);
-        resolver.bind(KeyModifiers::NONE, KeyCode::Tab, Command::FocusNext);
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('q'),
+            Command::RequestQuit,
+        );
         resolver.bind(KeyModifiers::SHIFT, KeyCode::BackTab, Command::FocusPrev);
         resolver.bind(
             KeyModifiers::CONTROL,
@@ -116,17 +118,24 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_ctrl_q_quits() {
+    fn default_bindings_ctrl_q_requests_quit() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(resolver.resolve(&key), Some(Command::Quit));
+        assert_eq!(resolver.resolve(&key), Some(Command::RequestQuit));
     }
 
     #[test]
-    fn default_bindings_tab_focus_next() {
+    fn tab_is_not_bound() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
-        assert_eq!(resolver.resolve(&key), Some(Command::FocusNext));
+        assert_eq!(resolver.resolve(&key), None);
+    }
+
+    #[test]
+    fn ctrl_c_is_not_bound() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), None);
     }
 
     #[test]

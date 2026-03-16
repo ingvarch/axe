@@ -84,6 +84,8 @@ pub struct AppState {
     pub show_tree: bool,
     pub show_terminal: bool,
     pub show_help: bool,
+    /// Whether the quit confirmation dialog is visible.
+    pub confirm_quit: bool,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
     /// Which panel is currently zoomed to full screen, if any.
@@ -106,6 +108,7 @@ impl AppState {
             show_tree: true,
             show_terminal: true,
             show_help: false,
+            confirm_quit: false,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
             zoomed_panel: None,
@@ -136,6 +139,7 @@ impl AppState {
 
     /// Signals the application to exit the event loop.
     pub fn quit(&mut self) {
+        self.confirm_quit = false;
         self.should_quit = true;
     }
 
@@ -180,6 +184,15 @@ impl AppState {
     /// before normal dispatch. When a help overlay is open, only Quit, ShowHelp,
     /// and CloseOverlay commands are processed; all other keys are consumed silently.
     pub fn handle_key_event(&mut self, key: KeyEvent) {
+        // Quit confirmation dialog intercepts all keys.
+        if self.confirm_quit {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.execute(Command::Quit),
+                _ => self.confirm_quit = false,
+            }
+            return;
+        }
+
         // Resize mode intercepts keys before normal keymap resolution.
         if self.resize_mode.active {
             let cmd = match (key.modifiers, key.code) {
@@ -191,8 +204,7 @@ impl AppState {
                 (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Enter) => {
                     Some(Command::ExitResizeMode)
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('q'))
-                | (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Command::Quit),
+                (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Command::RequestQuit),
                 _ => None, // All other keys consumed silently
             };
             if let Some(cmd) = cmd {
@@ -273,7 +285,10 @@ impl AppState {
         if let Some(cmd) = self.keymap.resolve(&key) {
             if self.show_help {
                 match cmd {
-                    Command::Quit | Command::ShowHelp | Command::CloseOverlay => {
+                    Command::Quit
+                    | Command::RequestQuit
+                    | Command::ShowHelp
+                    | Command::CloseOverlay => {
                         self.execute(cmd);
                     }
                     _ => {}
@@ -288,6 +303,7 @@ impl AppState {
     pub fn execute(&mut self, cmd: Command) {
         match cmd {
             Command::Quit => self.quit(),
+            Command::RequestQuit => self.confirm_quit = true,
             Command::FocusNext => self.cycle_focus_next(),
             Command::FocusPrev => self.cycle_focus_prev(),
             Command::FocusTree => self.focus = FocusTarget::Tree,
@@ -781,10 +797,38 @@ mod tests {
     // --- Key event integration tests ---
 
     #[test]
-    fn handle_key_ctrl_q_quits() {
+    fn handle_key_ctrl_q_shows_confirm_quit() {
         let mut app = AppState::new();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(!app.should_quit, "Ctrl+Q should not quit immediately");
+        assert!(app.confirm_quit, "Ctrl+Q should show quit confirmation");
+    }
+
+    #[test]
+    fn confirm_quit_y_quits() {
+        let mut app = AppState::new();
+        app.confirm_quit = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert!(app.should_quit);
+        assert!(!app.confirm_quit);
+    }
+
+    #[test]
+    fn confirm_quit_other_key_cancels() {
+        let mut app = AppState::new();
+        app.confirm_quit = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        assert!(!app.confirm_quit);
+    }
+
+    #[test]
+    fn confirm_quit_esc_cancels() {
+        let mut app = AppState::new();
+        app.confirm_quit = true;
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        assert!(!app.confirm_quit);
     }
 
     #[test]
@@ -795,10 +839,11 @@ mod tests {
     }
 
     #[test]
-    fn handle_ctrl_c_quits() {
+    fn ctrl_c_not_bound_globally() {
         let mut app = AppState::new();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(!app.should_quit);
+        assert!(!app.confirm_quit);
     }
 
     #[test]
@@ -809,11 +854,12 @@ mod tests {
     }
 
     #[test]
-    fn handle_tab_cycles_focus_forward() {
+    fn tab_not_bound_globally() {
         let mut app = AppState::new();
         assert_eq!(app.focus, FocusTarget::Tree);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Editor);
+        // Tab is no longer a global binding — focus should not change.
+        assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     #[test]
@@ -847,11 +893,12 @@ mod tests {
     }
 
     #[test]
-    fn handle_tab_from_terminal_wraps_to_tree() {
+    fn tab_from_terminal_forwarded_to_pty() {
         let mut app = AppState::new();
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Tree);
+        // Tab is forwarded to PTY, not used for focus cycling.
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
     #[test]
@@ -902,11 +949,14 @@ mod tests {
     }
 
     #[test]
-    fn help_overlay_allows_quit() {
+    fn help_overlay_allows_request_quit() {
         let mut app = AppState::new();
         app.show_help = true;
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(
+            app.confirm_quit,
+            "Ctrl+Q should show quit dialog even with help open"
+        );
     }
 
     // --- Focus cycling with hidden panels ---
@@ -1170,11 +1220,14 @@ mod tests {
     }
 
     #[test]
-    fn resize_mode_allows_quit() {
+    fn resize_mode_allows_request_quit() {
         let mut app = AppState::new();
         app.resize_mode.active = true;
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(
+            app.confirm_quit,
+            "Ctrl+Q should show quit dialog in resize mode"
+        );
     }
 
     #[test]
@@ -1521,16 +1574,18 @@ mod tests {
     #[test]
     fn global_keys_work_when_tree_focused() {
         let mut app = app_with_tree_focused();
-        // Ctrl+Q should still quit
+        // Ctrl+Q should show quit confirmation
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(app.confirm_quit);
     }
 
     #[test]
-    fn tab_works_when_tree_focused() {
+    fn tab_not_intercepted_when_tree_focused() {
         let mut app = app_with_tree_focused();
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Editor);
+        // Tab is not a global binding, and not a tree-specific key.
+        // It falls through to global keymap which returns None.
+        assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     // --- Toggle ignored tests ---
@@ -1577,29 +1632,36 @@ mod tests {
     }
 
     #[test]
-    fn terminal_focused_ctrl_q_still_quits() {
+    fn terminal_focused_ctrl_q_shows_confirm() {
         let mut app = AppState::new();
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(
+            app.confirm_quit,
+            "Ctrl+Q should show quit dialog from terminal"
+        );
+        assert!(!app.should_quit);
     }
 
     #[test]
-    fn terminal_focused_tab_still_cycles_focus() {
+    fn terminal_focused_tab_forwarded_to_pty() {
         let mut app = AppState::new();
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Tree);
+        // Tab is forwarded to PTY, not used for focus cycling.
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
     #[test]
-    fn terminal_focused_ctrl_c_not_forwarded_as_quit() {
-        // Ctrl+C is a global binding (Quit). When terminal is focused,
-        // the global binding takes precedence.
+    fn terminal_focused_ctrl_c_forwarded_to_pty() {
+        // Ctrl+C is no longer a global binding — it's forwarded to the PTY
+        // so shell processes can be interrupted.
         let mut app = AppState::new();
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        assert!(!app.should_quit);
+        assert!(!app.confirm_quit);
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
     #[test]
