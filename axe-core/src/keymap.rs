@@ -95,6 +95,26 @@ impl KeymapResolver {
             KeyCode::Char('s'),
             Command::EditorSave,
         );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('a'),
+            Command::EditorSelectAll,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('c'),
+            Command::EditorCopy,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('x'),
+            Command::EditorCut,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('v'),
+            Command::EditorPaste,
+        );
 
         // Terminal tab management — using Alt to avoid Ctrl+Shift unreliability
         // in terminal emulators (many report Ctrl+Shift+T as plain Ctrl+T).
@@ -194,10 +214,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_is_not_bound() {
+    fn default_bindings_ctrl_c_copies() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(resolver.resolve(&key), None);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorCopy));
     }
 
     #[test]
@@ -378,6 +398,27 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::EditorSave));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_a_selects_all() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorSelectAll));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_x_cuts() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorCut));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_v_pastes() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorPaste));
     }
 
     #[test]

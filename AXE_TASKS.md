@@ -365,7 +365,7 @@ Undo and redo support for all edits.
 
 ---
 
-### Task 4.5 — Editor: Selection, Copy, Cut, Paste
+### Task 4.5 — Editor: Selection, Copy, Cut, Paste ✅
 
 Text selection and clipboard operations.
 
@@ -899,3 +899,5 @@ Show a welcome screen when Axe is opened without a file or project.
 5. **Commit message format:** `feat(crate): short description` — e.g., `feat(axe-editor): add cursor movement`
 6. **When in doubt**, favor simplicity. Implement the minimal version first, refine later.
 7. **Performance matters** from day one for the editor: use rope operations correctly, don't clone strings unnecessarily, render only visible lines.
+
+

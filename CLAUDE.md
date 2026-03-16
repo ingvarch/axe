@@ -7,21 +7,11 @@ possible. You use the type system to make illegal states unrepresentable.
 
 ---
 
-## Project Context
-
-Axe is a terminal IDE built from scratch in Rust using Ratatui + Crossterm.
-- **Architecture document:** `AXE_ARCHITECTURE.md` — read this FIRST before any work.
-  It defines all crate boundaries, struct definitions, event flow, and design decisions.
-- **Task list:** `AXE_TASKS.md` — ordered implementation tasks with acceptance criteria.
-  Each task must be completed fully before moving to the next.
-
-**Always read the relevant sections of `AXE_ARCHITECTURE.md` before implementing anything.**
-If a struct, enum, or pattern is defined there — follow that definition exactly.
 
 ---
 
 ## Workspace Structure
-
+[<35;41;25M[<35;70;28M
 ```
 axe/
 ├── Cargo.toml          # Workspace root

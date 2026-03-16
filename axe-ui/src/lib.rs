@@ -122,6 +122,16 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         ));
     }
 
+    if let Some((ref msg, _)) = app.status_message {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(
+            msg.clone(),
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled("[SHOW IGNORED]", text_style));
@@ -202,6 +212,11 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("d", "Delete"),
     ("", ""),
     ("--- Editor ---", ""),
+    ("Shift+Arrows", "Select text"),
+    ("Ctrl+A", "Select all"),
+    ("Ctrl+C", "Copy"),
+    ("Ctrl+X", "Cut"),
+    ("Ctrl+V", "Paste"),
     ("Ctrl+Z", "Undo"),
     ("Ctrl+Shift+Z", "Redo"),
     ("Ctrl+Y", "Redo"),
@@ -1206,17 +1221,27 @@ fn render_editor_content(
     let gutter_paragraph = Paragraph::new(gutter_lines).style(gutter_style);
     frame.render_widget(gutter_paragraph, gutter_area);
 
-    // Render file content with scroll offset and current-line background.
+    // Compute normalized selection range (if any).
+    let sel_range = buffer.selection.as_ref().and_then(|sel| {
+        if sel.is_empty(cursor_row, cursor_col) {
+            None
+        } else {
+            Some(sel.normalized(cursor_row, cursor_col))
+        }
+    });
+
+    // Render file content with scroll offset, current-line background, and selection highlight.
     let content_style = Style::default().fg(theme.foreground).bg(theme.background);
     let cursor_line_style = Style::default()
         .fg(theme.foreground)
         .bg(theme.cursor_line_bg);
+    let selection_style = Style::default().fg(theme.foreground).bg(theme.selection_bg);
 
     let content_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
             let file_line = scroll_row + i;
             let is_cursor_line = file_line == cursor_row && editor_focused;
-            let line_style = if is_cursor_line {
+            let base_style = if is_cursor_line {
                 cursor_line_style
             } else {
                 content_style
@@ -1231,13 +1256,51 @@ fn render_editor_content(
                     .skip(scroll_col)
                     .take(content_w as usize)
                     .collect();
-                // Pad to full width so the cursor line background covers the entire line.
+
+                // Check if this line has any selection.
+                if let Some((sr, sc, er, ec)) = sel_range {
+                    if file_line >= sr && file_line <= er {
+                        // This line overlaps the selection. Compute column range.
+                        let line_sel_start = if file_line == sr {
+                            sc.saturating_sub(scroll_col)
+                        } else {
+                            0
+                        };
+                        let line_sel_end = if file_line == er {
+                            ec.saturating_sub(scroll_col)
+                        } else {
+                            content_w as usize
+                        };
+                        // Pad display to full width for selection rendering on partial lines.
+                        let padded = format!("{:<width$}", display, width = content_w as usize);
+                        let chars: Vec<char> = padded.chars().collect();
+                        let sel_start = line_sel_start.min(chars.len());
+                        let sel_end = line_sel_end.min(chars.len());
+
+                        let mut spans = Vec::new();
+                        if sel_start > 0 {
+                            let before: String = chars[..sel_start].iter().collect();
+                            spans.push(Span::styled(before, base_style));
+                        }
+                        if sel_end > sel_start {
+                            let selected: String = chars[sel_start..sel_end].iter().collect();
+                            spans.push(Span::styled(selected, selection_style));
+                        }
+                        if sel_end < chars.len() {
+                            let after: String = chars[sel_end..].iter().collect();
+                            spans.push(Span::styled(after, base_style));
+                        }
+                        return Line::from(spans);
+                    }
+                }
+
+                // No selection on this line — render normally.
                 let padded = if is_cursor_line {
                     format!("{:<width$}", display, width = content_w as usize)
                 } else {
                     display
                 };
-                Line::from(Span::styled(padded, line_style))
+                Line::from(Span::styled(padded, base_style))
             } else {
                 Line::from("")
             }

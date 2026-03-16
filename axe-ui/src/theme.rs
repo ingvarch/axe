@@ -36,6 +36,8 @@ pub struct Theme {
     pub line_number_active: Color,
     /// Background color for the current cursor line.
     pub cursor_line_bg: Color,
+    /// Background color for selected text.
+    pub selection_bg: Color,
 }
 
 impl Default for Theme {
@@ -56,6 +58,7 @@ impl Default for Theme {
             line_number: Color::Rgb(76, 82, 99),           // #4c5263 — dim
             line_number_active: Color::Rgb(171, 178, 191), // #abb2bf — bright
             cursor_line_bg: Color::Rgb(45, 50, 60),        // subtle highlight
+            selection_bg: Color::Rgb(67, 76, 94),          // #434c5e — medium blue-grey
         }
     }
 }
@@ -87,6 +90,19 @@ mod tests {
         assert_ne!(
             theme.cursor_line_bg, theme.background,
             "cursor_line_bg should differ from background"
+        );
+    }
+
+    #[test]
+    fn selection_bg_differs_from_background() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.selection_bg, theme.background,
+            "selection_bg should differ from background"
+        );
+        assert_ne!(
+            theme.selection_bg, theme.cursor_line_bg,
+            "selection_bg should differ from cursor_line_bg"
         );
     }
 

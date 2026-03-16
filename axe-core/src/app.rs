@@ -25,6 +25,8 @@ const MAX_PANEL_PCT: u16 = 90;
 const MOUSE_SCROLL_LINES: i32 = 3;
 /// Delay after the last edit before triggering autosave.
 const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+/// How long a status message remains visible.
+const STATUS_MESSAGE_DURATION: Duration = Duration::from_secs(3);
 
 /// Which panel border is being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,12 +126,24 @@ pub struct AppState {
     /// Updated each frame from `terminal_inner_rect()` in main.rs.
     /// Used for converting mouse screen coordinates to grid coordinates.
     pub terminal_grid_area: Option<(u16, u16, u16, u16)>,
-    /// Editor content area dimensions (width, height) in cells.
+    /// Temporary status message shown in the status bar.
+    ///
+    /// Cleared automatically after `STATUS_MESSAGE_DURATION` elapses.
+    pub status_message: Option<(String, Instant)>,
+    /// Editor content area in screen coordinates (x, y, width, height).
     ///
     /// Updated each frame from `editor_inner_rect()` in main.rs.
-    pub editor_inner_area: Option<(u16, u16)>,
+    /// Used for viewport calculations and mouse coordinate conversion.
+    pub editor_inner_area: Option<(u16, u16, u16, u16)>,
     /// Timestamp of the last edit operation, used for autosave debouncing.
     pub last_edit_time: Option<Instant>,
+    /// System clipboard for copy/paste operations.
+    ///
+    /// Lazily initialized on first use. `None` if clipboard access fails
+    /// (e.g., headless/SSH environment).
+    clipboard: Option<arboard::Clipboard>,
+    /// Whether an editor text selection drag is currently in progress.
+    editor_selecting: bool,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -160,8 +174,11 @@ impl AppState {
             last_terminal_cols: DEFAULT_TERMINAL_COLS,
             last_terminal_rows: DEFAULT_TERMINAL_ROWS,
             terminal_grid_area: None,
+            status_message: None,
             editor_inner_area: None,
             last_edit_time: None,
+            clipboard: None,
+            editor_selecting: false,
             terminal_selecting: false,
             terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
@@ -299,6 +316,25 @@ impl AppState {
                 (KeyModifiers::NONE, KeyCode::PageDown) => Some(Command::EditorPageDown),
                 (KeyModifiers::CONTROL, KeyCode::Left) => Some(Command::EditorWordLeft),
                 (KeyModifiers::CONTROL, KeyCode::Right) => Some(Command::EditorWordRight),
+                // Selection movement: Shift+Arrow extends selection.
+                (KeyModifiers::SHIFT, KeyCode::Up) => Some(Command::EditorSelectUp),
+                (KeyModifiers::SHIFT, KeyCode::Down) => Some(Command::EditorSelectDown),
+                (KeyModifiers::SHIFT, KeyCode::Left) => Some(Command::EditorSelectLeft),
+                (KeyModifiers::SHIFT, KeyCode::Right) => Some(Command::EditorSelectRight),
+                (KeyModifiers::SHIFT, KeyCode::Home) => Some(Command::EditorSelectHome),
+                (KeyModifiers::SHIFT, KeyCode::End) => Some(Command::EditorSelectEnd),
+                (m, KeyCode::Home) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                    Some(Command::EditorSelectFileStart)
+                }
+                (m, KeyCode::End) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                    Some(Command::EditorSelectFileEnd)
+                }
+                (m, KeyCode::Left) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                    Some(Command::EditorSelectWordLeft)
+                }
+                (m, KeyCode::Right) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                    Some(Command::EditorSelectWordRight)
+                }
                 (KeyModifiers::NONE, KeyCode::Backspace) => Some(Command::EditorBackspace),
                 (KeyModifiers::NONE, KeyCode::Delete) => Some(Command::EditorDelete),
                 (KeyModifiers::NONE, KeyCode::Enter) => Some(Command::EditorNewline),
@@ -550,6 +586,7 @@ impl AppState {
             | Command::EditorWordLeft => {
                 let (h, w) = self.editor_viewport();
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.clear_selection();
                     match cmd {
                         Command::EditorUp => buf.move_up(),
                         Command::EditorDown => buf.move_down(),
@@ -638,6 +675,105 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
             }
+            // IMPACT ANALYSIS — Selection commands
+            // Parents: KeyEvent → Shift+Arrow/Ctrl+Shift+Arrow → these commands
+            // Children: EditorBuffer selection state, cursor position
+            // Siblings: Plain movement commands (clear selection), UI renders selection highlight
+            Command::EditorSelectUp
+            | Command::EditorSelectDown
+            | Command::EditorSelectLeft
+            | Command::EditorSelectRight
+            | Command::EditorSelectHome
+            | Command::EditorSelectEnd
+            | Command::EditorSelectFileStart
+            | Command::EditorSelectFileEnd
+            | Command::EditorSelectWordLeft
+            | Command::EditorSelectWordRight => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    match cmd {
+                        Command::EditorSelectUp => buf.select_up(),
+                        Command::EditorSelectDown => buf.select_down(),
+                        Command::EditorSelectLeft => buf.select_left(),
+                        Command::EditorSelectRight => buf.select_right(),
+                        Command::EditorSelectHome => buf.select_home(),
+                        Command::EditorSelectEnd => buf.select_end(),
+                        Command::EditorSelectFileStart => buf.select_file_start(),
+                        Command::EditorSelectFileEnd => buf.select_file_end(),
+                        Command::EditorSelectWordLeft => buf.select_word_left(),
+                        Command::EditorSelectWordRight => buf.select_word_right(),
+                        _ => unreachable!(),
+                    }
+                    buf.ensure_cursor_visible(h, w);
+                }
+            }
+            Command::EditorSelectAll => {
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.select_all();
+                }
+            }
+            // IMPACT ANALYSIS — Clipboard commands
+            // Parents: KeyEvent → Ctrl+C/X/V → keymap → these commands
+            // Children: System clipboard (read/write), buffer content (cut/paste)
+            // Siblings: Selection (copy/cut read it, paste may replace it),
+            //           last_edit_time (cut/paste trigger autosave timer)
+            Command::EditorCopy => {
+                let text = self
+                    .buffer_manager
+                    .active_buffer()
+                    .and_then(|buf| buf.selected_text());
+                if let Some(ref text) = text {
+                    if !text.is_empty() {
+                        self.ensure_clipboard();
+                        if let Some(ref mut cb) = self.clipboard {
+                            if let Err(e) = cb.set_text(text) {
+                                log::warn!("Failed to copy to clipboard: {e}");
+                            }
+                        }
+                        let lines = text.lines().count();
+                        let chars = text.len();
+                        self.set_status_message(format!("Copied {lines} line(s), {chars} char(s)"));
+                    }
+                }
+            }
+            Command::EditorCut => {
+                let (h, w) = self.editor_viewport();
+                let cut_text = self.buffer_manager.active_buffer_mut().and_then(|buf| {
+                    let text = buf.delete_selection();
+                    buf.ensure_cursor_visible(h, w);
+                    text
+                });
+                if let Some(ref text) = cut_text {
+                    if !text.is_empty() {
+                        self.ensure_clipboard();
+                        if let Some(ref mut cb) = self.clipboard {
+                            if let Err(e) = cb.set_text(text) {
+                                log::warn!("Failed to copy to clipboard: {e}");
+                            }
+                        }
+                        let lines = text.lines().count();
+                        let chars = text.len();
+                        self.set_status_message(format!("Cut {lines} line(s), {chars} char(s)"));
+                    }
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorPaste => {
+                let (h, w) = self.editor_viewport();
+                self.ensure_clipboard();
+                let text = self
+                    .clipboard
+                    .as_mut()
+                    .and_then(|cb| cb.get_text().ok())
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                        buf.insert_text(&text);
+                        buf.ensure_cursor_visible(h, w);
+                    }
+                    self.last_edit_time = Some(Instant::now());
+                }
+            }
         }
     }
 
@@ -722,6 +858,26 @@ impl AppState {
                     }
                 }
 
+                // IMPACT ANALYSIS — Editor mouse text selection (Down/Drag/Up)
+                // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
+                // Children: EditorBuffer cursor/selection state.
+                // Siblings: mouse_drag.border (mutually exclusive, checked first),
+                //           editor_inner_area must be kept in sync by main.rs each frame.
+                // Risk: editor_selecting flag must be cleared on Up to avoid stale drag state.
+
+                // Check if click is in editor content area — position cursor and start selection.
+                if let Some((erow, ecol)) = self.screen_to_editor_pos(col, row) {
+                    if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                        buf.clear_selection();
+                        buf.cursor.row = erow;
+                        buf.cursor.col = ecol;
+                        buf.cursor.desired_col = ecol;
+                    }
+                    self.editor_selecting = true;
+                    self.focus = FocusTarget::Editor;
+                    return;
+                }
+
                 // IMPACT ANALYSIS — Terminal mouse text selection (Down/Drag/Up)
                 // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
                 // Children: terminal_manager selection state, system clipboard (on drag release).
@@ -748,6 +904,27 @@ impl AppState {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Editor text selection drag.
+                if self.editor_selecting {
+                    // Clamp mouse to editor content area.
+                    let pos = if let Some((ex, ey, ew, eh)) = self.editor_inner_area {
+                        let clamped_col = mouse.column.clamp(ex, ex + ew.saturating_sub(1));
+                        let clamped_row = mouse.row.clamp(ey, ey + eh.saturating_sub(1));
+                        self.screen_to_editor_pos(clamped_col, clamped_row)
+                    } else {
+                        None
+                    };
+                    if let Some((erow, ecol)) = pos {
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.start_or_extend_selection();
+                            buf.cursor.row = erow;
+                            buf.cursor.col = ecol;
+                            buf.cursor.desired_col = ecol;
+                        }
+                    }
+                    return;
+                }
+
                 // Terminal text selection drag.
                 if self.terminal_selecting {
                     // Clamp coordinates to the terminal grid area.
@@ -792,6 +969,19 @@ impl AppState {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.editor_selecting {
+                    self.editor_selecting = false;
+                    // Clean up empty selection (click without drag).
+                    if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                        if buf
+                            .selection
+                            .as_ref()
+                            .is_some_and(|s| s.is_empty(buf.cursor.row, buf.cursor.col))
+                        {
+                            buf.clear_selection();
+                        }
+                    }
+                }
                 if self.terminal_selecting {
                     self.terminal_selecting = false;
 
@@ -909,6 +1099,19 @@ impl AppState {
         mgr.tab_at_x_offset(x_offset)
     }
 
+    /// Lazily initializes the system clipboard.
+    ///
+    /// On headless/SSH environments where clipboard access fails,
+    /// `self.clipboard` remains `None` and clipboard ops silently no-op.
+    fn ensure_clipboard(&mut self) {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(cb) => self.clipboard = Some(cb),
+                Err(e) => log::warn!("Failed to access clipboard: {e}"),
+            }
+        }
+    }
+
     /// Toggles zoom on the focused panel.
     ///
     /// - `None` -> zoom current focus
@@ -991,7 +1194,7 @@ impl AppState {
     /// Returns `(height, width)` of the editor content area for viewport calculations.
     fn editor_viewport(&self) -> (usize, usize) {
         self.editor_inner_area
-            .map(|(w, h)| (h as usize, w as usize))
+            .map(|(_x, _y, w, h)| (h as usize, w as usize))
             .unwrap_or((20, 80))
     }
 
@@ -1014,6 +1217,20 @@ impl AppState {
         }
     }
 
+    /// Sets a temporary status message that appears in the status bar.
+    pub fn set_status_message(&mut self, msg: String) {
+        self.status_message = Some((msg, Instant::now()));
+    }
+
+    /// Clears the status message if it has expired.
+    pub fn expire_status_message(&mut self) {
+        if let Some((_, created)) = &self.status_message {
+            if created.elapsed() >= STATUS_MESSAGE_DURATION {
+                self.status_message = None;
+            }
+        }
+    }
+
     /// Activates a specific terminal tab by index. No-op if the index is out of range.
     fn activate_terminal_tab(&mut self, idx: usize) {
         if let Some(ref mut mgr) = self.terminal_manager {
@@ -1022,6 +1239,34 @@ impl AppState {
                 self.focus = FocusTarget::Terminal(idx);
             }
         }
+    }
+
+    // IMPACT ANALYSIS — screen_to_editor_pos
+    // Parents: handle_mouse_event() calls this for Down and Drag events in the editor area.
+    // Children: None — pure conversion function returning Option<(row, col)> in buffer coordinates.
+    // Siblings: editor_inner_area (must be set by main.rs each frame),
+    //           buffer scroll_row/scroll_col (used to convert screen to file position).
+    // Risk: None — stateless helper, cannot corrupt state.
+
+    /// Converts screen coordinates to editor buffer (row, col) position.
+    ///
+    /// Returns `None` if the coordinates are outside the editor content area
+    /// or if no editor area has been set.
+    fn screen_to_editor_pos(&self, screen_col: u16, screen_row: u16) -> Option<(usize, usize)> {
+        let (ex, ey, ew, eh) = self.editor_inner_area?;
+        if screen_col < ex || screen_col >= ex + ew || screen_row < ey || screen_row >= ey + eh {
+            return None;
+        }
+        let buf = self.buffer_manager.active_buffer()?;
+        let rel_row = (screen_row - ey) as usize;
+        let rel_col = (screen_col - ex) as usize;
+        let file_row = buf.scroll_row + rel_row;
+        let file_col = buf.scroll_col + rel_col;
+        // Clamp to actual content bounds.
+        let max_row = buf.line_count().saturating_sub(1);
+        let row = file_row.min(max_row);
+        let col = file_col.min(buf.line_length(row));
+        Some((row, col))
     }
 
     // IMPACT ANALYSIS — screen_to_terminal_point
@@ -2497,7 +2742,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let mut app = app_with_editor_buffer(&content);
-        app.editor_inner_area = Some((80, 10));
+        app.editor_inner_area = Some((0, 0, 80, 10));
         app.execute(Command::EditorPageDown);
         assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 10);
     }
@@ -2642,5 +2887,172 @@ mod tests {
         app.last_edit_time = None;
         app.execute(Command::EditorUndo);
         assert!(app.last_edit_time.is_none());
+    }
+
+    // --- Editor mouse selection tests ---
+
+    #[test]
+    fn editor_mouse_click_positions_cursor() {
+        let mut app = app_with_editor_buffer("hello\nworld\nfoo");
+        // Set editor area at screen position (5, 2) with 40x10
+        app.editor_inner_area = Some((5, 2, 40, 10));
+
+        // Click at screen (8, 3) => relative (3, 1) => buffer row=1, col=3
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse_event(mouse, 80, 24);
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 3);
+        assert!(buf.selection.is_none());
+        assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    #[test]
+    fn editor_mouse_drag_creates_selection() {
+        let mut app = app_with_editor_buffer("hello\nworld\nfoo");
+        app.editor_inner_area = Some((5, 2, 40, 10));
+
+        // Mouse down at (5, 2) => buffer (0, 0)
+        app.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 5,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            80,
+            24,
+        );
+
+        // Drag to (10, 2) => buffer (0, 5)
+        app.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 10,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            80,
+            24,
+        );
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert!(buf.selection.is_some());
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn editor_mouse_click_without_drag_clears_selection_on_up() {
+        let mut app = app_with_editor_buffer("hello");
+        app.editor_inner_area = Some((5, 2, 40, 10));
+
+        // Click down
+        app.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 7,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            80,
+            24,
+        );
+
+        // Release without drag — selection should be cleared
+        app.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 7,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            80,
+            24,
+        );
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn editor_mouse_click_clamps_col_to_line_length() {
+        let mut app = app_with_editor_buffer("hi");
+        app.editor_inner_area = Some((5, 2, 40, 10));
+
+        // Click far past end of "hi" (col 2) => should clamp to col 2
+        app.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 30,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            80,
+            24,
+        );
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    // --- Status message tests ---
+
+    #[test]
+    fn copy_sets_status_message() {
+        let mut app = app_with_editor_buffer("hello world");
+        app.execute(Command::EditorSelectAll);
+        app.execute(Command::EditorCopy);
+        assert!(app.status_message.is_some());
+        let (msg, _) = app.status_message.as_ref().unwrap();
+        assert!(
+            msg.contains("Copied"),
+            "expected 'Copied' in message, got: {msg}"
+        );
+        assert!(
+            msg.contains("1 line(s)"),
+            "expected '1 line(s)' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cut_sets_status_message() {
+        let mut app = app_with_editor_buffer("hello\nworld");
+        app.execute(Command::EditorSelectAll);
+        app.execute(Command::EditorCut);
+        assert!(app.status_message.is_some());
+        let (msg, _) = app.status_message.as_ref().unwrap();
+        assert!(msg.contains("Cut"), "expected 'Cut' in message, got: {msg}");
+        assert!(
+            msg.contains("2 line(s)"),
+            "expected '2 line(s)' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn copy_without_selection_no_status_message() {
+        let mut app = app_with_editor_buffer("hello");
+        app.execute(Command::EditorCopy);
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn status_message_expires() {
+        let mut app = AppState::new();
+        app.set_status_message("test".to_string());
+        assert!(app.status_message.is_some());
+        // Simulate time passing by replacing the instant.
+        app.status_message = Some(("test".to_string(), Instant::now() - Duration::from_secs(5)));
+        app.expire_status_message();
+        assert!(app.status_message.is_none());
     }
 }

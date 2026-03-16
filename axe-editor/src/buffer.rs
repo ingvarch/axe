@@ -7,6 +7,7 @@ use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
 use crate::history::{Edit, EditHistory};
+use crate::selection::Selection;
 
 /// Number of spaces inserted for a tab.
 const TAB_WIDTH: usize = 4;
@@ -28,6 +29,8 @@ pub struct EditorBuffer {
     pub scroll_col: usize,
     /// Edit history for undo/redo.
     history: EditHistory,
+    /// Current text selection, if any.
+    pub selection: Option<Selection>,
 }
 
 impl Default for EditorBuffer {
@@ -47,6 +50,7 @@ impl EditorBuffer {
             scroll_row: 0,
             scroll_col: 0,
             history: EditHistory::new(),
+            selection: None,
         }
     }
 
@@ -66,6 +70,7 @@ impl EditorBuffer {
             scroll_row: 0,
             scroll_col: 0,
             history: EditHistory::new(),
+            selection: None,
         })
     }
 
@@ -244,7 +249,12 @@ impl EditorBuffer {
     // Siblings: Selection (none yet), SyntaxHighlighter (future), LspClient (future)
 
     /// Inserts a character at the current cursor position.
+    ///
+    /// If a selection is active, deletes it first.
     pub fn insert_char(&mut self, ch: char) {
+        if self.selection.is_some() {
+            self.delete_selection();
+        }
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         let cursor_before = self.cursor.clone();
         self.content.insert_char(char_idx, ch);
@@ -268,7 +278,12 @@ impl EditorBuffer {
     // Siblings: Line count changes (affects gutter width, status bar line count)
 
     /// Inserts a newline at the current cursor position with auto-indent.
+    ///
+    /// If a selection is active, deletes it first.
     pub fn insert_newline(&mut self) {
+        if self.selection.is_some() {
+            self.delete_selection();
+        }
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         let cursor_before = self.cursor.clone();
         let indent = self.leading_whitespace(self.cursor.row);
@@ -295,7 +310,12 @@ impl EditorBuffer {
     // Siblings: Same as insert_char
 
     /// Inserts a tab (TAB_WIDTH spaces) at the current cursor position.
+    ///
+    /// If a selection is active, deletes it first.
     pub fn insert_tab(&mut self) {
+        if self.selection.is_some() {
+            self.delete_selection();
+        }
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         let cursor_before = self.cursor.clone();
         let spaces = " ".repeat(TAB_WIDTH);
@@ -321,9 +341,14 @@ impl EditorBuffer {
 
     /// Deletes the character before the cursor (backspace).
     ///
+    /// If a selection is active, deletes the selection instead.
     /// At the beginning of a line, joins with the previous line.
     /// At the beginning of the file, does nothing.
     pub fn delete_char_backward(&mut self) {
+        if self.selection.is_some() {
+            self.delete_selection();
+            return;
+        }
         if self.cursor.col > 0 {
             let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
             let cursor_before = self.cursor.clone();
@@ -376,9 +401,14 @@ impl EditorBuffer {
 
     /// Deletes the character at the cursor position (forward delete).
     ///
+    /// If a selection is active, deletes the selection instead.
     /// At the end of a line, joins with the next line.
     /// At the end of the file, does nothing.
     pub fn delete_char_forward(&mut self) {
+        if self.selection.is_some() {
+            self.delete_selection();
+            return;
+        }
         let line_len = self.line_length(self.cursor.row);
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         if self.cursor.col < line_len {
@@ -496,6 +526,185 @@ impl EditorBuffer {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    // --- Selection methods ---
+
+    // IMPACT ANALYSIS — Selection methods
+    // Parents: KeyEvent → EditorSelect* commands → app.execute() → these methods
+    // Children: UI renders selection highlight, clipboard ops read selected_text()
+    // Siblings: Cursor movement (move_* methods stay pure, clear_selection called from app),
+    //           Edit methods (insert_char, etc.) must delete selection first,
+    //           Undo/redo (delete_selection records Edit)
+
+    /// Sets the selection anchor to the current cursor position if no selection exists.
+    pub fn start_or_extend_selection(&mut self) {
+        if self.selection.is_none() {
+            self.selection = Some(Selection {
+                anchor_row: self.cursor.row,
+                anchor_col: self.cursor.col,
+            });
+        }
+    }
+
+    /// Clears the current selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Extends selection rightward by one character.
+    pub fn select_right(&mut self) {
+        self.start_or_extend_selection();
+        self.move_right();
+    }
+
+    /// Extends selection leftward by one character.
+    pub fn select_left(&mut self) {
+        self.start_or_extend_selection();
+        self.move_left();
+    }
+
+    /// Extends selection upward by one line.
+    pub fn select_up(&mut self) {
+        self.start_or_extend_selection();
+        self.move_up();
+    }
+
+    /// Extends selection downward by one line.
+    pub fn select_down(&mut self) {
+        self.start_or_extend_selection();
+        self.move_down();
+    }
+
+    /// Extends selection to the beginning of the current line.
+    pub fn select_home(&mut self) {
+        self.start_or_extend_selection();
+        self.move_home();
+    }
+
+    /// Extends selection to the end of the current line.
+    pub fn select_end(&mut self) {
+        self.start_or_extend_selection();
+        self.move_end();
+    }
+
+    /// Extends selection to the beginning of the file.
+    pub fn select_file_start(&mut self) {
+        self.start_or_extend_selection();
+        self.move_file_start();
+    }
+
+    /// Extends selection to the end of the file.
+    pub fn select_file_end(&mut self) {
+        self.start_or_extend_selection();
+        self.move_file_end();
+    }
+
+    /// Extends selection to the next word boundary.
+    pub fn select_word_right(&mut self) {
+        self.start_or_extend_selection();
+        self.move_word_right();
+    }
+
+    /// Extends selection to the previous word boundary.
+    pub fn select_word_left(&mut self) {
+        self.start_or_extend_selection();
+        self.move_word_left();
+    }
+
+    /// Selects all text in the buffer.
+    pub fn select_all(&mut self) {
+        self.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+        });
+        self.move_file_end();
+    }
+
+    /// Returns the selected text, or `None` if there is no selection.
+    pub fn selected_text(&self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        if sel.is_empty(self.cursor.row, self.cursor.col) {
+            return None;
+        }
+        let (start_row, start_col, end_row, end_col) =
+            sel.normalized(self.cursor.row, self.cursor.col);
+        let start_idx = self.content.line_to_char(start_row) + start_col;
+        let end_idx = self.content.line_to_char(end_row) + end_col;
+        Some(self.content.slice(start_idx..end_idx).to_string())
+    }
+
+    /// Deletes the selected text, records an undo edit, and returns the deleted text.
+    ///
+    /// Returns `None` if there is no selection. Moves cursor to the start of the
+    /// deleted range and clears the selection.
+    pub fn delete_selection(&mut self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        if sel.is_empty(self.cursor.row, self.cursor.col) {
+            self.selection = None;
+            return None;
+        }
+        let (start_row, start_col, end_row, end_col) =
+            sel.normalized(self.cursor.row, self.cursor.col);
+        let start_idx = self.content.line_to_char(start_row) + start_col;
+        let end_idx = self.content.line_to_char(end_row) + end_col;
+        let deleted: String = self.content.slice(start_idx..end_idx).to_string();
+
+        let cursor_before = self.cursor.clone();
+        self.content.remove(start_idx..end_idx);
+        self.cursor.row = start_row;
+        self.cursor.col = start_col;
+        self.cursor.desired_col = start_col;
+        self.selection = None;
+        self.modified = true;
+        self.history.record(
+            Edit {
+                char_idx: start_idx,
+                old_text: deleted.clone(),
+                new_text: String::new(),
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
+        Some(deleted)
+    }
+
+    /// Inserts text at the current cursor position.
+    ///
+    /// If a selection is active, deletes it first. Handles multi-line text
+    /// by advancing cursor row/col appropriately.
+    pub fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        // Delete selection first if active.
+        if self.selection.is_some() {
+            self.delete_selection();
+        }
+        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let cursor_before = self.cursor.clone();
+        self.content.insert(char_idx, text);
+
+        // Advance cursor past the inserted text.
+        for ch in text.chars() {
+            if ch == '\n' {
+                self.cursor.row += 1;
+                self.cursor.col = 0;
+            } else {
+                self.cursor.col += 1;
+            }
+        }
+        self.cursor.desired_col = self.cursor.col;
+        self.modified = true;
+        self.history.record(
+            Edit {
+                char_idx,
+                old_text: String::new(),
+                new_text: text.to_string(),
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
     }
 
     /// Move cursor to the next word boundary.
@@ -726,6 +935,7 @@ mod tests {
                 scroll_row: 0,
                 scroll_col: 0,
                 history: EditHistory::new(),
+                selection: None,
             };
             assert_eq!(buf.file_type(), expected_type, "wrong type for {filename}");
         }
@@ -741,6 +951,7 @@ mod tests {
             scroll_row: 0,
             scroll_col: 0,
             history: EditHistory::new(),
+            selection: None,
         };
         assert_eq!(buf.file_type(), "Plain Text");
     }
@@ -1446,5 +1657,369 @@ mod tests {
         buf.redo();
         assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
         assert!(!buf.modified);
+    }
+
+    // --- Selection tests ---
+
+    #[test]
+    fn new_buffer_has_no_selection() {
+        let buf = EditorBuffer::new();
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn from_file_has_no_selection() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+        let buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn select_right_starts_selection() {
+        let mut buf = buffer_from_str("hello");
+        buf.select_right();
+        assert!(buf.selection.is_some());
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 1);
+    }
+
+    #[test]
+    fn select_right_extends_selection() {
+        let mut buf = buffer_from_str("hello");
+        buf.select_right();
+        buf.select_right();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn select_left_from_mid() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.select_left();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 3);
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn select_down() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.select_down();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(buf.cursor.row, 1);
+    }
+
+    #[test]
+    fn select_up() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.cursor.row = 1;
+        buf.select_up();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 1);
+        assert_eq!(buf.cursor.row, 0);
+    }
+
+    #[test]
+    fn select_home() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.select_home();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 3);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn select_end() {
+        let mut buf = buffer_from_str("hello");
+        buf.select_end();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn select_file_start() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.cursor.row = 1;
+        buf.cursor.col = 3;
+        buf.select_file_start();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 1);
+        assert_eq!(sel.anchor_col, 3);
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn select_file_end() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.select_file_end();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn select_word_right() {
+        let mut buf = buffer_from_str("hello world");
+        buf.select_word_right();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 6);
+    }
+
+    #[test]
+    fn select_word_left() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 11;
+        buf.select_word_left();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 11);
+        assert_eq!(buf.cursor.col, 6);
+    }
+
+    #[test]
+    fn select_all() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.select_all();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn clear_selection_clears() {
+        let mut buf = buffer_from_str("hello");
+        buf.select_right();
+        assert!(buf.selection.is_some());
+        buf.clear_selection();
+        assert!(buf.selection.is_none());
+    }
+
+    // --- selected_text tests ---
+
+    #[test]
+    fn selected_text_single_line() {
+        let mut buf = buffer_from_str("hello world");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+        });
+        buf.cursor.col = 5;
+        assert_eq!(buf.selected_text(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn selected_text_multi_line() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 3,
+        });
+        buf.cursor.row = 1;
+        buf.cursor.col = 2;
+        assert_eq!(buf.selected_text(), Some("lo\nwo".to_string()));
+    }
+
+    #[test]
+    fn selected_text_backward() {
+        let mut buf = buffer_from_str("hello world");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 8,
+        });
+        buf.cursor.col = 3;
+        assert_eq!(buf.selected_text(), Some("lo wo".to_string()));
+    }
+
+    #[test]
+    fn selected_text_none() {
+        let buf = buffer_from_str("hello");
+        assert_eq!(buf.selected_text(), None);
+    }
+
+    // --- delete_selection tests ---
+
+    #[test]
+    fn delete_selection_single_line() {
+        let mut buf = buffer_from_str("hello world");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+        });
+        buf.cursor.col = 5;
+        buf.delete_selection();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), " world");
+        assert_eq!(buf.cursor.col, 0);
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn delete_selection_multi_line() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 3,
+        });
+        buf.cursor.row = 1;
+        buf.cursor.col = 2;
+        buf.delete_selection();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helrld");
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    #[test]
+    fn delete_selection_records_undo() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.delete_selection();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+    }
+
+    #[test]
+    fn delete_selection_returns_text() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+        });
+        buf.cursor.col = 3;
+        let deleted = buf.delete_selection();
+        assert_eq!(deleted, Some("hel".to_string()));
+    }
+
+    #[test]
+    fn delete_selection_no_selection_noop() {
+        let mut buf = buffer_from_str("hello");
+        let result = buf.delete_selection();
+        assert_eq!(result, None);
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+    }
+
+    // --- insert_text tests ---
+
+    #[test]
+    fn insert_text_single_char() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 2;
+        buf.insert_text("x");
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hexllo");
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    #[test]
+    fn insert_text_multiline() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 2;
+        buf.insert_text("a\nb");
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hea\n");
+        assert_eq!(buf.line_at(1).unwrap().to_string(), "bllo");
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 1);
+    }
+
+    #[test]
+    fn insert_text_replaces_selection() {
+        let mut buf = buffer_from_str("hello world");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+        });
+        buf.cursor.col = 5;
+        buf.insert_text("hi");
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hi world");
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn insert_text_empty_noop() {
+        let mut buf = buffer_from_str("hello");
+        buf.insert_text("");
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert!(!buf.modified);
+    }
+
+    // --- Edit methods with selection tests ---
+
+    #[test]
+    fn insert_char_with_selection_replaces() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.insert_char('x');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hxo");
+    }
+
+    #[test]
+    fn insert_newline_with_selection_replaces() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.insert_newline();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "h\n");
+        assert!(buf.line_at(1).unwrap().to_string().starts_with("o"));
+    }
+
+    #[test]
+    fn insert_tab_with_selection_replaces() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "h    o");
+    }
+
+    #[test]
+    fn backspace_with_selection_deletes_selection() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn delete_with_selection_deletes_selection() {
+        let mut buf = buffer_from_str("hello");
+        buf.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 1,
+        });
+        buf.cursor.col = 4;
+        buf.delete_char_forward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
+        assert!(buf.selection.is_none());
     }
 }

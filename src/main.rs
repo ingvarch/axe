@@ -92,6 +92,9 @@ async fn main() -> Result<()> {
         // Check if autosave should trigger (debounced 2s after last edit).
         app.check_autosave();
 
+        // Clear expired status messages.
+        app.expire_status_message();
+
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
 
         // Sync panel dimensions after draw.
@@ -99,7 +102,12 @@ async fn main() -> Result<()> {
 
         // Update editor content area for viewport-dependent cursor movement.
         if let Some(editor_rect) = axe_ui::editor_inner_rect(&app, full_area) {
-            app.editor_inner_area = Some((editor_rect.width, editor_rect.height));
+            app.editor_inner_area = Some((
+                editor_rect.x,
+                editor_rect.y,
+                editor_rect.width,
+                editor_rect.height,
+            ));
         } else {
             app.editor_inner_area = None;
         }

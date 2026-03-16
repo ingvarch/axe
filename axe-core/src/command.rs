@@ -126,6 +126,34 @@ pub enum Command {
     EditorUndo,
     /// Redo the last undone edit in the active buffer.
     EditorRedo,
+    /// Extend selection upward by one line.
+    EditorSelectUp,
+    /// Extend selection downward by one line.
+    EditorSelectDown,
+    /// Extend selection left by one character.
+    EditorSelectLeft,
+    /// Extend selection right by one character.
+    EditorSelectRight,
+    /// Extend selection to the beginning of the current line.
+    EditorSelectHome,
+    /// Extend selection to the end of the current line.
+    EditorSelectEnd,
+    /// Extend selection to the beginning of the file.
+    EditorSelectFileStart,
+    /// Extend selection to the end of the file.
+    EditorSelectFileEnd,
+    /// Extend selection to the previous word boundary.
+    EditorSelectWordLeft,
+    /// Extend selection to the next word boundary.
+    EditorSelectWordRight,
+    /// Select all text in the active buffer.
+    EditorSelectAll,
+    /// Copy the current selection to the system clipboard.
+    EditorCopy,
+    /// Cut the current selection to the system clipboard.
+    EditorCut,
+    /// Paste from the system clipboard at the cursor position.
+    EditorPaste,
 }
 
 #[cfg(test)]
@@ -197,6 +225,20 @@ mod tests {
             Command::EditorSave,
             Command::EditorUndo,
             Command::EditorRedo,
+            Command::EditorSelectUp,
+            Command::EditorSelectDown,
+            Command::EditorSelectLeft,
+            Command::EditorSelectRight,
+            Command::EditorSelectHome,
+            Command::EditorSelectEnd,
+            Command::EditorSelectFileStart,
+            Command::EditorSelectFileEnd,
+            Command::EditorSelectWordLeft,
+            Command::EditorSelectWordRight,
+            Command::EditorSelectAll,
+            Command::EditorCopy,
+            Command::EditorCut,
+            Command::EditorPaste,
         ];
 
         for (i, a) in variants.iter().enumerate() {
