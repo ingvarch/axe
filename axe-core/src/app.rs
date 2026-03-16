@@ -620,6 +620,24 @@ impl AppState {
                 }
                 self.last_edit_time = None;
             }
+            // IMPACT ANALYSIS — EditorUndo / EditorRedo
+            // Parents: KeyEvent → Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z → keymap → these commands
+            // Children: EditorBuffer::undo()/redo() reverses/replays edits on rope, restores cursor
+            // Siblings: Does NOT set last_edit_time (no autosave trigger for undo/redo)
+            Command::EditorUndo => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.undo();
+                    buf.ensure_cursor_visible(h, w);
+                }
+            }
+            Command::EditorRedo => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.redo();
+                    buf.ensure_cursor_visible(h, w);
+                }
+            }
         }
     }
 
@@ -2012,12 +2030,12 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_ctrl_z_toggles_zoom() {
+    fn handle_key_alt_z_toggles_zoom() {
         let mut app = AppState::new();
         app.focus = FocusTarget::Editor;
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT));
         assert_eq!(app.zoomed_panel, Some(FocusTarget::Editor));
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT));
         assert_eq!(app.zoomed_panel, None);
     }
 
@@ -2573,5 +2591,56 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let buf = app.buffer_manager.active_buffer().unwrap();
         assert_eq!(buf.line_at(0).unwrap().to_string(), "ahello");
+    }
+
+    #[test]
+    fn editor_undo_reverses_insert() {
+        let mut app = app_with_editor_buffer("hello");
+        app.execute(Command::EditorInsertChar('X'));
+        assert_eq!(
+            app.buffer_manager
+                .active_buffer()
+                .unwrap()
+                .line_at(0)
+                .unwrap()
+                .to_string(),
+            "Xhello"
+        );
+        app.execute(Command::EditorUndo);
+        assert_eq!(
+            app.buffer_manager
+                .active_buffer()
+                .unwrap()
+                .line_at(0)
+                .unwrap()
+                .to_string(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn editor_redo_restores_insert() {
+        let mut app = app_with_editor_buffer("hello");
+        app.execute(Command::EditorInsertChar('X'));
+        app.execute(Command::EditorUndo);
+        app.execute(Command::EditorRedo);
+        assert_eq!(
+            app.buffer_manager
+                .active_buffer()
+                .unwrap()
+                .line_at(0)
+                .unwrap()
+                .to_string(),
+            "Xhello"
+        );
+    }
+
+    #[test]
+    fn editor_undo_does_not_set_last_edit_time() {
+        let mut app = app_with_editor_buffer("hello");
+        app.execute(Command::EditorInsertChar('X'));
+        app.last_edit_time = None;
+        app.execute(Command::EditorUndo);
+        assert!(app.last_edit_time.is_none());
     }
 }

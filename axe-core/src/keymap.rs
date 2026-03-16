@@ -65,7 +65,20 @@ impl KeymapResolver {
         resolver.bind(
             KeyModifiers::CONTROL,
             KeyCode::Char('z'),
-            Command::ZoomPanel,
+            Command::EditorUndo,
+        );
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('z'), Command::ZoomPanel);
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('y'),
+            Command::EditorRedo,
+        );
+        // Ctrl+Shift+Z for redo — crossterm reports uppercase 'Z' with CONTROL|SHIFT.
+        // Note: Ctrl+Shift is unreliable in many terminals, so Ctrl+Y is the primary binding.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('Z'),
+            Command::EditorRedo,
         );
         resolver.bind(
             KeyModifiers::CONTROL,
@@ -251,10 +264,34 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_ctrl_z_zoom_panel() {
+    fn default_bindings_ctrl_z_undoes() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorUndo));
+    }
+
+    #[test]
+    fn default_bindings_alt_z_zoom_panel() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT);
         assert_eq!(resolver.resolve(&key), Some(Command::ZoomPanel));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_y_redoes() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorRedo));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_z_redoes() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('Z'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorRedo));
     }
 
     #[test]

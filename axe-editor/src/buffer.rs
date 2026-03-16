@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
+use crate::history::{Edit, EditHistory};
 
 /// Number of spaces inserted for a tab.
 const TAB_WIDTH: usize = 4;
@@ -25,6 +26,8 @@ pub struct EditorBuffer {
     pub scroll_row: usize,
     /// First visible column (horizontal scroll offset).
     pub scroll_col: usize,
+    /// Edit history for undo/redo.
+    history: EditHistory,
 }
 
 impl Default for EditorBuffer {
@@ -43,6 +46,7 @@ impl EditorBuffer {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            history: EditHistory::new(),
         }
     }
 
@@ -61,6 +65,7 @@ impl EditorBuffer {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            history: EditHistory::new(),
         })
     }
 
@@ -241,10 +246,20 @@ impl EditorBuffer {
     /// Inserts a character at the current cursor position.
     pub fn insert_char(&mut self, ch: char) {
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let cursor_before = self.cursor.clone();
         self.content.insert_char(char_idx, ch);
         self.cursor.col += 1;
         self.cursor.desired_col = self.cursor.col;
         self.modified = true;
+        self.history.record(
+            Edit {
+                char_idx,
+                old_text: String::new(),
+                new_text: ch.to_string(),
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
     }
 
     // IMPACT ANALYSIS — insert_newline
@@ -255,6 +270,7 @@ impl EditorBuffer {
     /// Inserts a newline at the current cursor position with auto-indent.
     pub fn insert_newline(&mut self) {
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let cursor_before = self.cursor.clone();
         let indent = self.leading_whitespace(self.cursor.row);
         let insert_str = format!("\n{indent}");
         self.content.insert(char_idx, &insert_str);
@@ -262,6 +278,15 @@ impl EditorBuffer {
         self.cursor.col = indent.len();
         self.cursor.desired_col = self.cursor.col;
         self.modified = true;
+        self.history.record(
+            Edit {
+                char_idx,
+                old_text: String::new(),
+                new_text: insert_str,
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
     }
 
     // IMPACT ANALYSIS — insert_tab
@@ -272,11 +297,21 @@ impl EditorBuffer {
     /// Inserts a tab (TAB_WIDTH spaces) at the current cursor position.
     pub fn insert_tab(&mut self) {
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let cursor_before = self.cursor.clone();
         let spaces = " ".repeat(TAB_WIDTH);
         self.content.insert(char_idx, &spaces);
         self.cursor.col += TAB_WIDTH;
         self.cursor.desired_col = self.cursor.col;
         self.modified = true;
+        self.history.record(
+            Edit {
+                char_idx,
+                old_text: String::new(),
+                new_text: spaces,
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
     }
 
     // IMPACT ANALYSIS — delete_char_backward
@@ -291,11 +326,23 @@ impl EditorBuffer {
     pub fn delete_char_backward(&mut self) {
         if self.cursor.col > 0 {
             let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+            let cursor_before = self.cursor.clone();
+            let deleted: String = self.content.slice(char_idx - 1..char_idx).into();
             self.content.remove(char_idx - 1..char_idx);
             self.cursor.col -= 1;
             self.cursor.desired_col = self.cursor.col;
             self.modified = true;
+            self.history.record(
+                Edit {
+                    char_idx: char_idx - 1,
+                    old_text: deleted,
+                    new_text: String::new(),
+                },
+                cursor_before,
+                self.cursor.clone(),
+            );
         } else if self.cursor.row > 0 {
+            let cursor_before = self.cursor.clone();
             let prev_line_len = self.line_length(self.cursor.row - 1);
             let char_idx = self.content.line_to_char(self.cursor.row);
             // Remove \r\n or \n at end of previous line.
@@ -304,11 +351,21 @@ impl EditorBuffer {
             } else {
                 char_idx - 1
             };
+            let deleted: String = self.content.slice(remove_start..char_idx).into();
             self.content.remove(remove_start..char_idx);
             self.cursor.row -= 1;
             self.cursor.col = prev_line_len;
             self.cursor.desired_col = self.cursor.col;
             self.modified = true;
+            self.history.record(
+                Edit {
+                    char_idx: remove_start,
+                    old_text: deleted,
+                    new_text: String::new(),
+                },
+                cursor_before,
+                self.cursor.clone(),
+            );
         }
     }
 
@@ -325,9 +382,21 @@ impl EditorBuffer {
         let line_len = self.line_length(self.cursor.row);
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         if self.cursor.col < line_len {
+            let cursor_before = self.cursor.clone();
+            let deleted: String = self.content.slice(char_idx..char_idx + 1).into();
             self.content.remove(char_idx..char_idx + 1);
             self.modified = true;
+            self.history.record(
+                Edit {
+                    char_idx,
+                    old_text: deleted,
+                    new_text: String::new(),
+                },
+                cursor_before,
+                self.cursor.clone(),
+            );
         } else if self.cursor.row + 1 < self.content_line_count() {
+            let cursor_before = self.cursor.clone();
             // At end of line — join with next line by removing the newline.
             let remove_end =
                 if char_idx < self.content.len_chars() && self.content.char(char_idx) == '\r' {
@@ -335,8 +404,18 @@ impl EditorBuffer {
                 } else {
                     char_idx + 1
                 };
+            let deleted: String = self.content.slice(char_idx..remove_end).into();
             self.content.remove(char_idx..remove_end);
             self.modified = true;
+            self.history.record(
+                Edit {
+                    char_idx,
+                    old_text: deleted,
+                    new_text: String::new(),
+                },
+                cursor_before,
+                self.cursor.clone(),
+            );
         }
     }
 
@@ -361,6 +440,51 @@ impl EditorBuffer {
             .with_context(|| format!("Failed to save to {}", path.display()))?;
         self.modified = false;
         Ok(())
+    }
+
+    // IMPACT ANALYSIS — undo / redo
+    // Parents: Command::EditorUndo/EditorRedo → app.execute() → these methods
+    // Children: Reverses/replays edits on rope, restores cursor position
+    // Siblings: modified flag set (always true after undo/redo since content changed)
+
+    /// Undoes the last edit group, restoring content and cursor.
+    pub fn undo(&mut self) {
+        if let Some(group) = self.history.undo() {
+            for edit in group.edits.iter().rev() {
+                // Remove what was inserted.
+                if !edit.new_text.is_empty() {
+                    let end = edit.char_idx + edit.new_text.chars().count();
+                    self.content.remove(edit.char_idx..end);
+                }
+                // Re-insert what was deleted.
+                if !edit.old_text.is_empty() {
+                    self.content.insert(edit.char_idx, &edit.old_text);
+                }
+            }
+            self.cursor = group.cursor_before;
+            self.cursor.desired_col = self.cursor.col;
+            self.modified = true;
+        }
+    }
+
+    /// Redoes the last undone edit group, re-applying content changes and cursor.
+    pub fn redo(&mut self) {
+        if let Some(group) = self.history.redo() {
+            for edit in group.edits.iter() {
+                // Remove what was originally there.
+                if !edit.old_text.is_empty() {
+                    let end = edit.char_idx + edit.old_text.chars().count();
+                    self.content.remove(edit.char_idx..end);
+                }
+                // Insert what was added.
+                if !edit.new_text.is_empty() {
+                    self.content.insert(edit.char_idx, &edit.new_text);
+                }
+            }
+            self.cursor = group.cursor_after;
+            self.cursor.desired_col = self.cursor.col;
+            self.modified = true;
+        }
     }
 
     /// Returns the leading whitespace of the given line as a string.
@@ -601,6 +725,7 @@ mod tests {
                 cursor: CursorState::default(),
                 scroll_row: 0,
                 scroll_col: 0,
+                history: EditHistory::new(),
             };
             assert_eq!(buf.file_type(), expected_type, "wrong type for {filename}");
         }
@@ -615,6 +740,7 @@ mod tests {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            history: EditHistory::new(),
         };
         assert_eq!(buf.file_type(), "Plain Text");
     }
@@ -1187,5 +1313,138 @@ mod tests {
 
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(content, "safe!");
+    }
+
+    // --- undo/redo tests ---
+
+    #[test]
+    fn undo_insert_char() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 5;
+        buf.insert_char('x');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn redo_insert_char() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 5;
+        buf.insert_char('x');
+        buf.undo();
+        buf.redo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
+        assert_eq!(buf.cursor.col, 6);
+    }
+
+    #[test]
+    fn undo_backspace() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    #[test]
+    fn undo_newline() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.insert_newline();
+        assert_eq!(buf.line_count(), 2);
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    #[test]
+    fn undo_delete_forward() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 2;
+        buf.delete_char_forward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn undo_tab() {
+        let mut buf = buffer_from_str("hello");
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "    hello");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn undo_preserves_across_save() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "data").unwrap();
+        tmp.flush().unwrap();
+
+        let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        buf.insert_char('x');
+        buf.save_to_file().unwrap();
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "data");
+    }
+
+    #[test]
+    fn undo_redo_multiple_steps() {
+        let mut buf = buffer_from_str("");
+        // Use sleep to force separate undo groups.
+        buf.insert_char('a');
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        buf.insert_char('b');
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        buf.insert_char('c');
+
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "abc");
+
+        buf.undo(); // remove 'c'
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ab");
+        buf.undo(); // remove 'b'
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "a");
+        buf.redo(); // restore 'b'
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ab");
+        buf.redo(); // restore 'c'
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "abc");
+    }
+
+    #[test]
+    fn undo_backspace_at_line_join() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.cursor.row = 1;
+        buf.cursor.col = 0;
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
+        buf.undo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello\n");
+        assert_eq!(buf.line_at(1).unwrap().to_string(), "world");
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn undo_on_empty_history_is_noop() {
+        let mut buf = buffer_from_str("hello");
+        buf.undo(); // Should not panic or change anything.
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn redo_on_empty_history_is_noop() {
+        let mut buf = buffer_from_str("hello");
+        buf.redo();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert!(!buf.modified);
     }
 }

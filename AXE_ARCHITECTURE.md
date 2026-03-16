@@ -336,7 +336,7 @@ Users can also resize panels by clicking and dragging panel borders at any time 
 
 **Zoom toggle:**
 
-`Ctrl+Alt+Z` (or `ZoomPanel` command) maximizes the active panel to fill the entire screen, hiding all other panels. Press again to restore the previous layout. This is useful for focusing on the editor or terminal temporarily.
+`Alt+Z` (or `ZoomPanel` command) maximizes the active panel to fill the entire screen, hiding all other panels. Press again to restore the previous layout. This is useful for focusing on the editor or terminal temporarily.
 
 ---
 

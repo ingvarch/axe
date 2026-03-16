@@ -344,16 +344,16 @@ Basic text editing: type characters, delete, backspace, enter.
 
 ---
 
-### Task 4.4 — Editor: Undo/Redo
+### Task 4.4 — Editor: Undo/Redo ✅
 
 Undo and redo support for all edits.
 
 **Acceptance criteria:**
-- `Ctrl+Z` undoes the last edit
-- `Ctrl+Shift+Z` (or `Ctrl+Y`) redoes the last undone edit
-- Undo restores the cursor to where the edit was made
-- Multiple rapid edits (e.g., typing a word) are grouped into a single undo step
-- Undo/redo works across save operations (saving does not clear history)
+- [x] `Ctrl+Z` undoes the last edit
+- [x] `Ctrl+Shift+Z` (or `Ctrl+Y`) redoes the last undone edit
+- [x] Undo restores the cursor to where the edit was made
+- [x] Multiple rapid edits (e.g., typing a word) are grouped into a single undo step
+- [x] Undo/redo works across save operations (saving does not clear history)
 
 **Implementation details:**
 - `EditHistory` struct with undo stack and redo stack

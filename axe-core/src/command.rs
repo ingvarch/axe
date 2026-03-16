@@ -122,6 +122,10 @@ pub enum Command {
     EditorTab,
     /// Save the current buffer to disk.
     EditorSave,
+    /// Undo the last edit in the active buffer.
+    EditorUndo,
+    /// Redo the last undone edit in the active buffer.
+    EditorRedo,
 }
 
 #[cfg(test)]
@@ -191,6 +195,8 @@ mod tests {
             Command::EditorNewline,
             Command::EditorTab,
             Command::EditorSave,
+            Command::EditorUndo,
+            Command::EditorRedo,
         ];
 
         for (i, a) in variants.iter().enumerate() {
