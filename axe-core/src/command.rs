@@ -110,6 +110,18 @@ pub enum Command {
     EditorWordRight,
     /// Move cursor to previous word boundary.
     EditorWordLeft,
+    /// Insert a character at the cursor position.
+    EditorInsertChar(char),
+    /// Delete the character before the cursor (backspace).
+    EditorBackspace,
+    /// Delete the character at the cursor position (forward delete).
+    EditorDelete,
+    /// Insert a newline at the cursor position with auto-indent.
+    EditorNewline,
+    /// Insert a tab (spaces) at the cursor position.
+    EditorTab,
+    /// Save the current buffer to disk.
+    EditorSave,
 }
 
 #[cfg(test)]
@@ -172,6 +184,13 @@ mod tests {
             Command::EditorPageDown,
             Command::EditorWordRight,
             Command::EditorWordLeft,
+            Command::EditorInsertChar('a'),
+            Command::EditorInsertChar('b'),
+            Command::EditorBackspace,
+            Command::EditorDelete,
+            Command::EditorNewline,
+            Command::EditorTab,
+            Command::EditorSave,
         ];
 
         for (i, a) in variants.iter().enumerate() {

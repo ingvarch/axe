@@ -7,6 +7,9 @@ use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
 
+/// Number of spaces inserted for a tab.
+const TAB_WIDTH: usize = 4;
+
 /// A single editor buffer holding file content as a rope.
 ///
 /// Each buffer optionally tracks the file path it was loaded from,
@@ -228,6 +231,147 @@ impl EditorBuffer {
         self.cursor.row = self.cursor.row.saturating_sub(viewport_height);
         let line_len = self.line_length(self.cursor.row);
         self.cursor.col = self.cursor.desired_col.min(line_len);
+    }
+
+    // IMPACT ANALYSIS — insert_char
+    // Parents: KeyEvent → Command::EditorInsertChar(ch) → this function
+    // Children: UI renders updated content, cursor advances, modified flag set
+    // Siblings: Selection (none yet), SyntaxHighlighter (future), LspClient (future)
+
+    /// Inserts a character at the current cursor position.
+    pub fn insert_char(&mut self, ch: char) {
+        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        self.content.insert_char(char_idx, ch);
+        self.cursor.col += 1;
+        self.cursor.desired_col = self.cursor.col;
+        self.modified = true;
+    }
+
+    // IMPACT ANALYSIS — insert_newline
+    // Parents: KeyEvent → Command::EditorNewline → this function
+    // Children: Splits line, auto-indents from current line, cursor moves to new line
+    // Siblings: Line count changes (affects gutter width, status bar line count)
+
+    /// Inserts a newline at the current cursor position with auto-indent.
+    pub fn insert_newline(&mut self) {
+        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let indent = self.leading_whitespace(self.cursor.row);
+        let insert_str = format!("\n{indent}");
+        self.content.insert(char_idx, &insert_str);
+        self.cursor.row += 1;
+        self.cursor.col = indent.len();
+        self.cursor.desired_col = self.cursor.col;
+        self.modified = true;
+    }
+
+    // IMPACT ANALYSIS — insert_tab
+    // Parents: KeyEvent → Command::EditorTab → this function
+    // Children: Inserts TAB_WIDTH spaces, cursor advances
+    // Siblings: Same as insert_char
+
+    /// Inserts a tab (TAB_WIDTH spaces) at the current cursor position.
+    pub fn insert_tab(&mut self) {
+        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        let spaces = " ".repeat(TAB_WIDTH);
+        self.content.insert(char_idx, &spaces);
+        self.cursor.col += TAB_WIDTH;
+        self.cursor.desired_col = self.cursor.col;
+        self.modified = true;
+    }
+
+    // IMPACT ANALYSIS — delete_char_backward
+    // Parents: KeyEvent → Command::EditorBackspace → this function
+    // Children: Removes char before cursor or joins lines, cursor moves back
+    // Siblings: Line count may change (if joining lines), gutter width may change
+
+    /// Deletes the character before the cursor (backspace).
+    ///
+    /// At the beginning of a line, joins with the previous line.
+    /// At the beginning of the file, does nothing.
+    pub fn delete_char_backward(&mut self) {
+        if self.cursor.col > 0 {
+            let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+            self.content.remove(char_idx - 1..char_idx);
+            self.cursor.col -= 1;
+            self.cursor.desired_col = self.cursor.col;
+            self.modified = true;
+        } else if self.cursor.row > 0 {
+            let prev_line_len = self.line_length(self.cursor.row - 1);
+            let char_idx = self.content.line_to_char(self.cursor.row);
+            // Remove \r\n or \n at end of previous line.
+            let remove_start = if char_idx >= 2 && self.content.char(char_idx - 2) == '\r' {
+                char_idx - 2
+            } else {
+                char_idx - 1
+            };
+            self.content.remove(remove_start..char_idx);
+            self.cursor.row -= 1;
+            self.cursor.col = prev_line_len;
+            self.cursor.desired_col = self.cursor.col;
+            self.modified = true;
+        }
+    }
+
+    // IMPACT ANALYSIS — delete_char_forward
+    // Parents: KeyEvent → Command::EditorDelete → this function
+    // Children: Removes char at cursor or joins with next line, cursor stays
+    // Siblings: Line count may change, gutter width may change
+
+    /// Deletes the character at the cursor position (forward delete).
+    ///
+    /// At the end of a line, joins with the next line.
+    /// At the end of the file, does nothing.
+    pub fn delete_char_forward(&mut self) {
+        let line_len = self.line_length(self.cursor.row);
+        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
+        if self.cursor.col < line_len {
+            self.content.remove(char_idx..char_idx + 1);
+            self.modified = true;
+        } else if self.cursor.row + 1 < self.content_line_count() {
+            // At end of line — join with next line by removing the newline.
+            let remove_end =
+                if char_idx < self.content.len_chars() && self.content.char(char_idx) == '\r' {
+                    char_idx + 2
+                } else {
+                    char_idx + 1
+                };
+            self.content.remove(char_idx..remove_end);
+            self.modified = true;
+        }
+    }
+
+    // IMPACT ANALYSIS — save_to_file
+    // Parents: Command::EditorSave → this function, autosave timer
+    // Children: Writes file to disk atomically (temp file + rename), clears modified flag
+    // Siblings: File watcher (future) may trigger on save, tree may need refresh
+
+    /// Saves the buffer content to its associated file path atomically.
+    ///
+    /// Uses a temporary file in the same directory followed by a rename to
+    /// prevent data loss on crash. Returns an error if no path is set.
+    pub fn save_to_file(&mut self) -> Result<()> {
+        let path = self.path.as_ref().context("Buffer has no file path")?;
+        let dir = path.parent().context("File path has no parent directory")?;
+        let tmp = tempfile::NamedTempFile::new_in(dir)
+            .with_context(|| format!("Failed to create temp file in {}", dir.display()))?;
+        self.content
+            .write_to(std::io::BufWriter::new(tmp.as_file()))
+            .context("Failed to write buffer content")?;
+        tmp.persist(path)
+            .with_context(|| format!("Failed to save to {}", path.display()))?;
+        self.modified = false;
+        Ok(())
+    }
+
+    /// Returns the leading whitespace of the given line as a string.
+    fn leading_whitespace(&self, row: usize) -> String {
+        self.line_at(row)
+            .map(|line| {
+                line.chars()
+                    .take_while(|c| *c == ' ' || *c == '\t')
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Move cursor to the next word boundary.
@@ -800,5 +944,248 @@ mod tests {
         // cursor.col (100) >= scroll_col(0) + viewport_width(80)
         // scroll_col = 100 + 1 - 80 = 21
         assert_eq!(buf.scroll_col, 21);
+    }
+
+    // --- insert_char tests ---
+
+    #[test]
+    fn insert_char_at_start() {
+        let mut buf = buffer_from_str("hello");
+        buf.insert_char('x');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "xhello");
+        assert_eq!(buf.cursor.col, 1);
+    }
+
+    #[test]
+    fn insert_char_in_middle() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.insert_char('x');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helxlo");
+        assert_eq!(buf.cursor.col, 4);
+    }
+
+    #[test]
+    fn insert_char_at_end() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 5;
+        buf.insert_char('x');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
+        assert_eq!(buf.cursor.col, 6);
+    }
+
+    #[test]
+    fn insert_char_sets_modified() {
+        let mut buf = buffer_from_str("hello");
+        assert!(!buf.modified);
+        buf.insert_char('x');
+        assert!(buf.modified);
+    }
+
+    #[test]
+    fn insert_char_in_empty_buffer() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_char('a');
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "a");
+        assert_eq!(buf.cursor.col, 1);
+    }
+
+    // --- insert_newline tests ---
+
+    #[test]
+    fn newline_splits_line() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.insert_newline();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hel\n");
+        assert_eq!(buf.line_at(1).unwrap().to_string(), "lo");
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn newline_at_start() {
+        let mut buf = buffer_from_str("hello");
+        buf.insert_newline();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "\n");
+        assert!(buf.line_at(1).unwrap().to_string().starts_with("hello"));
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn newline_at_end() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 5;
+        buf.insert_newline();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello\n");
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 0);
+    }
+
+    #[test]
+    fn newline_auto_indents() {
+        let mut buf = buffer_from_str("  hello");
+        buf.cursor.col = 6;
+        buf.insert_newline();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "  hell\n");
+        assert_eq!(buf.line_at(1).unwrap().to_string(), "  o");
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn newline_sets_modified() {
+        let mut buf = buffer_from_str("hello");
+        assert!(!buf.modified);
+        buf.insert_newline();
+        assert!(buf.modified);
+    }
+
+    // --- insert_tab tests ---
+
+    #[test]
+    fn tab_inserts_spaces() {
+        let mut buf = buffer_from_str("hello");
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "    hello");
+        assert_eq!(buf.cursor.col, 4);
+    }
+
+    #[test]
+    fn tab_sets_modified() {
+        let mut buf = buffer_from_str("hello");
+        assert!(!buf.modified);
+        buf.insert_tab();
+        assert!(buf.modified);
+    }
+
+    // --- delete_char_backward (backspace) tests ---
+
+    #[test]
+    fn backspace_deletes_char() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 3;
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn backspace_at_bof_noop() {
+        let mut buf = buffer_from_str("hello");
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert_eq!(buf.cursor.col, 0);
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn backspace_joins_lines() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.cursor.row = 1;
+        buf.cursor.col = 0;
+        buf.delete_char_backward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn backspace_sets_modified() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 1;
+        assert!(!buf.modified);
+        buf.delete_char_backward();
+        assert!(buf.modified);
+    }
+
+    // --- delete_char_forward (delete) tests ---
+
+    #[test]
+    fn delete_forward_deletes_char() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 2;
+        buf.delete_char_forward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn delete_forward_at_eof_noop() {
+        let mut buf = buffer_from_str("hello");
+        buf.cursor.col = 5;
+        buf.delete_char_forward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn delete_forward_joins_lines() {
+        let mut buf = buffer_from_str("hello\nworld");
+        buf.cursor.col = 5;
+        buf.delete_char_forward();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn delete_forward_sets_modified() {
+        let mut buf = buffer_from_str("hello");
+        assert!(!buf.modified);
+        buf.delete_char_forward();
+        assert!(buf.modified);
+    }
+
+    // --- save_to_file tests ---
+
+    #[test]
+    fn save_writes_content() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "original").unwrap();
+        tmp.flush().unwrap();
+
+        let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        buf.insert_char('X');
+        buf.save_to_file().unwrap();
+
+        let content = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(content, "Xoriginal");
+    }
+
+    #[test]
+    fn save_clears_modified() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "data").unwrap();
+        tmp.flush().unwrap();
+
+        let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        buf.insert_char('x');
+        assert!(buf.modified);
+        buf.save_to_file().unwrap();
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn save_no_path_returns_error() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_char('x');
+        assert!(buf.save_to_file().is_err());
+    }
+
+    #[test]
+    fn save_is_atomic() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "safe").unwrap();
+        tmp.flush().unwrap();
+
+        let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        buf.cursor.col = 4;
+        buf.insert_char('!');
+        buf.save_to_file().unwrap();
+
+        let content = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(content, "safe!");
     }
 }

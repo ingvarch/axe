@@ -104,6 +104,9 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         let ftype = buffer.file_type();
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled(name.to_string(), text_style));
+        if buffer.modified {
+            spans.push(Span::styled(" [+]", key_style));
+        }
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled(format!("{lines} lines"), text_style));
         spans.push(Span::styled(" | ", key_style));
@@ -156,6 +159,20 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
     ]);
 
     Line::from(spans)
+}
+
+/// Returns the editor panel title, including a modified indicator if needed.
+fn editor_title(app: &AppState, zoomed: bool) -> &'static str {
+    let modified = app
+        .buffer_manager
+        .active_buffer()
+        .is_some_and(|b| b.modified);
+    match (zoomed, modified) {
+        (true, true) => " Editor (zoomed) [+] ",
+        (true, false) => " Editor (zoomed) ",
+        (false, true) => " Editor [+] ",
+        (false, false) => " Editor ",
+    }
 }
 
 /// Help text lines for the help overlay.
@@ -937,7 +954,7 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         // Editor is zoomed — it fills the main area minus status bar.
         let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
         let block = panel_block(
-            " Editor (zoomed) ",
+            editor_title(app, true),
             &app.focus,
             &FocusTarget::Editor,
             &Theme::default(),
@@ -983,7 +1000,7 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     };
 
     let block = panel_block(
-        " Editor ",
+        editor_title(app, false),
         &app.focus,
         &FocusTarget::Editor,
         &Theme::default(),
@@ -1039,7 +1056,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     if let Some(ref zoomed) = app.zoomed_panel {
         let (title, panel_target) = match zoomed {
             FocusTarget::Tree => (" Files (zoomed) ", FocusTarget::Tree),
-            FocusTarget::Editor => (" Editor (zoomed) ", FocusTarget::Editor),
+            FocusTarget::Editor => (editor_title(app, true), FocusTarget::Editor),
             FocusTarget::Terminal(id) => (" Terminal (zoomed) ", FocusTarget::Terminal(*id)),
         };
         let block = panel_block(title, &app.focus, &panel_target, &theme, resize_active);
@@ -1258,7 +1275,7 @@ fn render_right_panels(
         .split(area);
 
         let editor_block = panel_block(
-            " Editor ",
+            editor_title(app, false),
             &app.focus,
             &FocusTarget::Editor,
             theme,
@@ -1285,7 +1302,7 @@ fn render_right_panels(
         }
     } else {
         let editor_block = panel_block(
-            " Editor ",
+            editor_title(app, false),
             &app.focus,
             &FocusTarget::Editor,
             theme,

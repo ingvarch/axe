@@ -77,6 +77,11 @@ impl KeymapResolver {
             KeyCode::Char('i'),
             Command::ToggleIcons,
         );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('s'),
+            Command::EditorSave,
+        );
 
         // Terminal tab management — using Alt to avoid Ctrl+Shift unreliability
         // in terminal emulators (many report Ctrl+Shift+T as plain Ctrl+T).
@@ -329,6 +334,13 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::End, KeyModifiers::SHIFT);
         assert_eq!(resolver.resolve(&key), Some(Command::TerminalScrollBottom));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_s_saves() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorSave));
     }
 
     #[test]

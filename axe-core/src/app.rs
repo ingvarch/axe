@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -22,6 +23,8 @@ const MIN_PANEL_PCT: u16 = 10;
 const MAX_PANEL_PCT: u16 = 90;
 /// Number of lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: i32 = 3;
+/// Delay after the last edit before triggering autosave.
+const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
 
 /// Which panel border is being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +128,8 @@ pub struct AppState {
     ///
     /// Updated each frame from `editor_inner_rect()` in main.rs.
     pub editor_inner_area: Option<(u16, u16)>,
+    /// Timestamp of the last edit operation, used for autosave debouncing.
+    pub last_edit_time: Option<Instant>,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -156,6 +161,7 @@ impl AppState {
             last_terminal_rows: DEFAULT_TERMINAL_ROWS,
             terminal_grid_area: None,
             editor_inner_area: None,
+            last_edit_time: None,
             terminal_selecting: false,
             terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
@@ -293,6 +299,12 @@ impl AppState {
                 (KeyModifiers::NONE, KeyCode::PageDown) => Some(Command::EditorPageDown),
                 (KeyModifiers::CONTROL, KeyCode::Left) => Some(Command::EditorWordLeft),
                 (KeyModifiers::CONTROL, KeyCode::Right) => Some(Command::EditorWordRight),
+                (KeyModifiers::NONE, KeyCode::Backspace) => Some(Command::EditorBackspace),
+                (KeyModifiers::NONE, KeyCode::Delete) => Some(Command::EditorDelete),
+                (KeyModifiers::NONE, KeyCode::Enter) => Some(Command::EditorNewline),
+                (KeyModifiers::NONE, KeyCode::Tab) => Some(Command::EditorTab),
+                (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Command::EditorInsertChar(c)),
+                (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Command::EditorInsertChar(c)),
                 _ => None,
             };
             if let Some(cmd) = editor_cmd {
@@ -555,6 +567,58 @@ impl AppState {
                     }
                     buf.ensure_cursor_visible(h, w);
                 }
+            }
+            // IMPACT ANALYSIS — Editor edit commands
+            // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
+            // Children: EditorBuffer content/cursor/modified state, last_edit_time for autosave
+            // Siblings: UI reads modified flag for [+] indicator, status bar line count
+            Command::EditorInsertChar(ch) => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.insert_char(ch);
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorBackspace => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.delete_char_backward();
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorDelete => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.delete_char_forward();
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorNewline => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.insert_newline();
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorTab => {
+                let (h, w) = self.editor_viewport();
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.insert_tab();
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+            }
+            Command::EditorSave => {
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    if let Err(e) = buf.save_to_file() {
+                        log::warn!("Save failed: {e}");
+                    }
+                }
+                self.last_edit_time = None;
             }
         }
     }
@@ -911,6 +975,25 @@ impl AppState {
         self.editor_inner_area
             .map(|(w, h)| (h as usize, w as usize))
             .unwrap_or((20, 80))
+    }
+
+    /// Checks if autosave should trigger based on elapsed time since last edit.
+    ///
+    /// Saves the active buffer if it has been modified and has a file path,
+    /// and at least `AUTOSAVE_DELAY` has passed since the last edit.
+    pub fn check_autosave(&mut self) {
+        if let Some(last_edit) = self.last_edit_time {
+            if last_edit.elapsed() >= AUTOSAVE_DELAY {
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    if buf.modified && buf.path().is_some() {
+                        if let Err(e) = buf.save_to_file() {
+                            log::warn!("Autosave failed: {e}");
+                        }
+                    }
+                }
+                self.last_edit_time = None;
+            }
+        }
     }
 
     /// Activates a specific terminal tab by index. No-op if the index is out of range.
@@ -2408,5 +2491,87 @@ mod tests {
         assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 6);
         app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 0);
+    }
+
+    // --- Editor edit command tests ---
+
+    #[test]
+    fn editor_insert_char_modifies_buffer() {
+        let mut app = app_with_editor_buffer("hello");
+        app.execute(Command::EditorInsertChar('X'));
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "Xhello");
+        assert!(buf.modified);
+        assert!(app.last_edit_time.is_some());
+    }
+
+    #[test]
+    fn editor_backspace_deletes_char() {
+        let mut app = app_with_editor_buffer("hello");
+        // Move cursor to col 3
+        app.buffer_manager.active_buffer_mut().unwrap().cursor.col = 3;
+        app.execute(Command::EditorBackspace);
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn editor_enter_splits_line() {
+        let mut app = app_with_editor_buffer("hello");
+        app.buffer_manager.active_buffer_mut().unwrap().cursor.col = 3;
+        app.execute(Command::EditorNewline);
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.cursor.row, 1);
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "hel\n");
+    }
+
+    #[test]
+    fn editor_save_clears_modified() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('x'));
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+        assert!(app.last_edit_time.is_some());
+
+        app.execute(Command::EditorSave);
+        assert!(!app.buffer_manager.active_buffer().unwrap().modified);
+        assert!(app.last_edit_time.is_none());
+    }
+
+    #[test]
+    fn autosave_triggers_after_delay() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('z'));
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+
+        // Simulate time passing by backdating last_edit_time.
+        app.last_edit_time = Some(Instant::now() - Duration::from_secs(3));
+        app.check_autosave();
+
+        assert!(!app.buffer_manager.active_buffer().unwrap().modified);
+        assert!(app.last_edit_time.is_none());
+    }
+
+    #[test]
+    fn printable_chars_intercepted_when_editor_focused() {
+        let mut app = app_with_editor_buffer("hello");
+        // Type 'a' — should be intercepted as EditorInsertChar, not fall through.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "ahello");
     }
 }

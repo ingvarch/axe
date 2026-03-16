@@ -280,17 +280,17 @@ Display file type icons using Nerd Font characters.
 
 ## Phase 4: Editor — Core Text Editing
 
-### Task 4.1 — Editor: Open File from Tree & Display Content
+### Task 4.1 — Editor: Open File from Tree & Display Content ✅
 
 Selecting a file in the tree opens it in the editor panel.
 
 **Acceptance criteria:**
-- `Enter` on a file in the tree opens it in the editor panel
-- File content is displayed with line numbers in the gutter
-- Gutter has a distinct background color (slightly different from editor bg)
-- Long lines are not wrapped (horizontal content goes off-screen for now)
-- Gutter width adjusts to the number of digits needed (e.g., 3 digits for 100+ lines)
-- Status bar shows: filename, line count, file type
+- [x] `Enter` on a file in the tree opens it in the editor panel
+- [x] File content is displayed with line numbers in the gutter
+- [x] Gutter has a distinct background color (slightly different from editor bg)
+- [x] Long lines are not wrapped (horizontal content goes off-screen for now)
+- [x] Gutter width adjusts to the number of digits needed (e.g., 3 digits for 100+ lines)
+- [x] Status bar shows: filename, line count, file type
 
 **Implementation details:**
 - Create `EditorBuffer` in `axe-editor` using `ropey::Rope`
@@ -300,21 +300,21 @@ Selecting a file in the tree opens it in the editor panel.
 
 ---
 
-### Task 4.2 — Editor: Cursor Movement
+### Task 4.2 — Editor: Cursor Movement ✅
 
 Navigate within the file using keyboard.
 
 **Acceptance criteria:**
-- A visible block cursor is rendered at the current position
-- `↑`/`↓`/`←`/`→` move the cursor
-- `Home` goes to beginning of line, `End` to end of line
-- `Ctrl+Home` goes to beginning of file, `Ctrl+End` to end of file
-- `PageUp`/`PageDown` scroll by viewport height
-- `Ctrl+←`/`Ctrl+→` move by word
-- The current line is highlighted with a subtle background color
-- Cursor line number in gutter is highlighted
-- Viewport scrolls to keep the cursor visible (scroll margin: 5 lines)
-- Status bar shows cursor position: `Ln 42, Col 13`
+- [x] A visible block cursor is rendered at the current position
+- [x] `↑`/`↓`/`←`/`→` move the cursor
+- [x] `Home` goes to beginning of line, `End` to end of line
+- [x] `Ctrl+Home` goes to beginning of file, `Ctrl+End` to end of file
+- [x] `PageUp`/`PageDown` scroll by viewport height
+- [x] `Ctrl+←`/`Ctrl+→` move by word
+- [x] The current line is highlighted with a subtle background color
+- [x] Cursor line number in gutter is highlighted
+- [x] Viewport scrolls to keep the cursor visible (scroll margin: 5 lines)
+- [x] Status bar shows cursor position: `Ln 42, Col 13`
 
 **Implementation details:**
 - `CursorState` struct: `row: usize, col: usize, desired_col: usize` (desired_col for up/down on short lines)

@@ -89,6 +89,9 @@ async fn main() -> Result<()> {
         // Poll terminal PTY output before drawing.
         app.poll_terminal();
 
+        // Check if autosave should trigger (debounced 2s after last edit).
+        app.check_autosave();
+
         terminal.draw(|frame| axe_ui::render(&app, frame))?;
 
         // Sync panel dimensions after draw.
