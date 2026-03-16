@@ -93,6 +93,11 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
 
     let mut spans = vec![Span::styled(format!(" Axe v{version}"), text_style)];
 
+    if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled("[SHOW IGNORED]", text_style));
+    }
+
     if app.zoomed_panel.is_some() {
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled("[ZOOM]", resize_style));
@@ -142,6 +147,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Enter", "Expand/collapse dir"),
     ("\u{2190}/\u{2192}", "Collapse/expand"),
     ("Home/End", "First/last item"),
+    ("Ctrl+G", "Toggle ignored files"),
     ("", ""),
     ("Ctrl+H", "Toggle this help"),
     ("Esc", "Close overlay"),
@@ -476,11 +482,11 @@ mod tests {
     }
 
     #[test]
-    fn render_editor_has_active_border_by_default() {
+    fn render_tree_has_active_border_by_default() {
         let content = render_to_string(100, 24);
         assert!(
-            content.contains("Focus: Editor"),
-            "expected 'Focus: Editor' in status bar"
+            content.contains("Focus: Files"),
+            "expected 'Focus: Files' in status bar"
         );
     }
 
@@ -510,6 +516,7 @@ mod tests {
     fn render_hides_tree_when_show_tree_false() {
         let mut app = AppState::new();
         app.show_tree = false;
+        app.focus = FocusTarget::Editor;
         let content = render_app_to_string(&app, 80, 24);
         assert!(
             !content.contains("Files"),
@@ -532,6 +539,7 @@ mod tests {
     fn render_editor_fills_width_when_tree_hidden() {
         let mut app = AppState::new();
         app.show_tree = false;
+        app.focus = FocusTarget::Editor;
         let content = render_app_to_string(&app, 80, 24);
         assert!(
             content.contains("Editor"),

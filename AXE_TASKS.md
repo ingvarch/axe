@@ -224,7 +224,7 @@ Navigate the tree with keyboard and expand/collapse directories.
 
 ---
 
-### Task 3.3 — File Tree: .gitignore Filtering
+### Task 3.3 — File Tree: .gitignore Filtering [DONE]
 
 Respect `.gitignore` rules when displaying the file tree.
 

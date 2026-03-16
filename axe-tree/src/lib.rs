@@ -1,3 +1,7 @@
+mod filter;
+
+pub use filter::TreeFilter;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -34,6 +38,7 @@ pub struct FileTree {
     selected: usize,
     scroll: usize,
     viewport_height: usize,
+    filter: TreeFilter,
 }
 
 impl FileTree {
@@ -47,6 +52,8 @@ impl FileTree {
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize path: {}", root.display()))?;
 
+        let filter = TreeFilter::new(&root);
+
         let root_name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -55,7 +62,7 @@ impl FileTree {
         let mut nodes = Vec::new();
 
         // Root node — always expanded with children loaded.
-        let child_count = Self::count_visible_children(&root);
+        let child_count = Self::count_visible_children(&root, &filter);
         nodes.push(TreeNode {
             path: root.clone(),
             name: root_name,
@@ -68,7 +75,7 @@ impl FileTree {
         });
 
         // Read and sort children.
-        let children = Self::read_children(&root, 1, 0)?;
+        let children = Self::read_children(&root, 1, 0, &filter)?;
         nodes.extend(children);
 
         Ok(Self {
@@ -77,6 +84,7 @@ impl FileTree {
             selected: 0,
             scroll: 0,
             viewport_height: usize::MAX,
+            filter,
         })
     }
 
@@ -177,7 +185,10 @@ impl FileTree {
         let depth = node.depth + 1;
         let parent_index = self.selected;
 
-        let children = Self::read_children(&dir_path, depth, parent_index)?;
+        // Discover nested .gitignore before reading children.
+        self.filter.add_nested_gitignore(&dir_path);
+
+        let children = Self::read_children(&dir_path, depth, parent_index, &self.filter)?;
 
         self.nodes[self.selected].expanded = true;
         self.nodes[self.selected].children_loaded = true;
@@ -248,6 +259,35 @@ impl FileTree {
         }
     }
 
+    /// Toggles visibility of gitignored files and rebuilds the tree.
+    ///
+    /// Collapses everything and reloads root children to reflect the new filter state.
+    pub fn toggle_show_ignored(&mut self) {
+        self.filter.toggle_show_ignored();
+        self.rebuild_tree();
+    }
+
+    /// Returns whether ignored files are currently shown.
+    pub fn show_ignored(&self) -> bool {
+        self.filter.show_ignored()
+    }
+
+    /// Rebuilds the tree from scratch: collapses all, reloads root children.
+    fn rebuild_tree(&mut self) {
+        let child_count = Self::count_visible_children(&self.root, &self.filter);
+        self.nodes.truncate(1);
+        self.nodes[0].kind = NodeKind::Directory { child_count };
+        self.nodes[0].expanded = true;
+        self.nodes[0].children_loaded = true;
+
+        if let Ok(children) = Self::read_children(&self.root, 1, 0, &self.filter) {
+            self.nodes.extend(children);
+        }
+
+        self.selected = 0;
+        self.scroll = 0;
+    }
+
     /// Keeps the selected index within the visible scroll window.
     fn adjust_scroll(&mut self) {
         if self.selected < self.scroll {
@@ -272,9 +312,14 @@ impl FileTree {
             .find(|&i| self.nodes[i].depth < target_depth)
     }
 
-    /// Reads the children of a directory, filtering hidden files and sorting
-    /// directories before files, alphabetically within each group.
-    fn read_children(dir: &Path, depth: usize, parent_index: usize) -> Result<Vec<TreeNode>> {
+    /// Reads the children of a directory, filtering gitignored files,
+    /// and sorting directories before files, alphabetically within each group.
+    fn read_children(
+        dir: &Path,
+        depth: usize,
+        parent_index: usize,
+        filter: &TreeFilter,
+    ) -> Result<Vec<TreeNode>> {
         let entries = std::fs::read_dir(dir)
             .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
 
@@ -284,14 +329,14 @@ impl FileTree {
         for entry in entries {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
-
-            // Skip hidden files.
-            if name.starts_with('.') {
-                continue;
-            }
-
             let path = entry.path();
             let metadata = entry.metadata()?;
+            let is_dir = metadata.is_dir();
+
+            // Skip gitignored entries.
+            if !filter.is_visible(&path, is_dir) {
+                continue;
+            }
 
             let node = if metadata.is_symlink() {
                 let target = std::fs::read_link(&path).unwrap_or_default();
@@ -305,8 +350,8 @@ impl FileTree {
                     git_status: None,
                     parent: Some(parent_index),
                 }
-            } else if metadata.is_dir() {
-                let child_count = Self::count_visible_children(&path);
+            } else if is_dir {
+                let child_count = Self::count_visible_children(&path, filter);
                 TreeNode {
                     path,
                     name: name.clone(),
@@ -333,7 +378,7 @@ impl FileTree {
                 }
             };
 
-            if metadata.is_dir() {
+            if is_dir {
                 dirs.push(node);
             } else {
                 files.push(node);
@@ -349,13 +394,16 @@ impl FileTree {
         Ok(dirs)
     }
 
-    /// Counts non-hidden entries in a directory (for `child_count`).
-    fn count_visible_children(dir: &Path) -> usize {
+    /// Counts visible entries in a directory (for `child_count`).
+    fn count_visible_children(dir: &Path, filter: &TreeFilter) -> usize {
         std::fs::read_dir(dir)
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                    .filter(|e| {
+                        let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                        filter.is_visible(&e.path(), is_dir)
+                    })
                     .count()
             })
             .unwrap_or(0)
@@ -392,8 +440,8 @@ mod tests {
     fn new_with_valid_directory() {
         let tmp = create_test_dir();
         let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
-        // root + 2 dirs + 2 files = 5 (hidden excluded)
-        assert_eq!(tree.nodes().len(), 5);
+        // root + 2 dirs + 3 files (.hidden, alpha.txt, gamma.rs) = 6
+        assert_eq!(tree.nodes().len(), 6);
     }
 
     #[test]
@@ -429,18 +477,13 @@ mod tests {
     }
 
     #[test]
-    fn hidden_files_excluded() {
+    fn dot_files_included() {
         let tmp = create_test_dir();
         let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
-        // Skip root node (index 0) — root is the project dir, always shown.
-        let hidden: Vec<&str> = tree.nodes()[1..]
-            .iter()
-            .filter(|n| n.name.starts_with('.'))
-            .map(|n| n.name.as_str())
-            .collect();
+        let names: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
         assert!(
-            hidden.is_empty(),
-            "hidden files should be excluded, found: {hidden:?}"
+            names.contains(&".hidden"),
+            "dot-files should be included, found: {names:?}"
         );
     }
 
@@ -485,13 +528,13 @@ mod tests {
             .collect();
         assert_eq!(dir_names, vec!["beta", "delta"]);
 
-        // Files: alpha.txt, gamma.rs (alphabetical)
+        // Files: .hidden, alpha.txt, gamma.rs (alphabetical)
         let file_names: Vec<&str> = children
             .iter()
             .filter(|n| matches!(n.kind, NodeKind::File { .. }))
             .map(|n| n.name.as_str())
             .collect();
-        assert_eq!(file_names, vec!["alpha.txt", "gamma.rs"]);
+        assert_eq!(file_names, vec![".hidden", "alpha.txt", "gamma.rs"]);
     }
 
     #[test]
@@ -558,11 +601,11 @@ mod tests {
     fn move_down_wraps_at_end() {
         let tmp = create_test_dir();
         let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
-        // 5 nodes (root + 2 dirs + 2 files), go to last then wrap
-        for _ in 0..4 {
+        // 6 nodes (root + 2 dirs + 3 files), go to last then wrap
+        for _ in 0..5 {
             tree.move_down();
         }
-        assert_eq!(tree.selected(), 4);
+        assert_eq!(tree.selected(), 5);
         tree.move_down();
         assert_eq!(tree.selected(), 0);
     }
@@ -584,7 +627,7 @@ mod tests {
         let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
         assert_eq!(tree.selected(), 0);
         tree.move_up();
-        assert_eq!(tree.selected(), 4); // last node
+        assert_eq!(tree.selected(), 5); // last node
     }
 
     #[test]
@@ -602,7 +645,7 @@ mod tests {
         let tmp = create_test_dir();
         let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
         tree.move_end();
-        assert_eq!(tree.selected(), 4);
+        assert_eq!(tree.selected(), 5);
     }
 
     #[test]
@@ -821,5 +864,185 @@ mod tests {
         tree.move_home();
         assert_eq!(tree.scroll(), 0);
         assert_eq!(tree.selected(), 0);
+    }
+
+    // --- Gitignore filter integration tests ---
+
+    /// Creates a temp directory with .git and .gitignore for filter tests:
+    /// root/
+    ///   .git/
+    ///   .gitignore  (contains "*.log")
+    ///   src/
+    ///     main.rs
+    ///   debug.log
+    ///   README.md
+    fn create_gitignore_test_dir() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("debug.log"), "log content").unwrap();
+        fs::write(root.join("README.md"), "# Readme").unwrap();
+
+        tmp
+    }
+
+    #[test]
+    fn new_shows_gitignored_files_by_default() {
+        let tmp = create_gitignore_test_dir();
+        let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let names: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&"debug.log"),
+            "gitignored file should be visible by default"
+        );
+        assert!(
+            names.contains(&"README.md"),
+            "non-ignored file should be visible"
+        );
+    }
+
+    #[test]
+    fn new_shows_dot_files() {
+        let tmp = create_gitignore_test_dir();
+        let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let names: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&".git"),
+            ".git should be visible, found: {names:?}"
+        );
+        assert!(
+            names.contains(&".gitignore"),
+            ".gitignore should be visible, found: {names:?}"
+        );
+    }
+
+    #[test]
+    fn toggle_hides_gitignored_files() {
+        let tmp = create_gitignore_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+
+        // Initially visible
+        let names_before: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(names_before.contains(&"debug.log"));
+
+        // Toggle to hide ignored
+        tree.toggle_show_ignored();
+        assert!(!tree.show_ignored());
+
+        let names_after: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            !names_after.contains(&"debug.log"),
+            "ignored file should be hidden after toggle"
+        );
+    }
+
+    #[test]
+    fn toggle_hides_node_modules() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::create_dir(tmp.path().join("node_modules")).unwrap();
+        fs::write(tmp.path().join("index.js"), "").unwrap();
+
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.toggle_show_ignored();
+
+        let names: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            !names.contains(&"node_modules"),
+            "node_modules should be hidden after toggle"
+        );
+    }
+
+    #[test]
+    fn toggle_hides_target() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::create_dir(tmp.path().join("target")).unwrap();
+        fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.toggle_show_ignored();
+
+        let names: Vec<&str> = tree.nodes()[1..].iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            !names.contains(&"target"),
+            "target should be hidden after toggle"
+        );
+    }
+
+    #[test]
+    fn expand_respects_gitignore_when_toggled() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "*.bak\n").unwrap();
+        let sub = root.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("keep.txt"), "").unwrap();
+        fs::write(sub.join("remove.bak"), "").unwrap();
+
+        let mut tree = FileTree::new(root.to_path_buf()).unwrap();
+        // Toggle to hide ignored
+        tree.toggle_show_ignored();
+        // Navigate to "sub" directory
+        let sub_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "sub")
+            .expect("sub should exist");
+        for _ in 0..sub_idx {
+            tree.move_down();
+        }
+        tree.expand().unwrap();
+
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&"keep.txt"),
+            "non-ignored child should be visible"
+        );
+        assert!(
+            !names.contains(&"remove.bak"),
+            "ignored child should be hidden"
+        );
+    }
+
+    #[test]
+    fn nested_gitignore_in_expand_when_toggled() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        let sub = root.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join(".gitignore"), "secret.txt\n").unwrap();
+        fs::write(sub.join("public.txt"), "").unwrap();
+        fs::write(sub.join("secret.txt"), "").unwrap();
+
+        let mut tree = FileTree::new(root.to_path_buf()).unwrap();
+        // Toggle to hide ignored
+        tree.toggle_show_ignored();
+        // Navigate to "sub" directory
+        let sub_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "sub")
+            .expect("sub should exist");
+        for _ in 0..sub_idx {
+            tree.move_down();
+        }
+        tree.expand().unwrap();
+
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&"public.txt"),
+            "non-ignored child should be visible"
+        );
+        assert!(
+            !names.contains(&"secret.txt"),
+            "file ignored by nested .gitignore should be hidden"
+        );
     }
 }

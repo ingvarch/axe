@@ -54,6 +54,8 @@ pub enum Command {
     TreeHome,
     /// Jump to last item in tree.
     TreeEnd,
+    /// Toggle visibility of gitignored files in the file tree.
+    ToggleIgnored,
 }
 
 #[cfg(test)]
@@ -88,6 +90,7 @@ mod tests {
             Command::TreeCollapseOrParent,
             Command::TreeHome,
             Command::TreeEnd,
+            Command::ToggleIgnored,
         ];
 
         for (i, a) in variants.iter().enumerate() {

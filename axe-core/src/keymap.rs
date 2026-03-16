@@ -65,6 +65,11 @@ impl KeymapResolver {
             KeyCode::Char('z'),
             Command::ZoomPanel,
         );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('g'),
+            Command::ToggleIgnored,
+        );
 
         resolver
     }
@@ -187,5 +192,12 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::ZoomPanel));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_g_toggle_ignored() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::ToggleIgnored));
     }
 }

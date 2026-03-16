@@ -42,8 +42,8 @@ pub struct ResizeModeState {
 /// Identifies which panel currently has keyboard focus.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FocusTarget {
-    Tree,
     #[default]
+    Tree,
     Editor,
     Terminal(usize),
 }
@@ -251,6 +251,11 @@ impl AppState {
             Command::TreeEnd => {
                 if let Some(ref mut tree) = self.file_tree {
                     tree.move_end();
+                }
+            }
+            Command::ToggleIgnored => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.toggle_show_ignored();
                 }
             }
         }
@@ -512,8 +517,8 @@ mod tests {
     // --- FocusTarget tests ---
 
     #[test]
-    fn focus_target_default_is_editor() {
-        assert_eq!(FocusTarget::default(), FocusTarget::Editor);
+    fn focus_target_default_is_tree() {
+        assert_eq!(FocusTarget::default(), FocusTarget::Tree);
     }
 
     #[test]
@@ -538,9 +543,9 @@ mod tests {
     }
 
     #[test]
-    fn app_state_default_focus_is_editor() {
+    fn app_state_default_focus_is_tree() {
         let app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     // --- Execute command tests ---
@@ -555,25 +560,25 @@ mod tests {
     #[test]
     fn execute_focus_next_cycles_focus() {
         let mut app = AppState::new();
+        assert_eq!(app.focus, FocusTarget::Tree);
+        app.execute(Command::FocusNext);
         assert_eq!(app.focus, FocusTarget::Editor);
         app.execute(Command::FocusNext);
         assert_eq!(app.focus, FocusTarget::Terminal(0));
         app.execute(Command::FocusNext);
         assert_eq!(app.focus, FocusTarget::Tree);
-        app.execute(Command::FocusNext);
-        assert_eq!(app.focus, FocusTarget::Editor);
     }
 
     #[test]
     fn execute_focus_prev_cycles_focus() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
-        app.execute(Command::FocusPrev);
         assert_eq!(app.focus, FocusTarget::Tree);
         app.execute(Command::FocusPrev);
         assert_eq!(app.focus, FocusTarget::Terminal(0));
         app.execute(Command::FocusPrev);
         assert_eq!(app.focus, FocusTarget::Editor);
+        app.execute(Command::FocusPrev);
+        assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     #[test]
@@ -694,17 +699,17 @@ mod tests {
     #[test]
     fn handle_tab_cycles_focus_forward() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.focus, FocusTarget::Tree);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Terminal(0));
+        assert_eq!(app.focus, FocusTarget::Editor);
     }
 
     #[test]
     fn handle_shift_tab_cycles_focus_backward() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
-        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         assert_eq!(app.focus, FocusTarget::Tree);
+        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
     #[test]
@@ -781,7 +786,7 @@ mod tests {
         app.show_help = true;
         // Tab should not cycle focus while help is open
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     #[test]
@@ -1198,7 +1203,7 @@ mod tests {
     #[test]
     fn mouse_click_in_tree_focuses_tree() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        app.focus = FocusTarget::Editor;
         // tree_width_pct = 20, screen_width = 100 → tree occupies cols 0..20
         // Click at col 5 (well inside tree area)
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
@@ -1219,7 +1224,7 @@ mod tests {
     #[test]
     fn mouse_click_in_terminal_focuses_terminal() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        app.focus = FocusTarget::Editor;
         // editor_height_pct = 70, main_height = 29, border_y = 20
         // Click at col 60, row 25 (below the horizontal border)
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 60, 25);
@@ -1252,11 +1257,11 @@ mod tests {
     #[test]
     fn mouse_click_on_border_does_not_change_focus() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.focus, FocusTarget::Tree);
         // Click right on the vertical border → starts drag, does NOT change focus
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 20, 5);
         app.handle_mouse_event(evt, 100, 30);
-        assert_eq!(app.focus, FocusTarget::Editor);
+        assert_eq!(app.focus, FocusTarget::Tree);
         assert_eq!(app.mouse_drag.border, Some(DragBorder::Vertical));
     }
 
@@ -1326,7 +1331,7 @@ mod tests {
     #[test]
     fn mouse_right_click_does_not_change_focus() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Editor);
+        app.focus = FocusTarget::Editor;
         // Right-click in tree area should not change focus
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Right), 5, 5);
         app.handle_mouse_event(evt, 100, 30);
@@ -1414,5 +1419,23 @@ mod tests {
         let mut app = app_with_tree_focused();
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    // --- Toggle ignored tests ---
+
+    #[test]
+    fn toggle_ignored_toggles_filter() {
+        let mut app = app_with_tree_focused();
+        assert!(app.file_tree.as_ref().unwrap().show_ignored());
+        app.execute(Command::ToggleIgnored);
+        assert!(!app.file_tree.as_ref().unwrap().show_ignored());
+    }
+
+    #[test]
+    fn ctrl_g_toggles_ignored() {
+        let mut app = app_with_tree_focused();
+        assert!(app.file_tree.as_ref().unwrap().show_ignored());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(!app.file_tree.as_ref().unwrap().show_ignored());
     }
 }
