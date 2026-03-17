@@ -70,6 +70,14 @@ pub enum Command {
     TreeDelete,
     /// Toggle file type icons in the tree panel.
     ToggleIcons,
+    /// Create a new tab in the focused panel (terminal only for now).
+    NewTab,
+    /// Close the active tab in the focused panel (editor buffer or terminal tab).
+    CloseTab,
+    /// Switch to the next tab in the focused panel (editor buffer or terminal tab).
+    NextTab,
+    /// Switch to the previous tab in the focused panel (editor buffer or terminal tab).
+    PrevTab,
     /// Create a new terminal tab.
     NewTerminalTab,
     /// Close the active terminal tab (checks if process is alive first).
@@ -191,6 +199,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unified_tab_commands_exist() {
+        // These unified commands dispatch based on focus context.
+        let cmds = vec![
+            Command::NewTab,
+            Command::CloseTab,
+            Command::NextTab,
+            Command::PrevTab,
+        ];
+        for cmd in &cmds {
+            assert_ne!(
+                cmd,
+                &Command::Quit,
+                "Unified tab commands should be distinct from Quit"
+            );
+        }
+    }
+
+    #[test]
     fn command_variants_are_distinct() {
         let variants: Vec<Command> = vec![
             Command::Quit,
@@ -225,6 +251,10 @@ mod tests {
             Command::TreeRename,
             Command::TreeDelete,
             Command::ToggleIcons,
+            Command::NewTab,
+            Command::CloseTab,
+            Command::NextTab,
+            Command::PrevTab,
             Command::NewTerminalTab,
             Command::CloseTerminalTab,
             Command::ForceCloseTerminalTab,

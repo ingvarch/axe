@@ -678,6 +678,33 @@ impl AppState {
                     tree.toggle_show_icons();
                 }
             }
+            // Unified tab commands — dispatch based on current focus.
+            Command::NewTab => {
+                if matches!(self.focus, FocusTarget::Terminal(_)) {
+                    self.new_terminal_tab();
+                }
+            }
+            Command::CloseTab => match self.focus {
+                FocusTarget::Editor => self.execute(Command::CloseBuffer),
+                FocusTarget::Terminal(_) => self.execute(Command::CloseTerminalTab),
+                FocusTarget::Tree => {}
+            },
+            Command::NextTab => match self.focus {
+                FocusTarget::Editor => {
+                    self.search = None;
+                    self.buffer_manager.next_buffer();
+                }
+                FocusTarget::Terminal(_) => self.next_terminal_tab(),
+                FocusTarget::Tree => {}
+            },
+            Command::PrevTab => match self.focus {
+                FocusTarget::Editor => {
+                    self.search = None;
+                    self.buffer_manager.prev_buffer();
+                }
+                FocusTarget::Terminal(_) => self.prev_terminal_tab(),
+                FocusTarget::Tree => {}
+            },
             Command::NewTerminalTab => self.new_terminal_tab(),
             Command::CloseTerminalTab => {
                 if let Some(ref mut mgr) = self.terminal_manager {
@@ -1541,6 +1568,34 @@ impl AppState {
         if let Some((_, created)) = &self.status_message {
             if created.elapsed() >= STATUS_MESSAGE_DURATION {
                 self.status_message = None;
+            }
+        }
+    }
+
+    /// Switches to the next terminal tab, wrapping from last to first.
+    fn next_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let count = mgr.tab_count();
+            if count > 0 {
+                let next = (mgr.active_index() + 1) % count;
+                mgr.activate_tab(next);
+                self.focus = FocusTarget::Terminal(next);
+            }
+        }
+    }
+
+    /// Switches to the previous terminal tab, wrapping from first to last.
+    fn prev_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let count = mgr.tab_count();
+            if count > 0 {
+                let prev = if mgr.active_index() == 0 {
+                    count - 1
+                } else {
+                    mgr.active_index() - 1
+                };
+                mgr.activate_tab(prev);
+                self.focus = FocusTarget::Terminal(prev);
             }
         }
     }
@@ -4191,5 +4246,108 @@ mod tests {
             app.tab_bar_hit(10, 20).is_none(),
             "should return None when area not set"
         );
+    }
+
+    // --- Unified tab commands ---
+
+    #[test]
+    fn close_tab_closes_buffer_when_editor_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "content").unwrap();
+        app.buffer_manager.open_file(tmp.path()).unwrap();
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+
+        app.execute(Command::CloseTab);
+        assert_eq!(app.buffer_manager.buffer_count(), 0);
+    }
+
+    #[test]
+    fn close_tab_shows_confirmation_for_live_terminal() {
+        let mut app = app_with_terminal_tab();
+        app.focus = FocusTarget::Terminal(0);
+
+        app.execute(Command::CloseTab);
+        // Live terminal should trigger confirmation dialog.
+        assert!(
+            app.confirm_close_terminal_tab,
+            "CloseTab on live terminal should show confirmation"
+        );
+    }
+
+    #[test]
+    fn next_tab_cycles_editor_buffers_when_editor_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let tmp1 = tempfile::NamedTempFile::new().unwrap();
+        let tmp2 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp1.path(), "a").unwrap();
+        std::fs::write(tmp2.path(), "b").unwrap();
+        app.buffer_manager.open_file(tmp1.path()).unwrap();
+        app.buffer_manager.open_file(tmp2.path()).unwrap();
+        assert_eq!(app.buffer_manager.active_index(), 1);
+
+        app.execute(Command::NextTab);
+        assert_eq!(app.buffer_manager.active_index(), 0);
+    }
+
+    #[test]
+    fn prev_tab_cycles_editor_buffers_when_editor_focused() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        let tmp1 = tempfile::NamedTempFile::new().unwrap();
+        let tmp2 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp1.path(), "a").unwrap();
+        std::fs::write(tmp2.path(), "b").unwrap();
+        app.buffer_manager.open_file(tmp1.path()).unwrap();
+        app.buffer_manager.open_file(tmp2.path()).unwrap();
+        assert_eq!(app.buffer_manager.active_index(), 1);
+
+        app.execute(Command::PrevTab);
+        assert_eq!(app.buffer_manager.active_index(), 0);
+    }
+
+    #[test]
+    fn next_tab_cycles_terminal_tabs_when_terminal_focused() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.activate_tab(0);
+        app.terminal_manager = Some(mgr);
+        app.focus = FocusTarget::Terminal(0);
+
+        app.execute(Command::NextTab);
+        assert_eq!(app.focus, FocusTarget::Terminal(1));
+    }
+
+    #[test]
+    fn prev_tab_wraps_terminal_tabs_when_terminal_focused() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.activate_tab(0);
+        app.terminal_manager = Some(mgr);
+        app.focus = FocusTarget::Terminal(0);
+
+        app.execute(Command::PrevTab);
+        assert_eq!(app.focus, FocusTarget::Terminal(1));
+    }
+
+    #[test]
+    fn new_tab_creates_terminal_when_terminal_focused() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        app.focus = FocusTarget::Terminal(0);
+
+        app.execute(Command::NewTab);
+        assert_eq!(app.terminal_manager.as_ref().unwrap().tab_count(), 2);
     }
 }

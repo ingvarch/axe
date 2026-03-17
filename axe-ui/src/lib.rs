@@ -211,10 +211,14 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("r", "Rename"),
     ("d", "Delete"),
     ("", ""),
+    ("--- Tabs ---", ""),
+    ("Alt+T", "New tab (terminal)"),
+    ("Alt+W / Ctrl+W", "Close tab"),
+    ("Alt+]/[", "Next/prev tab"),
+    ("Alt+1-9", "Terminal tab N"),
+    ("", ""),
     ("--- Editor ---", ""),
     ("Ctrl+F", "Find in file"),
-    ("Alt+]/[", "Next/prev buffer"),
-    ("Ctrl+W", "Close buffer"),
     ("Shift+Arrows", "Select text"),
     ("Ctrl+A", "Select all"),
     ("Ctrl+C", "Copy"),
@@ -226,9 +230,6 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"),
     ("", ""),
     ("--- Terminal ---", ""),
-    ("Alt+T", "New terminal tab"),
-    ("Alt+W", "Close terminal tab"),
-    ("Alt+1-9", "Switch to tab N"),
     ("Shift+PgUp", "Scroll up"),
     ("Shift+PgDn", "Scroll down"),
     ("Shift+Home", "Scroll to top"),
@@ -2762,10 +2763,10 @@ mod tests {
 
     #[test]
     fn help_lines_contain_tab_keybindings() {
-        let has_next_buffer = HELP_LINES.iter().any(|(k, _)| *k == "Alt+]/[");
-        let has_close_buffer = HELP_LINES.iter().any(|(k, _)| *k == "Ctrl+W");
-        assert!(has_next_buffer, "expected 'Alt+]/[' in HELP_LINES");
-        assert!(has_close_buffer, "expected 'Ctrl+W' in HELP_LINES");
+        let has_next_tab = HELP_LINES.iter().any(|(k, _)| *k == "Alt+]/[");
+        let has_close_tab = HELP_LINES.iter().any(|(k, _)| *k == "Alt+W / Ctrl+W");
+        assert!(has_next_tab, "expected 'Alt+]/[' in HELP_LINES");
+        assert!(has_close_tab, "expected 'Alt+W / Ctrl+W' in HELP_LINES");
     }
 
     #[test]

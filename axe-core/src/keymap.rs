@@ -140,6 +140,10 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "close_buffer" => Some(Command::CloseBuffer),
         "next_buffer" => Some(Command::NextBuffer),
         "prev_buffer" => Some(Command::PrevBuffer),
+        "new_tab" => Some(Command::NewTab),
+        "close_tab" => Some(Command::CloseTab),
+        "next_tab" => Some(Command::NextTab),
+        "prev_tab" => Some(Command::PrevTab),
         "new_terminal_tab" => Some(Command::NewTerminalTab),
         "close_terminal_tab" => Some(Command::CloseTerminalTab),
         "force_close_terminal_tab" => Some(Command::ForceCloseTerminalTab),
@@ -289,28 +293,14 @@ impl KeymapResolver {
             Command::EditorFind,
         );
 
-        // Buffer tab management — Alt+] / Alt+[ to avoid terminal emulator conflicts
+        // Unified tab management — same hotkeys work in both Editor and Terminal
+        // based on current focus. Alt+] / Alt+[ avoids terminal emulator conflicts
         // (Ctrl+Tab is intercepted by many terminals like Rio, iTerm2, etc.)
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char(']'), Command::NextBuffer);
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('['), Command::PrevBuffer);
-        resolver.bind(
-            KeyModifiers::CONTROL,
-            KeyCode::Char('w'),
-            Command::CloseBuffer,
-        );
-
-        // Terminal tab management — using Alt to avoid Ctrl+Shift unreliability
-        // in terminal emulators (many report Ctrl+Shift+T as plain Ctrl+T).
-        resolver.bind(
-            KeyModifiers::ALT,
-            KeyCode::Char('t'),
-            Command::NewTerminalTab,
-        );
-        resolver.bind(
-            KeyModifiers::ALT,
-            KeyCode::Char('w'),
-            Command::CloseTerminalTab,
-        );
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char(']'), Command::NextTab);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('['), Command::PrevTab);
+        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('w'), Command::CloseTab);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('t'), Command::NewTab);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('w'), Command::CloseTab);
 
         // Terminal scrollback navigation.
         resolver.bind(
@@ -535,19 +525,8 @@ mod tests {
         assert_eq!(resolver.resolve(&key), Some(Command::ToggleIcons));
     }
 
-    #[test]
-    fn default_bindings_alt_t_new_terminal_tab() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT);
-        assert_eq!(resolver.resolve(&key), Some(Command::NewTerminalTab));
-    }
-
-    #[test]
-    fn default_bindings_alt_w_close_terminal_tab() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT);
-        assert_eq!(resolver.resolve(&key), Some(Command::CloseTerminalTab));
-    }
+    // Alt+T and Alt+W are now bound to unified NewTab/CloseTab (tested above).
+    // Legacy NewTerminalTab/CloseTerminalTab are still available via command_from_str.
 
     #[test]
     fn default_bindings_alt_1_activates_terminal_tab_0() {
@@ -635,26 +614,8 @@ mod tests {
         assert_eq!(resolver.resolve(&key), Some(Command::EditorFind));
     }
 
-    #[test]
-    fn default_bindings_alt_bracket_right_next_buffer() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT);
-        assert_eq!(resolver.resolve(&key), Some(Command::NextBuffer));
-    }
-
-    #[test]
-    fn default_bindings_alt_bracket_left_prev_buffer() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::ALT);
-        assert_eq!(resolver.resolve(&key), Some(Command::PrevBuffer));
-    }
-
-    #[test]
-    fn default_bindings_ctrl_w_close_buffer() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
-        assert_eq!(resolver.resolve(&key), Some(Command::CloseBuffer));
-    }
+    // Alt+]/[ and Ctrl+W are now bound to unified NextTab/PrevTab/CloseTab (tested above).
+    // Legacy NextBuffer/PrevBuffer/CloseBuffer are still available via command_from_str.
 
     #[test]
     fn default_bindings_alt_5_activates_terminal_tab_4() {
@@ -664,6 +625,63 @@ mod tests {
             resolver.resolve(&key),
             Some(Command::ActivateTerminalTab(4))
         );
+    }
+
+    // --- Unified tab command bindings ---
+
+    #[test]
+    fn default_bindings_alt_t_new_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::NewTab));
+    }
+
+    #[test]
+    fn default_bindings_alt_w_close_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::CloseTab));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_w_close_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::CloseTab));
+    }
+
+    #[test]
+    fn default_bindings_alt_bracket_right_next_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::NextTab));
+    }
+
+    #[test]
+    fn default_bindings_alt_bracket_left_prev_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::PrevTab));
+    }
+
+    #[test]
+    fn command_from_str_new_tab() {
+        assert_eq!(command_from_str("new_tab"), Some(Command::NewTab));
+    }
+
+    #[test]
+    fn command_from_str_close_tab() {
+        assert_eq!(command_from_str("close_tab"), Some(Command::CloseTab));
+    }
+
+    #[test]
+    fn command_from_str_next_tab() {
+        assert_eq!(command_from_str("next_tab"), Some(Command::NextTab));
+    }
+
+    #[test]
+    fn command_from_str_prev_tab() {
+        assert_eq!(command_from_str("prev_tab"), Some(Command::PrevTab));
     }
 
     // --- Key combo parsing ---
