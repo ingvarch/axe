@@ -173,6 +173,19 @@ impl FileTree {
         self.adjust_scroll();
     }
 
+    /// Selects the node at the given index directly.
+    ///
+    /// Returns `true` if the selection changed, `false` if out of bounds.
+    pub fn select(&mut self, index: usize) -> bool {
+        if index < self.nodes.len() {
+            self.selected = index;
+            self.adjust_scroll();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Jumps selection to the first item and resets scroll.
     pub fn move_home(&mut self) {
         self.selected = 0;
@@ -867,6 +880,37 @@ mod tests {
         ));
         tree.move_down(); // first child: "beta" dir
         assert_eq!(tree.selected_node().unwrap().name, "beta");
+    }
+
+    // --- Direct selection tests ---
+
+    #[test]
+    fn select_valid_index_changes_selected() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.selected(), 0);
+        assert!(tree.select(2));
+        assert_eq!(tree.selected(), 2);
+    }
+
+    #[test]
+    fn select_out_of_bounds_returns_false() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.select(1);
+        assert!(!tree.select(999));
+        assert_eq!(tree.selected(), 1); // unchanged
+    }
+
+    #[test]
+    fn select_adjusts_scroll() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(2); // only 2 visible rows
+        assert!(tree.select(4)); // select node beyond viewport
+        assert_eq!(tree.selected(), 4);
+        // scroll should have adjusted so selected is visible
+        assert!(tree.scroll() + 2 > 4);
     }
 
     // --- Expand/collapse tests ---

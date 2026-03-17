@@ -131,6 +131,11 @@ pub struct AppState {
     ///
     /// Cleared automatically after `STATUS_MESSAGE_DURATION` elapses.
     pub status_message: Option<(String, Instant)>,
+    /// Tree panel inner area in screen coordinates (x, y, width, height).
+    ///
+    /// Updated each frame from `tree_inner_rect()` in main.rs.
+    /// Used for converting mouse screen coordinates to tree node indices.
+    pub tree_inner_area: Option<(u16, u16, u16, u16)>,
     /// Editor content area in screen coordinates (x, y, width, height).
     ///
     /// Updated each frame from `editor_inner_rect()` in main.rs.
@@ -186,6 +191,7 @@ impl AppState {
             last_terminal_rows: DEFAULT_TERMINAL_ROWS,
             terminal_grid_area: None,
             status_message: None,
+            tree_inner_area: None,
             editor_inner_area: None,
             editor_tab_bar_area: None,
             last_edit_time: None,
@@ -1072,6 +1078,37 @@ impl AppState {
                     }
                 }
 
+                // IMPACT ANALYSIS — Tree item mouse click
+                // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
+                // Children: FileTree::select() changes selection, Command::OpenFile opens file,
+                //           FileTree::toggle() expands/collapses directory.
+                // Siblings: tree_inner_area (must be set by main.rs each frame),
+                //           TreeAction (active rename/create should not be interrupted).
+                // Risk: None — select + toggle/open are safe, idempotent operations.
+
+                // Tree item click — select and open/toggle.
+                if let Some(node_idx) = self.screen_to_tree_node_index(col, row) {
+                    if let Some(ref mut tree) = self.file_tree {
+                        tree.select(node_idx);
+                        if let Some(node) = tree.selected_node() {
+                            match node.kind {
+                                NodeKind::File { .. } => {
+                                    let path = node.path.clone();
+                                    self.execute(Command::OpenFile(path));
+                                }
+                                NodeKind::Directory { .. } => {
+                                    if let Err(e) = tree.toggle() {
+                                        log::warn!("Failed to toggle directory: {e}");
+                                    }
+                                }
+                                NodeKind::Symlink { .. } => {}
+                            }
+                        }
+                    }
+                    self.focus = FocusTarget::Tree;
+                    return;
+                }
+
                 // IMPACT ANALYSIS — Editor mouse text selection (Down/Drag/Up)
                 // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
                 // Children: EditorBuffer cursor/selection state.
@@ -1566,6 +1603,32 @@ impl AppState {
             Line(grid_row - display_offset),
             Column(grid_col),
         ))
+    }
+
+    // IMPACT ANALYSIS — screen_to_tree_node_index
+    // Parents: handle_mouse_event() calls this for Down events to detect tree item clicks.
+    // Children: None — pure conversion function returning Option<usize>.
+    // Siblings: tree_inner_area (must be set by main.rs each frame),
+    //           file_tree scroll offset (used to convert screen row to node index).
+    // Risk: None — stateless helper, cannot corrupt state.
+
+    /// Converts screen coordinates to a tree node index.
+    ///
+    /// Returns `None` if the coordinates are outside the tree inner area,
+    /// no tree is loaded, or the click is below the last visible node.
+    fn screen_to_tree_node_index(&self, col: u16, row: u16) -> Option<usize> {
+        let (tx, ty, _tw, th) = self.tree_inner_area?;
+        let tree = self.file_tree.as_ref()?;
+        if col < tx || row < ty || row >= ty + th {
+            return None;
+        }
+        let relative_row = (row - ty) as usize;
+        let node_index = tree.scroll() + relative_row;
+        if node_index < tree.visible_nodes().len() {
+            Some(node_index)
+        } else {
+            None
+        }
     }
 
     // IMPACT ANALYSIS — copy_to_clipboard
@@ -2905,6 +2968,127 @@ mod tests {
                 .has_selection(),
             "Selection should be cleared on click without drag"
         );
+    }
+
+    // --- Tree mouse click tests ---
+
+    #[test]
+    fn screen_to_tree_returns_none_without_area() {
+        let app = AppState::new();
+        assert!(app.screen_to_tree_node_index(5, 5).is_none());
+    }
+
+    #[test]
+    fn screen_to_tree_returns_correct_index() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "world").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        // tree: root(0), a.txt(1), b.txt(2) — 3 nodes
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click row 1 => node index scroll(0) + 1 = 1
+        assert_eq!(app.screen_to_tree_node_index(5, 1), Some(1));
+        // Click row 0 => node index 0
+        assert_eq!(app.screen_to_tree_node_index(5, 0), Some(0));
+    }
+
+    #[test]
+    fn screen_to_tree_returns_none_outside_area() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((5, 5, 20, 10));
+        // Click outside — above the area
+        assert!(app.screen_to_tree_node_index(10, 3).is_none());
+        // Click outside — left of the area
+        assert!(app.screen_to_tree_node_index(2, 7).is_none());
+    }
+
+    #[test]
+    fn screen_to_tree_respects_scroll() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for i in 0..20 {
+            std::fs::write(tmp.path().join(format!("file{i:02}.txt")), "x").unwrap();
+        }
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        // Scroll tree down
+        if let Some(ref mut tree) = app.file_tree {
+            tree.set_viewport_height(5);
+            for _ in 0..10 {
+                tree.move_down();
+            }
+        }
+        let scroll = app.file_tree.as_ref().unwrap().scroll();
+        app.tree_inner_area = Some((0, 0, 20, 5));
+        // Click row 0 => node at scroll + 0
+        assert_eq!(app.screen_to_tree_node_index(5, 0), Some(scroll));
+    }
+
+    #[test]
+    fn screen_to_tree_returns_none_below_last_node() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        // 2 nodes (root + a.txt), but area has 10 rows
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click row 5 => index 5, but only 2 nodes exist
+        assert!(app.screen_to_tree_node_index(5, 5).is_none());
+    }
+
+    #[test]
+    fn mouse_click_in_tree_selects_node() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "world").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click on row 2 => node index 2 (b.txt)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(app.file_tree.as_ref().unwrap().selected(), 2);
+        assert_eq!(app.focus, FocusTarget::Tree);
+    }
+
+    #[test]
+    fn mouse_click_on_file_opens_in_editor() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click on row 1 => a.txt (file node)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+    }
+
+    #[test]
+    fn mouse_click_on_directory_toggles_expand() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+        std::fs::write(tmp.path().join("subdir").join("f.txt"), "x").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Node 0 is root (expanded), node 1 is subdir (collapsed by default)
+        let was_expanded = app.file_tree.as_ref().unwrap().visible_nodes()[1].expanded;
+        assert!(!was_expanded, "subdir should start collapsed");
+        // Click on row 1 => subdir
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        app.handle_mouse_event(evt, 80, 30);
+        let is_expanded = app.file_tree.as_ref().unwrap().visible_nodes()[1].expanded;
+        assert!(is_expanded, "subdir should be expanded after click");
+    }
+
+    #[test]
+    fn mouse_click_outside_tree_nodes_no_change() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        let before = app.file_tree.as_ref().unwrap().selected();
+        // Click on row 5, but only 2 nodes exist
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(app.file_tree.as_ref().unwrap().selected(), before);
     }
 
     // --- BufferManager integration tests ---

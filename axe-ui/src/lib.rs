@@ -964,6 +964,58 @@ fn render_terminal_scrollbar(
     }
 }
 
+/// Returns the inner area of the file tree panel, if visible.
+///
+/// Used by the main loop to sync `AppState::tree_inner_area` each frame
+/// for mouse click detection on tree nodes.
+pub fn tree_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    if !app.show_tree {
+        return None;
+    }
+
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    if let Some(ref zoomed) = app.zoomed_panel {
+        if matches!(zoomed, FocusTarget::Tree) {
+            let vertical =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+            let block = panel_block(
+                " Files (zoomed) ",
+                &app.focus,
+                &FocusTarget::Tree,
+                &Theme::default(),
+                false,
+            );
+            return Some(block.inner(vertical[0]));
+        }
+        return None;
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let horizontal = Layout::horizontal([
+        Constraint::Percentage(layout_mgr.tree_width_pct),
+        Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+    ])
+    .split(main_area);
+
+    let tree_area = horizontal[0];
+    let block = panel_block(
+        " Files ",
+        &app.focus,
+        &FocusTarget::Tree,
+        &Theme::default(),
+        false,
+    );
+    Some(block.inner(tree_area))
+}
+
 /// Returns the inner area of the terminal panel (excluding tab bar), if terminal is visible.
 ///
 /// Used by the main loop to sync PTY size with panel dimensions.

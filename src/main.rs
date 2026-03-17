@@ -112,6 +112,14 @@ async fn main() -> Result<()> {
         // Sync panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);
 
+        // Update tree inner area for mouse click detection on tree nodes.
+        if let Some(tree_rect) = axe_ui::tree_inner_rect(&app, full_area) {
+            app.tree_inner_area =
+                Some((tree_rect.x, tree_rect.y, tree_rect.width, tree_rect.height));
+        } else {
+            app.tree_inner_area = None;
+        }
+
         // Update editor tab bar area for mouse click detection on tabs.
         if let Some(tab_rect) = axe_ui::editor_tab_bar_rect(&app, full_area) {
             app.editor_tab_bar_area =
