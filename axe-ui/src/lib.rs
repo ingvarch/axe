@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use axe_core::{AppState, FocusTarget, SearchState};
+use axe_core::{AppState, FileFinder, FocusTarget, SearchState};
 use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
@@ -228,6 +228,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Shift+Z", "Redo"),
     ("Ctrl+Y", "Redo"),
     ("Ctrl+S", "Save"),
+    ("Ctrl+P", "Open file finder"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -414,6 +415,190 @@ fn render_confirm_dialog(dialog: &axe_core::ConfirmDialog, frame: &mut Frame, th
         ..inner
     };
     frame.render_widget(paragraph, content_area);
+}
+
+/// Width of the file finder overlay as a percentage of screen width.
+const FILE_FINDER_WIDTH_PCT: u16 = 60;
+/// Height of the file finder overlay as a percentage of screen height.
+const FILE_FINDER_HEIGHT_PCT: u16 = 50;
+/// Minimum width of the file finder overlay.
+const FILE_FINDER_MIN_WIDTH: u16 = 30;
+/// Minimum height of the file finder overlay.
+const FILE_FINDER_MIN_HEIGHT: u16 = 8;
+
+/// Renders the fuzzy file finder overlay centered on the screen.
+fn render_file_finder(finder: &FileFinder, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = (area.width * FILE_FINDER_WIDTH_PCT / 100)
+        .max(FILE_FINDER_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * FILE_FINDER_HEIGHT_PCT / 100)
+        .max(FILE_FINDER_MIN_HEIGHT)
+        .min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Open File ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Input line: "> query|"
+    let input_line = Line::from(vec![
+        Span::styled(
+            " > ",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(&finder.query, Style::default().fg(theme.foreground)),
+        Span::styled("|", Style::default().fg(theme.panel_border_active)),
+    ]);
+    let input_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Separator
+    if inner.height > 1 {
+        let sep = Line::from(Span::styled(
+            "\u{2500}".repeat(inner.width as usize),
+            Style::default().fg(theme.panel_border),
+        ));
+        let sep_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(sep), sep_area);
+    }
+
+    // Results list
+    let results_start_y = inner.y + 2;
+    let results_height = inner.height.saturating_sub(3); // input + sep + footer
+    let max_visible = results_height as usize;
+
+    // Adjust scroll offset to keep selection visible.
+    let scroll_offset = if finder.selected < finder.scroll_offset {
+        finder.selected
+    } else if finder.selected >= finder.scroll_offset + max_visible {
+        finder
+            .selected
+            .saturating_sub(max_visible.saturating_sub(1))
+    } else {
+        finder.scroll_offset
+    };
+
+    for (i, filtered_item) in finder
+        .filtered
+        .iter()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .enumerate()
+    {
+        let item = &finder.items[filtered_item.index];
+        let is_selected = scroll_offset + i == finder.selected;
+        let row_y = results_start_y + i as u16;
+
+        let row_area = Rect {
+            y: row_y,
+            height: 1,
+            ..inner
+        };
+
+        // Build styled spans with match highlighting.
+        let prefix = if is_selected { " > " } else { "   " };
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default()
+                .fg(if is_selected {
+                    theme.panel_border_active
+                } else {
+                    theme.foreground
+                })
+                .add_modifier(if is_selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )];
+
+        let bg = if is_selected {
+            theme.tree_selection_bg
+        } else {
+            theme.overlay_bg
+        };
+
+        // Render path with matched character highlighting.
+        for (char_idx, ch) in item.relative_path.chars().enumerate() {
+            let is_match = filtered_item.match_indices.contains(&(char_idx as u32));
+            let style = if is_match {
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground).bg(bg)
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+
+        // Fill remaining width with background color for selected row.
+        if is_selected {
+            let used_width = prefix.len() + item.relative_path.chars().count();
+            let remaining = (inner.width as usize).saturating_sub(used_width);
+            if remaining > 0 {
+                spans.push(Span::styled(" ".repeat(remaining), Style::default().bg(bg)));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+    }
+
+    // Footer: file count
+    if inner.height > 2 {
+        let footer_y = inner.y + inner.height - 1;
+        let count_text = if finder.query.is_empty() {
+            format!(" {} files", finder.total_files())
+        } else {
+            format!(
+                " {} / {} files",
+                finder.filtered.len(),
+                finder.total_files()
+            )
+        };
+        let footer_line = Line::from(Span::styled(
+            count_text,
+            Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
 }
 
 /// Indentation width per nesting level in the file tree.
@@ -1475,6 +1660,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {
         render_confirm_dialog(dialog, frame, theme);
+    } else if let Some(ref finder) = app.file_finder {
+        render_file_finder(finder, frame, theme);
     } else if app.show_help {
         render_help_overlay(frame, theme);
     }

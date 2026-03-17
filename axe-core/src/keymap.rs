@@ -172,6 +172,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "search_prev_match" => Some(Command::SearchPrevMatch),
         "search_toggle_case" => Some(Command::SearchToggleCase),
         "search_toggle_regex" => Some(Command::SearchToggleRegex),
+        "open_file_finder" => Some(Command::OpenFileFinder),
         _ => None,
     }
 }
@@ -291,6 +292,11 @@ impl KeymapResolver {
             KeyModifiers::CONTROL,
             KeyCode::Char('f'),
             Command::EditorFind,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('p'),
+            Command::OpenFileFinder,
         );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal
@@ -830,6 +836,7 @@ mod tests {
         let warnings = resolver.apply_overrides(&bindings);
         assert!(warnings.is_empty());
         let event = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        // Override replaces the default OpenFileFinder binding with EditorFind.
         assert_eq!(resolver.resolve(&event), Some(Command::EditorFind));
     }
 
@@ -849,5 +856,22 @@ mod tests {
         bindings.insert("ctrl+q".to_string(), "nonexistent".to_string());
         let warnings = resolver.apply_overrides(&bindings);
         assert_eq!(warnings.len(), 1);
+    }
+
+    // --- File finder ---
+
+    #[test]
+    fn default_bindings_ctrl_p_opens_file_finder() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenFileFinder));
+    }
+
+    #[test]
+    fn command_from_str_open_file_finder() {
+        assert_eq!(
+            command_from_str("open_file_finder"),
+            Some(Command::OpenFileFinder)
+        );
     }
 }

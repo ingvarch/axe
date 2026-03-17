@@ -9,6 +9,7 @@ use alacritty_terminal::selection::SelectionType;
 use axe_tree::NodeKind;
 
 use crate::command::Command;
+use crate::file_finder::FileFinder;
 use crate::keymap::KeymapResolver;
 use crate::search::SearchState;
 
@@ -288,6 +289,8 @@ pub struct AppState {
     editor_selecting: bool,
     /// Active search state, if the search bar is open.
     pub search: Option<SearchState>,
+    /// Active file finder overlay state, if open.
+    pub file_finder: Option<FileFinder>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
     /// Whether a terminal text selection drag is currently in progress.
@@ -334,6 +337,7 @@ impl AppState {
             last_edit_time: None,
             clipboard: None,
             search: None,
+            file_finder: None,
             editor_selecting: false,
             last_tree_click: None,
             terminal_selecting: false,
@@ -482,6 +486,27 @@ impl AppState {
                     }
                 }
                 _ => {} // Consume all other keys
+            }
+            return;
+        }
+
+        // File finder overlay intercepts all keys when open.
+        if let Some(ref mut finder) = self.file_finder {
+            match key.code {
+                KeyCode::Esc => {
+                    self.file_finder = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(path) = finder.selected_path().map(|p| p.to_path_buf()) {
+                        self.file_finder = None;
+                        self.execute(Command::OpenFile(path));
+                    }
+                }
+                KeyCode::Up => finder.move_up(),
+                KeyCode::Down => finder.move_down(),
+                KeyCode::Backspace => finder.input_backspace(),
+                KeyCode::Char(c) => finder.input_char(c),
+                _ => {}
             }
             return;
         }
@@ -704,7 +729,13 @@ impl AppState {
             Command::ToggleTree => self.toggle_tree(),
             Command::ToggleTerminal => self.toggle_terminal(),
             Command::ShowHelp => self.show_help = !self.show_help,
-            Command::CloseOverlay => self.show_help = false,
+            Command::CloseOverlay => {
+                if self.file_finder.is_some() {
+                    self.file_finder = None;
+                } else {
+                    self.show_help = false;
+                }
+            }
             Command::EnterResizeMode => self.resize_mode.active = true,
             Command::ExitResizeMode => self.resize_mode.active = false,
             Command::ResizeLeft => self.resize_horizontal(-1),
@@ -804,6 +835,11 @@ impl AppState {
             Command::CancelTreeDelete => {
                 if let Some(ref mut tree) = self.file_tree {
                     tree.cancel_action();
+                }
+            }
+            Command::OpenFileFinder => {
+                if let Some(ref root) = self.project_root {
+                    self.file_finder = Some(FileFinder::new(root));
                 }
             }
             Command::ToggleIcons => {
@@ -4900,5 +4936,130 @@ mod tests {
         app.handle_mouse_event(down, 100, 30);
 
         assert!(app.terminal_selecting, "Single click should enable drag");
+    }
+
+    // --- File finder tests ---
+
+    #[test]
+    fn open_file_finder_sets_file_finder_with_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        assert!(app.file_finder.is_none());
+        app.execute(Command::OpenFileFinder);
+        assert!(app.file_finder.is_some());
+    }
+
+    #[test]
+    fn open_file_finder_noop_without_root() {
+        let mut app = AppState::new();
+        assert!(app.project_root.is_none());
+        app.execute(Command::OpenFileFinder);
+        assert!(app.file_finder.is_none());
+    }
+
+    #[test]
+    fn file_finder_esc_closes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.execute(Command::OpenFileFinder);
+        assert!(app.file_finder.is_some());
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.file_finder.is_none());
+    }
+
+    #[test]
+    fn file_finder_char_input_updates_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.execute(Command::OpenFileFinder);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().query, "t");
+    }
+
+    #[test]
+    fn file_finder_up_down_navigate() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.execute(Command::OpenFileFinder);
+        assert_eq!(app.file_finder.as_ref().unwrap().selected, 0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().selected, 1);
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn file_finder_enter_opens_file_and_closes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file_path = tmp.path().join("hello.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.execute(Command::OpenFileFinder);
+        assert!(app.file_finder.is_some());
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.file_finder.is_none(), "Finder should close after Enter");
+        assert!(
+            app.buffer_manager.active_buffer().is_some(),
+            "File should be opened in editor"
+        );
+    }
+
+    #[test]
+    fn file_finder_backspace_removes_query_char() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.execute(Command::OpenFileFinder);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().query, "ab");
+        app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().query, "a");
+    }
+
+    #[test]
+    fn close_overlay_closes_file_finder_first() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.show_help = true;
+        app.execute(Command::OpenFileFinder);
+        assert!(app.file_finder.is_some());
+        assert!(app.show_help);
+        app.execute(Command::CloseOverlay);
+        assert!(
+            app.file_finder.is_none(),
+            "CloseOverlay should close finder first"
+        );
+        assert!(app.show_help, "Help should remain open");
+        app.execute(Command::CloseOverlay);
+        assert!(!app.show_help, "Second CloseOverlay should close help");
+    }
+
+    #[test]
+    fn file_finder_keys_consumed_no_editor_side_effects() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let mut app = AppState::new();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.focus = FocusTarget::Editor;
+        app.execute(Command::OpenFileFinder);
+        // Typing should not insert into editor buffer.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.file_finder.as_ref().unwrap().query, "x");
+        // No buffer is open, so nothing should have been inserted.
+        assert!(app.buffer_manager.active_buffer().is_none());
     }
 }

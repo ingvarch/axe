@@ -196,6 +196,8 @@ pub enum Command {
     ConfirmTreeDelete,
     /// Cancel tree node deletion from the confirmation dialog.
     CancelTreeDelete,
+    /// Open the fuzzy file finder overlay (Ctrl+P).
+    OpenFileFinder,
 }
 
 #[cfg(test)]
@@ -321,6 +323,7 @@ mod tests {
             Command::SearchToggleRegex,
             Command::ConfirmTreeDelete,
             Command::CancelTreeDelete,
+            Command::OpenFileFinder,
         ];
 
         for (i, a) in variants.iter().enumerate() {

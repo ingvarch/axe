@@ -1,5 +1,6 @@
 pub mod app;
 pub mod command;
+pub mod file_finder;
 pub mod keymap;
 pub mod search;
 
@@ -9,6 +10,7 @@ pub use app::{
 };
 pub use axe_tree::FileTree;
 pub use command::Command;
+pub use file_finder::FileFinder;
 pub use keymap::KeymapResolver;
 pub use search::SearchState;
 

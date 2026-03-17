@@ -680,25 +680,32 @@ Auto-format the document on save using the LSP server.
 
 ## Phase 8: Project Search & Overlays
 
-### Task 8.1 — Fuzzy File Finder (Ctrl+P)
+### Task 8.1 — Fuzzy File Finder (Ctrl+P) [DONE]
 
 Quick file search across the project.
 
 **Acceptance criteria:**
-- `Ctrl+P` opens a centered overlay with a text input
-- Typing filters all project files by fuzzy matching
-- Results update in real-time as you type
-- Results show relative file path, with matched characters highlighted
-- `↑`/`↓` navigates results, `Enter` opens the selected file
-- `Esc` closes the finder
-- Results are ranked by match quality (best match first)
-- Maximum ~1000 files indexed (performance target: < 5ms per keystroke)
+- [x] `Ctrl+P` opens a centered overlay with a text input
+- [x] Typing filters all project files by fuzzy matching
+- [x] Results update in real-time as you type
+- [x] Results show relative file path, with matched characters highlighted
+- [x] `Up`/`Down` navigates results, `Enter` opens the selected file
+- [x] `Esc` closes the finder
+- [x] Results are ranked by match quality (best match first)
+- [x] Maximum ~1000 files indexed (performance target: < 5ms per keystroke)
 
 **Implementation details:**
-- Use `nucleo` crate for fuzzy matching (from Helix project)
+- Use `nucleo-matcher` crate for fuzzy matching (from Helix project)
 - Build file list using `ignore` crate (respects .gitignore)
-- File list built once at startup, refreshed on filesystem changes
+- File list built fresh each time Ctrl+P is pressed
 - Overlay: centered, 60% width, 50% height
+
+**Implementation notes:**
+- `axe-core/src/file_finder.rs`: `FileFinder` struct with `nucleo_matcher::pattern::Pattern` for synchronous matching
+- `Command::OpenFileFinder` variant + `Ctrl+P` default keybinding
+- Key interception in `handle_key_event()` after confirm_dialog, before resize mode
+- `CloseOverlay` closes file finder first, then help overlay
+- Rendering in `axe-ui`: centered overlay with input field, highlighted match chars, selection indicator, file count footer
 
 ---
 
