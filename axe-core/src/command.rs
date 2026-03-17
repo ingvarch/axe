@@ -200,6 +200,8 @@ pub enum Command {
     OpenFileFinder,
     /// Open the command palette overlay (Ctrl+Shift+P).
     OpenCommandPalette,
+    /// Open the project-wide search overlay (Ctrl+Shift+F).
+    OpenProjectSearch,
 }
 
 #[cfg(test)]
@@ -327,6 +329,7 @@ mod tests {
             Command::CancelTreeDelete,
             Command::OpenFileFinder,
             Command::OpenCommandPalette,
+            Command::OpenProjectSearch,
         ];
 
         for (i, a) in variants.iter().enumerate() {

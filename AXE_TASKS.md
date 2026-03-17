@@ -728,27 +728,27 @@ Search and execute any available command.
 
 ---
 
-### Task 8.3 — Project-Wide Search (Ctrl+Shift+F)
+### Task 8.3 — Project-Wide Search (Ctrl+Shift+F) [DONE]
 
 Search text across all project files.
 
 **Acceptance criteria:**
-- `Ctrl+Shift+F` opens a search overlay
-- Text input for search query
-- Results grouped by file, showing matching lines with context
-- Matched text highlighted in each result line
-- `Enter` on a result opens the file and jumps to the line
-- Case sensitivity toggle
-- Regex toggle
-- File pattern include/exclude (e.g., `*.rs`, `!*.test.*`)
-- Result count shown: "42 results in 7 files"
-- Search runs in background, results stream in progressively
+- [x] `Ctrl+Shift+F` opens a search overlay
+- [x] Text input for search query
+- [x] Results grouped by file, showing matching lines with context
+- [x] Matched text highlighted in each result line
+- [x] `Enter` on a result opens the file and jumps to the line
+- [x] Case sensitivity toggle
+- [x] Regex toggle
+- [x] File pattern include/exclude (e.g., `*.rs`, `!*.test.*`)
+- [x] Result count shown: "42 results in 7 files"
+- [x] Search runs in background, results stream in progressively
 
 **Implementation details:**
-- Use `grep` crate (ripgrep's search engine) for fast project-wide search
-- Run search in a spawned tokio task to keep UI responsive
-- Results sent as events: `SearchResult { path, line_number, line_text, match_range }`
-- Overlay shows results in a scrollable list
+- Uses `ignore` crate (respects .gitignore) + `regex` crate for matching
+- Search runs in `std::thread` with `mpsc` channel for results
+- Results drained each frame via `try_recv()` for progressive streaming
+- F2 as universal fallback keybinding (like F1 for command palette)
 
 ---
 

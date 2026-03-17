@@ -70,6 +70,7 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Tree: New Directory", Command::TreeCreateDir),
         ("Tree: Rename", Command::TreeRename),
         ("Tree: Delete", Command::TreeDelete),
+        ("Search: Find in Project", Command::OpenProjectSearch),
     ];
 
     entries
@@ -223,7 +224,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 30, "Expected 30 palette commands");
+        assert_eq!(p.items.len(), 31, "Expected 31 palette commands");
     }
 
     #[test]

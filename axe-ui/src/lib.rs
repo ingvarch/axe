@@ -9,7 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use axe_core::{AppState, CommandPalette, FileFinder, FocusTarget, SearchState};
+use axe_core::project_search::{DisplayItem, SearchField};
+use axe_core::{AppState, CommandPalette, FileFinder, FocusTarget, ProjectSearch, SearchState};
 use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
@@ -230,6 +231,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"),
     ("Ctrl+P", "Open file finder"),
     ("F1 / Ctrl+Shift+P", "Command palette"),
+    ("F2 / Ctrl+Shift+F", "Find in project"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -416,6 +418,307 @@ fn render_confirm_dialog(dialog: &axe_core::ConfirmDialog, frame: &mut Frame, th
         ..inner
     };
     frame.render_widget(paragraph, content_area);
+}
+
+/// Width of the project search overlay as a percentage of screen width.
+const PROJECT_SEARCH_WIDTH_PCT: u16 = 80;
+/// Height of the project search overlay as a percentage of screen height.
+const PROJECT_SEARCH_HEIGHT_PCT: u16 = 70;
+/// Minimum width of the project search overlay.
+const PROJECT_SEARCH_MIN_WIDTH: u16 = 50;
+/// Minimum height of the project search overlay.
+const PROJECT_SEARCH_MIN_HEIGHT: u16 = 12;
+
+/// Renders the project-wide search overlay centered on the screen.
+fn render_project_search(search: &ProjectSearch, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = (area.width * PROJECT_SEARCH_WIDTH_PCT / 100)
+        .max(PROJECT_SEARCH_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * PROJECT_SEARCH_HEIGHT_PCT / 100)
+        .max(PROJECT_SEARCH_MIN_HEIGHT)
+        .min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Project Search ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Row 1: query input with toggle indicators
+    let case_indicator = if search.case_sensitive {
+        Span::styled(
+            "[Aa]",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("[Aa]", Style::default().fg(theme.panel_border))
+    };
+
+    let regex_indicator = if search.regex_mode {
+        Span::styled(
+            "[.*]",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("[.*]", Style::default().fg(theme.panel_border))
+    };
+
+    let query_style = if search.active_field == SearchField::Query {
+        Style::default().fg(theme.foreground)
+    } else {
+        Style::default().fg(theme.panel_border)
+    };
+
+    let cursor = if search.active_field == SearchField::Query {
+        Span::styled("|", Style::default().fg(theme.panel_border_active))
+    } else {
+        Span::raw("")
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled(
+            " > ",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(&search.query, query_style),
+        cursor,
+        Span::raw(" "),
+        case_indicator,
+        Span::raw(" "),
+        regex_indicator,
+    ]);
+    let input_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Row 2: Include/Exclude fields
+    if inner.height > 1 {
+        let include_style = if search.active_field == SearchField::Include {
+            Style::default().fg(theme.foreground)
+        } else {
+            Style::default().fg(theme.panel_border)
+        };
+        let exclude_style = if search.active_field == SearchField::Exclude {
+            Style::default().fg(theme.foreground)
+        } else {
+            Style::default().fg(theme.panel_border)
+        };
+
+        let include_cursor = if search.active_field == SearchField::Include {
+            Span::styled("|", Style::default().fg(theme.panel_border_active))
+        } else {
+            Span::raw("")
+        };
+        let exclude_cursor = if search.active_field == SearchField::Exclude {
+            Span::styled("|", Style::default().fg(theme.panel_border_active))
+        } else {
+            Span::raw("")
+        };
+
+        let filter_line = Line::from(vec![
+            Span::styled(" Include: ", include_style),
+            Span::styled(&search.include_pattern, include_style),
+            include_cursor,
+            Span::raw("  "),
+            Span::styled("Exclude: ", exclude_style),
+            Span::styled(&search.exclude_pattern, exclude_style),
+            exclude_cursor,
+        ]);
+        let filter_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(filter_line), filter_area);
+    }
+
+    // Separator
+    if inner.height > 2 {
+        let sep = Line::from(Span::styled(
+            "\u{2500}".repeat(inner.width as usize),
+            Style::default().fg(theme.panel_border),
+        ));
+        let sep_area = Rect {
+            y: inner.y + 2,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(sep), sep_area);
+    }
+
+    // Results list
+    let results_start_y = inner.y + 3;
+    let results_height = inner.height.saturating_sub(4); // input + filter + sep + footer
+    let max_visible = results_height as usize;
+
+    // Adjust scroll offset to keep selection visible.
+    let scroll_offset = if search.selected < search.scroll_offset {
+        search.selected
+    } else if search.selected >= search.scroll_offset + max_visible {
+        search
+            .selected
+            .saturating_sub(max_visible.saturating_sub(1))
+    } else {
+        search.scroll_offset
+    };
+
+    for (i, display_item) in search
+        .display_items
+        .iter()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .enumerate()
+    {
+        let is_selected = scroll_offset + i == search.selected;
+        let row_y = results_start_y + i as u16;
+        let row_area = Rect {
+            y: row_y,
+            height: 1,
+            ..inner
+        };
+
+        let bg = if is_selected {
+            theme.tree_selection_bg
+        } else {
+            theme.overlay_bg
+        };
+
+        match display_item {
+            DisplayItem::FileHeader {
+                relative_path,
+                match_count,
+            } => {
+                let header_text = format!(" {} ({} matches)", relative_path, match_count);
+                let mut spans = vec![Span::styled(
+                    header_text,
+                    Style::default()
+                        .fg(theme.panel_border_active)
+                        .bg(bg)
+                        .add_modifier(Modifier::BOLD),
+                )];
+                // Fill remaining width.
+                if is_selected {
+                    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                    let remaining = (inner.width as usize).saturating_sub(used);
+                    if remaining > 0 {
+                        spans.push(Span::styled(" ".repeat(remaining), Style::default().bg(bg)));
+                    }
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+            }
+            DisplayItem::MatchLine { result_index } => {
+                if let Some(result) = search.results.get(*result_index) {
+                    let line_num = format!("   {:>4}: ", result.line_number);
+                    let mut spans = vec![Span::styled(
+                        line_num,
+                        Style::default().fg(theme.panel_border).bg(bg),
+                    )];
+
+                    // Render line text with match highlighting.
+                    let text = &result.line_text;
+                    let start = result.match_start.min(text.len());
+                    let end = result.match_end.min(text.len());
+
+                    if start > 0 {
+                        spans.push(Span::styled(
+                            &text[..start],
+                            Style::default().fg(theme.foreground).bg(bg),
+                        ));
+                    }
+                    if start < end {
+                        spans.push(Span::styled(
+                            &text[start..end],
+                            Style::default()
+                                .fg(theme.panel_border_active)
+                                .bg(bg)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if end < text.len() {
+                        spans.push(Span::styled(
+                            &text[end..],
+                            Style::default().fg(theme.foreground).bg(bg),
+                        ));
+                    }
+
+                    // Fill remaining width for selected row.
+                    if is_selected {
+                        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                        let remaining = (inner.width as usize).saturating_sub(used);
+                        if remaining > 0 {
+                            spans
+                                .push(Span::styled(" ".repeat(remaining), Style::default().bg(bg)));
+                        }
+                    }
+                    frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+                }
+            }
+        }
+    }
+
+    // Footer: result count or status
+    if inner.height > 3 {
+        let footer_y = inner.y + inner.height - 1;
+        let footer_text = if search.searching {
+            format!(
+                " Searching... ({} files, {} results)",
+                search.files_searched,
+                search.total_matches()
+            )
+        } else if search.results.is_empty() {
+            if search.query.is_empty() {
+                " Type to search".to_string()
+            } else {
+                " No results".to_string()
+            }
+        } else {
+            format!(
+                " {} results in {} files",
+                search.total_matches(),
+                search.files_with_matches
+            )
+        };
+        let footer_line = Line::from(Span::styled(
+            footer_text,
+            Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
 }
 
 /// Width of the file finder overlay as a percentage of screen width.
@@ -1863,6 +2166,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         render_confirm_dialog(dialog, frame, theme);
     } else if let Some(ref palette) = app.command_palette {
         render_command_palette(palette, frame, theme);
+    } else if let Some(ref search) = app.project_search {
+        render_project_search(search, frame, theme);
     } else if let Some(ref finder) = app.file_finder {
         render_file_finder(finder, frame, theme);
     } else if app.show_help {

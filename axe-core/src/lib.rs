@@ -4,6 +4,7 @@ pub mod command_palette;
 pub mod file_finder;
 pub mod fuzzy;
 pub mod keymap;
+pub mod project_search;
 pub mod search;
 
 pub use app::{
@@ -16,6 +17,7 @@ pub use command_palette::CommandPalette;
 pub use file_finder::FileFinder;
 pub use fuzzy::FilteredItem;
 pub use keymap::KeymapResolver;
+pub use project_search::ProjectSearch;
 pub use search::SearchState;
 
 /// Returns the crate version string from `Cargo.toml`.

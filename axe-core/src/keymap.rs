@@ -174,6 +174,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "search_toggle_regex" => Some(Command::SearchToggleRegex),
         "open_file_finder" => Some(Command::OpenFileFinder),
         "open_command_palette" => Some(Command::OpenCommandPalette),
+        "open_project_search" => Some(Command::OpenProjectSearch),
         _ => None,
     }
 }
@@ -360,6 +361,24 @@ impl KeymapResolver {
             KeyModifiers::NONE,
             KeyCode::F(1),
             Command::OpenCommandPalette,
+        );
+        // Ctrl+Shift+F: terminals without Kitty protocol report uppercase 'F'.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('F'),
+            Command::OpenProjectSearch,
+        );
+        // Ctrl+Shift+F: terminals with Kitty protocol report lowercase 'f' + SHIFT.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('f'),
+            Command::OpenProjectSearch,
+        );
+        // F2 as universal fallback for project search.
+        resolver.bind(
+            KeyModifiers::NONE,
+            KeyCode::F(2),
+            Command::OpenProjectSearch,
         );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal
@@ -982,6 +1001,41 @@ mod tests {
         assert_eq!(
             command_from_str("open_command_palette"),
             Some(Command::OpenCommandPalette)
+        );
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_f_opens_project_search() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenProjectSearch));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_lowercase_f_opens_project_search() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenProjectSearch));
+    }
+
+    #[test]
+    fn default_bindings_f2_opens_project_search() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenProjectSearch));
+    }
+
+    #[test]
+    fn command_from_str_open_project_search() {
+        assert_eq!(
+            command_from_str("open_project_search"),
+            Some(Command::OpenProjectSearch)
         );
     }
 

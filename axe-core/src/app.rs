@@ -12,6 +12,7 @@ use crate::command::Command;
 use crate::command_palette::CommandPalette;
 use crate::file_finder::FileFinder;
 use crate::keymap::KeymapResolver;
+use crate::project_search::ProjectSearch;
 use crate::search::SearchState;
 
 /// Default width of the file tree panel as a percentage of total width.
@@ -294,6 +295,8 @@ pub struct AppState {
     pub file_finder: Option<FileFinder>,
     /// Active command palette overlay state, if open.
     pub command_palette: Option<CommandPalette>,
+    /// Active project-wide search overlay state, if open.
+    pub project_search: Option<ProjectSearch>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
     /// Whether a terminal text selection drag is currently in progress.
@@ -342,6 +345,7 @@ impl AppState {
             search: None,
             file_finder: None,
             command_palette: None,
+            project_search: None,
             editor_selecting: false,
             last_tree_click: None,
             terminal_selecting: false,
@@ -435,6 +439,15 @@ impl AppState {
         }
     }
 
+    /// Drains results from the background project search thread.
+    ///
+    /// Call this each frame from the main loop to progressively populate results.
+    pub fn drain_project_search_results(&mut self) {
+        if let Some(ref mut ps) = self.project_search {
+            ps.drain_results();
+        }
+    }
+
     /// Converts a key event to bytes and writes them to the active terminal PTY.
     ///
     /// Reads the application cursor mode from the terminal state to produce the
@@ -510,6 +523,71 @@ impl AppState {
                 KeyCode::Down => palette.move_down(),
                 KeyCode::Backspace => palette.input_backspace(),
                 KeyCode::Char(c) => palette.input_char(c),
+                _ => {}
+            }
+            return;
+        }
+
+        // Project search overlay intercepts all keys when open.
+        if let Some(ref mut search) = self.project_search {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Esc) => {
+                    search.cancel_search();
+                    self.project_search = None;
+                }
+                (_, KeyCode::Enter) => {
+                    if let Some(result) = search.selected_result() {
+                        let path = result.absolute_path.clone();
+                        let line = result.line_number.saturating_sub(1);
+                        self.project_search = None;
+                        self.execute(Command::OpenFile(path));
+                        // Jump to the matching line.
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.cursor.row = line;
+                            buf.cursor.col = 0;
+                        }
+                    }
+                }
+                (_, KeyCode::Up) => search.move_up(),
+                (_, KeyCode::Down) => search.move_down(),
+                (_, KeyCode::Tab) => search.cycle_field(),
+                (m, KeyCode::Char('c')) if m.contains(KeyModifiers::ALT) => {
+                    search.toggle_case();
+                    if let Some(ref root) = self.project_root {
+                        let root = root.clone();
+                        // Re-borrow after root clone.
+                        if let Some(ref mut search) = self.project_search {
+                            search.start_search(&root);
+                        }
+                    }
+                }
+                (m, KeyCode::Char('r')) if m.contains(KeyModifiers::ALT) => {
+                    search.toggle_regex();
+                    if let Some(ref root) = self.project_root {
+                        let root = root.clone();
+                        if let Some(ref mut search) = self.project_search {
+                            search.start_search(&root);
+                        }
+                    }
+                }
+                (_, KeyCode::Backspace) => {
+                    search.input_backspace();
+                    if let Some(ref root) = self.project_root {
+                        let root = root.clone();
+                        if let Some(ref mut search) = self.project_search {
+                            search.start_search(&root);
+                        }
+                    }
+                }
+                (_, KeyCode::Char(c)) => {
+                    search.input_char(c);
+                    if let Some(ref root) = self.project_root {
+                        let root = root.clone();
+                        if let Some(ref mut search) = self.project_search {
+                            search.start_search(&root);
+                        }
+                    }
+                }
                 _ => {}
             }
             return;
@@ -757,6 +835,9 @@ impl AppState {
             Command::CloseOverlay => {
                 if self.command_palette.is_some() {
                     self.command_palette = None;
+                } else if let Some(ref mut ps) = self.project_search {
+                    ps.cancel_search();
+                    self.project_search = None;
                 } else if self.file_finder.is_some() {
                     self.file_finder = None;
                 } else {
@@ -871,6 +952,12 @@ impl AppState {
             }
             Command::OpenCommandPalette => {
                 self.command_palette = Some(CommandPalette::new(&self.keymap));
+            }
+            Command::OpenProjectSearch => {
+                if let Some(ref mut ps) = self.project_search {
+                    ps.cancel_search();
+                }
+                self.project_search = Some(ProjectSearch::new());
             }
             Command::ToggleIcons => {
                 if let Some(ref mut tree) = self.file_tree {
@@ -5187,5 +5274,90 @@ mod tests {
         // Third closes help.
         app.execute(Command::CloseOverlay);
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn open_project_search_creates_state() {
+        let mut app = AppState::new();
+        assert!(app.project_search.is_none());
+        app.execute(Command::OpenProjectSearch);
+        assert!(app.project_search.is_some());
+    }
+
+    #[test]
+    fn project_search_esc_closes() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenProjectSearch);
+        assert!(app.project_search.is_some());
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.project_search.is_none());
+    }
+
+    #[test]
+    fn close_overlay_priority_includes_project_search() {
+        let mut app = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.show_help = true;
+        app.execute(Command::OpenFileFinder);
+        app.execute(Command::OpenProjectSearch);
+
+        assert!(app.project_search.is_some());
+        assert!(app.file_finder.is_some());
+
+        // First CloseOverlay closes project search.
+        app.execute(Command::CloseOverlay);
+        assert!(app.project_search.is_none());
+        assert!(app.file_finder.is_some());
+
+        // Second closes file finder.
+        app.execute(Command::CloseOverlay);
+        assert!(app.file_finder.is_none());
+
+        // Third closes help.
+        app.execute(Command::CloseOverlay);
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn project_search_char_input_updates_query() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenProjectSearch);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert_eq!(app.project_search.as_ref().unwrap().query, "t");
+    }
+
+    #[test]
+    fn project_search_tab_cycles_field() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenProjectSearch);
+        assert_eq!(
+            app.project_search.as_ref().unwrap().active_field,
+            crate::project_search::SearchField::Query
+        );
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.project_search.as_ref().unwrap().active_field,
+            crate::project_search::SearchField::Include
+        );
+    }
+
+    #[test]
+    fn project_search_alt_c_toggles_case() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenProjectSearch);
+        assert!(!app.project_search.as_ref().unwrap().case_sensitive);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+        assert!(app.project_search.as_ref().unwrap().case_sensitive);
+    }
+
+    #[test]
+    fn project_search_alt_r_toggles_regex() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenProjectSearch);
+        assert!(!app.project_search.as_ref().unwrap().regex_mode);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+        assert!(app.project_search.as_ref().unwrap().regex_mode);
     }
 }

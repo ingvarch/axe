@@ -116,6 +116,9 @@ async fn main() -> Result<()> {
         // Poll terminal PTY output before drawing.
         app.poll_terminal();
 
+        // Drain project search results from background thread.
+        app.drain_project_search_results();
+
         // Check if autosave should trigger (debounced 2s after last edit).
         app.check_autosave();
 
