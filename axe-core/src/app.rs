@@ -45,6 +45,48 @@ pub struct MouseDragState {
     pub border: Option<DragBorder>,
 }
 
+/// Tracks consecutive mouse clicks at approximately the same position
+/// for multi-click detection (double-click, triple-click).
+#[derive(Debug, Clone, Default)]
+pub struct ClickState {
+    /// Timestamp of the last mouse-down event.
+    last_time: Option<Instant>,
+    /// Buffer/grid position of the last click (row, col).
+    last_pos: Option<(usize, usize)>,
+    /// Number of consecutive clicks (1 = single, 2 = double, 3 = triple).
+    pub click_count: u8,
+}
+
+/// Maximum distance (in cells) between clicks to still count as "same position".
+const CLICK_POSITION_TOLERANCE: usize = 1;
+
+impl ClickState {
+    /// Registers a click and returns the updated click count.
+    ///
+    /// Increments if the click is at the same position (within tolerance)
+    /// and within the time threshold. Otherwise resets to 1.
+    /// Caps at 3 (triple-click).
+    pub fn register(&mut self, now: Instant, row: usize, col: usize, threshold: Duration) -> u8 {
+        let same_pos = self.last_pos.is_some_and(|(r, c)| {
+            r.abs_diff(row) <= CLICK_POSITION_TOLERANCE
+                && c.abs_diff(col) <= CLICK_POSITION_TOLERANCE
+        });
+        let within_threshold = self
+            .last_time
+            .is_some_and(|t| now.duration_since(t) < threshold);
+
+        if same_pos && within_threshold {
+            self.click_count = (self.click_count + 1).min(3);
+        } else {
+            self.click_count = 1;
+        }
+
+        self.last_time = Some(now);
+        self.last_pos = Some((row, col));
+        self.click_count
+    }
+}
+
 /// State for the panel resize mode.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResizeModeState {
@@ -173,6 +215,10 @@ pub struct AppState {
     /// Screen position where the last mouse-down occurred in the terminal grid.
     /// Used to distinguish clicks (no movement) from drags.
     terminal_select_start: Option<(u16, u16)>,
+    /// Multi-click state for the editor panel.
+    editor_click_state: ClickState,
+    /// Multi-click state for the terminal panel.
+    terminal_click_state: ClickState,
     keymap: KeymapResolver,
     /// Application configuration loaded from TOML files.
     pub config: axe_config::AppConfig,
@@ -214,6 +260,8 @@ impl AppState {
             last_tree_click: None,
             terminal_selecting: false,
             terminal_select_start: None,
+            editor_click_state: ClickState::default(),
+            terminal_click_state: ClickState::default(),
             keymap: KeymapResolver::with_defaults(),
             config: axe_config::AppConfig::default(),
         }
@@ -1211,15 +1259,38 @@ impl AppState {
                 //           editor_inner_area must be kept in sync by main.rs each frame.
                 // Risk: editor_selecting flag must be cleared on Up to avoid stale drag state.
 
-                // Check if click is in editor content area — position cursor and start selection.
+                // Check if click is in editor content area — multi-click detection.
                 if let Some((erow, ecol)) = self.screen_to_editor_pos(col, row) {
+                    let now = Instant::now();
+                    let click_count =
+                        self.editor_click_state
+                            .register(now, erow, ecol, DOUBLE_CLICK_THRESHOLD);
+
                     if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                        buf.clear_selection();
-                        buf.cursor.row = erow;
-                        buf.cursor.col = ecol;
-                        buf.cursor.desired_col = ecol;
+                        match click_count {
+                            1 => {
+                                // Single click: position cursor, clear selection.
+                                buf.clear_selection();
+                                buf.cursor.row = erow;
+                                buf.cursor.col = ecol;
+                                buf.cursor.desired_col = ecol;
+                            }
+                            2 => {
+                                // Double-click: select word at cursor.
+                                buf.clear_selection();
+                                buf.cursor.row = erow;
+                                buf.cursor.col = ecol;
+                                buf.select_word_at_cursor();
+                            }
+                            _ => {
+                                // Triple-click: select entire line.
+                                buf.cursor.row = erow;
+                                buf.select_line_at_cursor();
+                            }
+                        }
                     }
-                    self.editor_selecting = true;
+                    // Only enable drag selection on single click.
+                    self.editor_selecting = click_count == 1;
                     self.focus = FocusTarget::Editor;
                     return;
                 }
@@ -1232,13 +1303,29 @@ impl AppState {
                 //           terminal_grid_area must be kept in sync by main.rs each frame.
                 // Risk: terminal_selecting flag must be cleared on Up to avoid stale drag state.
 
-                // Check if click is in terminal grid area — start selection.
+                // Check if click is in terminal grid area — multi-click detection.
                 if let Some(point) = self.screen_to_terminal_point(col, row) {
+                    let grid_row = point.line.0 as usize;
+                    let grid_col = point.column.0;
+                    let now = Instant::now();
+                    let click_count = self.terminal_click_state.register(
+                        now,
+                        grid_row,
+                        grid_col,
+                        DOUBLE_CLICK_THRESHOLD,
+                    );
+
                     if let Some(ref mut mgr) = self.terminal_manager {
                         mgr.clear_selection_active();
-                        mgr.start_selection_active(SelectionType::Simple, point, Direction::Left);
+                        let selection_type = match click_count {
+                            1 => SelectionType::Simple,
+                            2 => SelectionType::Semantic,
+                            _ => SelectionType::Lines,
+                        };
+                        mgr.start_selection_active(selection_type, point, Direction::Left);
                     }
-                    self.terminal_selecting = true;
+                    // Only enable drag selection on single click.
+                    self.terminal_selecting = click_count == 1;
                     self.terminal_select_start = Some((col, row));
                     self.focus = FocusTarget::Terminal(0);
                     return;
@@ -1352,6 +1439,17 @@ impl AppState {
                             if !text.is_empty() {
                                 Self::copy_to_clipboard(text);
                             }
+                        }
+                    }
+                } else if self.terminal_click_state.click_count > 1 {
+                    // Multi-click (double/triple) completed — copy selection to clipboard.
+                    let text = self
+                        .terminal_manager
+                        .as_ref()
+                        .and_then(|mgr| mgr.copy_selection_active());
+                    if let Some(ref text) = text {
+                        if !text.is_empty() {
+                            Self::copy_to_clipboard(text);
                         }
                     }
                 }
@@ -4398,5 +4496,231 @@ mod tests {
 
         app.execute(Command::NewTab);
         assert_eq!(app.terminal_manager.as_ref().unwrap().tab_count(), 2);
+    }
+
+    // --- ClickState tests ---
+
+    #[test]
+    fn click_state_first_click_returns_one() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        assert_eq!(state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD), 1);
+    }
+
+    #[test]
+    fn click_state_increments_same_position() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        assert_eq!(state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD), 1);
+        assert_eq!(state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD), 2);
+        assert_eq!(state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD), 3);
+    }
+
+    #[test]
+    fn click_state_caps_at_three() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        state.register(now, 0, 0, DOUBLE_CLICK_THRESHOLD);
+        state.register(now, 0, 0, DOUBLE_CLICK_THRESHOLD);
+        state.register(now, 0, 0, DOUBLE_CLICK_THRESHOLD);
+        assert_eq!(state.register(now, 0, 0, DOUBLE_CLICK_THRESHOLD), 3);
+    }
+
+    #[test]
+    fn click_state_resets_on_different_position() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD);
+        state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD);
+        assert_eq!(state.click_count, 2);
+        // Position (6,10) is within tolerance (abs_diff=1), so it still counts
+        assert_eq!(state.register(now, 6, 10, DOUBLE_CLICK_THRESHOLD), 3);
+    }
+
+    #[test]
+    fn click_state_resets_on_far_position() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD);
+        state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD);
+        assert_eq!(state.click_count, 2);
+        // Position more than CLICK_POSITION_TOLERANCE away resets
+        assert_eq!(state.register(now, 8, 10, DOUBLE_CLICK_THRESHOLD), 1);
+    }
+
+    #[test]
+    fn click_state_resets_after_threshold() {
+        let mut state = ClickState::default();
+        let threshold = Duration::from_millis(400);
+        let t1 = Instant::now();
+        state.register(t1, 5, 10, threshold);
+        // Simulate waiting past threshold
+        std::thread::sleep(Duration::from_millis(500));
+        let t2 = Instant::now();
+        assert_eq!(state.register(t2, 5, 10, threshold), 1);
+    }
+
+    #[test]
+    fn click_state_tolerates_nearby_position() {
+        let mut state = ClickState::default();
+        let now = Instant::now();
+        state.register(now, 5, 10, DOUBLE_CLICK_THRESHOLD);
+        // 1 cell away should still count as same position
+        assert_eq!(state.register(now, 5, 11, DOUBLE_CLICK_THRESHOLD), 2);
+    }
+
+    // --- Editor multi-click tests ---
+
+    #[test]
+    fn editor_double_click_selects_word() {
+        let mut app = app_with_editor_buffer("hello world");
+        app.editor_inner_area = Some((0, 0, 80, 24));
+
+        // First click at col 2 (inside "hello")
+        let down1 = mouse_event(MouseEventKind::Down(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(down1, 100, 30);
+        let up1 = mouse_event(MouseEventKind::Up(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(up1, 100, 30);
+
+        // Second click at same position (double-click)
+        let down2 = mouse_event(MouseEventKind::Down(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(down2, 100, 30);
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.selected_text(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn editor_triple_click_selects_line() {
+        let mut app = app_with_editor_buffer("hello world\nsecond line");
+        app.editor_inner_area = Some((0, 0, 80, 24));
+
+        // Three rapid clicks
+        for _ in 0..3 {
+            let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 0);
+            app.handle_mouse_event(down, 100, 30);
+            let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 5, 0);
+            app.handle_mouse_event(up, 100, 30);
+        }
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.selected_text(), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn editor_single_click_still_positions_cursor() {
+        let mut app = app_with_editor_buffer("hello world");
+        app.editor_inner_area = Some((0, 0, 80, 24));
+
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 3, 0);
+        app.handle_mouse_event(down, 100, 30);
+
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.cursor.col, 3);
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn editor_double_click_does_not_enable_drag() {
+        let mut app = app_with_editor_buffer("hello world");
+        app.editor_inner_area = Some((0, 0, 80, 24));
+
+        // Double-click
+        let down1 = mouse_event(MouseEventKind::Down(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(down1, 100, 30);
+        let up1 = mouse_event(MouseEventKind::Up(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(up1, 100, 30);
+        let down2 = mouse_event(MouseEventKind::Down(MouseButton::Left), 2, 0);
+        app.handle_mouse_event(down2, 100, 30);
+
+        assert!(
+            !app.editor_selecting,
+            "Drag should not be active after double-click"
+        );
+    }
+
+    // --- Terminal multi-click tests ---
+
+    #[test]
+    fn terminal_double_click_uses_semantic_selection() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(60, 10, &std::env::current_dir().unwrap())
+            .unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // First click
+        let down1 = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(down1, 100, 30);
+        let up1 = mouse_event(MouseEventKind::Up(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(up1, 100, 30);
+
+        // Second click (double-click)
+        let down2 = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(down2, 100, 30);
+
+        assert!(
+            app.terminal_manager
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .has_selection(),
+            "Terminal should have selection after double-click"
+        );
+        assert!(
+            !app.terminal_selecting,
+            "Drag should not be active after double-click"
+        );
+    }
+
+    #[test]
+    fn terminal_triple_click_uses_lines_selection() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(60, 10, &std::env::current_dir().unwrap())
+            .unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // Three rapid clicks
+        for _ in 0..3 {
+            let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+            app.handle_mouse_event(down, 100, 30);
+            let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 25, 17);
+            app.handle_mouse_event(up, 100, 30);
+        }
+
+        assert!(
+            app.terminal_manager
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .has_selection(),
+            "Terminal should have selection after triple-click"
+        );
+    }
+
+    #[test]
+    fn terminal_single_click_enables_drag() {
+        let mut app = AppState::new();
+        app.show_terminal = true;
+        app.terminal_grid_area = Some((20, 15, 60, 10));
+
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(60, 10, &std::env::current_dir().unwrap())
+            .unwrap();
+        app.terminal_manager = Some(mgr);
+
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 25, 17);
+        app.handle_mouse_event(down, 100, 30);
+
+        assert!(app.terminal_selecting, "Single click should enable drag");
     }
 }

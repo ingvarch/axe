@@ -998,6 +998,56 @@ impl EditorBuffer {
         }
     }
 
+    /// Selects the word at the current cursor position.
+    ///
+    /// Uses `is_word_char()` to find word boundaries around the cursor.
+    /// Does nothing if the cursor is on whitespace, past line end, or on an empty line.
+    pub fn select_word_at_cursor(&mut self) {
+        let line_len = self.line_length(self.cursor.row);
+        if line_len == 0 || self.cursor.col >= line_len {
+            return;
+        }
+
+        let line = self.content.line(self.cursor.row);
+        let chars: Vec<char> = line.chars().take(line_len).collect();
+
+        if !Self::is_word_char(chars[self.cursor.col]) {
+            return;
+        }
+
+        // Find word start.
+        let mut start = self.cursor.col;
+        while start > 0 && Self::is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+
+        // Find word end.
+        let mut end = self.cursor.col;
+        while end < chars.len() && Self::is_word_char(chars[end]) {
+            end += 1;
+        }
+
+        self.selection = Some(Selection {
+            anchor_row: self.cursor.row,
+            anchor_col: start,
+        });
+        self.cursor.col = end;
+        self.cursor.desired_col = end;
+    }
+
+    /// Selects the entire line at the current cursor position.
+    ///
+    /// Sets anchor to column 0 and moves cursor to end of line.
+    pub fn select_line_at_cursor(&mut self) {
+        let line_len = self.line_length(self.cursor.row);
+        self.selection = Some(Selection {
+            anchor_row: self.cursor.row,
+            anchor_col: 0,
+        });
+        self.cursor.col = line_len;
+        self.cursor.desired_col = line_len;
+    }
+
     /// Character count of the given line, excluding trailing newline/carriage return.
     ///
     /// Returns 0 if the line index is out of bounds.
@@ -2373,5 +2423,105 @@ mod tests {
         buf.insert_tab();
         assert_eq!(buf.line_at(0).unwrap().to_string(), "\t");
         assert_eq!(buf.cursor.col, 1);
+    }
+
+    // --- select_word_at_cursor tests ---
+
+    #[test]
+    fn select_word_at_cursor_middle_of_word() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 2;
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text(), Some("hello".to_string()));
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn select_word_at_cursor_second_word() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 8;
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text(), Some("world".to_string()));
+    }
+
+    #[test]
+    fn select_word_at_cursor_on_whitespace_does_nothing() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 5;
+        buf.select_word_at_cursor();
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn select_word_at_cursor_snake_case() {
+        let mut buf = buffer_from_str("snake_case_var = 42");
+        buf.cursor.col = 6;
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text(), Some("snake_case_var".to_string()));
+    }
+
+    #[test]
+    fn select_word_at_cursor_start_of_word() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 0;
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn select_word_at_cursor_end_of_word() {
+        let mut buf = buffer_from_str("hello world");
+        buf.cursor.col = 4;
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn select_word_at_cursor_empty_line() {
+        let mut buf = buffer_from_str("");
+        buf.select_word_at_cursor();
+        assert!(buf.selection.is_none());
+    }
+
+    #[test]
+    fn select_word_at_cursor_past_line_end() {
+        let mut buf = buffer_from_str("hi");
+        buf.cursor.col = 5;
+        buf.select_word_at_cursor();
+        assert!(buf.selection.is_none());
+    }
+
+    // --- select_line_at_cursor tests ---
+
+    #[test]
+    fn select_line_at_cursor_first_line() {
+        let mut buf = buffer_from_str("hello world\nsecond line");
+        buf.cursor.row = 0;
+        buf.cursor.col = 3;
+        buf.select_line_at_cursor();
+        let sel = buf.selection.as_ref().unwrap();
+        assert_eq!(sel.anchor_row, 0);
+        assert_eq!(sel.anchor_col, 0);
+        assert_eq!(buf.cursor.col, 11);
+        assert_eq!(buf.selected_text(), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn select_line_at_cursor_second_line() {
+        let mut buf = buffer_from_str("first\nsecond\nthird");
+        buf.cursor.row = 1;
+        buf.select_line_at_cursor();
+        assert_eq!(buf.selected_text(), Some("second".to_string()));
+    }
+
+    #[test]
+    fn select_line_at_cursor_empty_line() {
+        let mut buf = buffer_from_str("hello\n\nworld");
+        buf.cursor.row = 1;
+        buf.select_line_at_cursor();
+        assert!(buf.selection.is_some());
+        assert_eq!(buf.cursor.col, 0);
     }
 }
