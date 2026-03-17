@@ -816,6 +816,31 @@ fn render_terminal_tab_bar(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
     frame.render_widget(paragraph, area);
 }
 
+/// Renders the "No files open" message when no buffers exist.
+fn render_no_files_message(area: Rect, frame: &mut Frame, theme: &Theme) {
+    let text = Line::from(vec![
+        Span::styled(
+            "No files open",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled(
+            " -- Select a file from the tree",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+    ]);
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+    let centered_area = Rect {
+        y: area.y + area.height / 2,
+        height: 1,
+        ..area
+    };
+    frame.render_widget(paragraph, centered_area);
+}
+
 /// Renders the "No terminals" message when all tabs are closed.
 fn render_no_terminals_message(area: Rect, frame: &mut Frame, theme: &Theme) {
     let text = Line::from(vec![
@@ -1413,6 +1438,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
                         app.search.as_ref(),
                         tab_bar,
                     );
+                } else {
+                    render_no_files_message(inner, frame, theme);
                 }
             }
         }
@@ -1948,6 +1975,8 @@ fn render_right_panels(
                 app.search.as_ref(),
                 tab_bar,
             );
+        } else {
+            render_no_files_message(editor_inner, frame, theme);
         }
 
         let term_block = panel_block(
@@ -1991,6 +2020,8 @@ fn render_right_panels(
                 app.search.as_ref(),
                 tab_bar,
             );
+        } else {
+            render_no_files_message(editor_inner, frame, theme);
         }
     }
 }
@@ -2592,6 +2623,46 @@ mod tests {
             multi.height,
             single.height - 1,
             "expected tab bar to reduce editor content height by 1"
+        );
+    }
+
+    // --- No files open message tests ---
+
+    #[test]
+    fn render_zoomed_editor_shows_message_when_no_buffer() {
+        let mut app = AppState::new();
+        app.focus = FocusTarget::Editor;
+        app.zoomed_panel = Some(FocusTarget::Editor);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("No files open"),
+            "expected 'No files open' in zoomed editor with no buffers"
+        );
+    }
+
+    #[test]
+    fn render_unzoomed_editor_shows_message_when_no_buffer() {
+        let app = AppState::new();
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            content.contains("No files open"),
+            "expected 'No files open' in editor panel with no buffers"
+        );
+    }
+
+    #[test]
+    fn render_zoomed_editor_no_message_when_buffer_exists() {
+        let mut app = AppState::new();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+        app.execute(axe_core::Command::OpenFile(tmp.path().to_path_buf()));
+        app.focus = FocusTarget::Editor;
+        app.zoomed_panel = Some(FocusTarget::Editor);
+        let content = render_app_to_string(&app, 100, 24);
+        assert!(
+            !content.contains("No files open"),
+            "expected no 'No files open' when a buffer is open"
         );
     }
 
