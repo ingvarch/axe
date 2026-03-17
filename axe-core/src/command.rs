@@ -192,6 +192,10 @@ pub enum Command {
     SearchToggleCase,
     /// Toggle regex mode in search.
     SearchToggleRegex,
+    /// Confirm tree node deletion from the confirmation dialog.
+    ConfirmTreeDelete,
+    /// Cancel tree node deletion from the confirmation dialog.
+    CancelTreeDelete,
 }
 
 #[cfg(test)]
@@ -315,6 +319,8 @@ mod tests {
             Command::SearchPrevMatch,
             Command::SearchToggleCase,
             Command::SearchToggleRegex,
+            Command::ConfirmTreeDelete,
+            Command::CancelTreeDelete,
         ];
 
         for (i, a) in variants.iter().enumerate() {

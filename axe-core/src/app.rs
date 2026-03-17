@@ -132,6 +132,90 @@ impl FocusTarget {
     }
 }
 
+/// Which button is focused in the confirmation dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfirmButton {
+    Yes,
+    #[default]
+    No,
+}
+
+/// A reusable confirmation dialog with navigable [Yes] / [No] buttons.
+///
+/// Default focus is on [No] (safe default). Left/Right arrows move focus,
+/// Enter activates, Esc cancels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmDialog {
+    /// Title shown in the dialog border.
+    pub title: String,
+    /// Message lines displayed in the dialog body.
+    pub message: Vec<String>,
+    /// Currently focused button.
+    pub selected: ConfirmButton,
+    /// Command dispatched when the user confirms (Yes).
+    pub on_confirm: Command,
+    /// Command dispatched when the user cancels (No / Esc). None = just dismiss.
+    pub on_cancel: Option<Command>,
+}
+
+impl ConfirmDialog {
+    /// Creates a quit confirmation dialog.
+    pub fn quit() -> Self {
+        Self {
+            title: "Quit".to_string(),
+            message: vec!["Are you sure?".to_string()],
+            selected: ConfirmButton::default(),
+            on_confirm: Command::Quit,
+            on_cancel: None,
+        }
+    }
+
+    /// Creates a close-buffer confirmation dialog showing the file name.
+    pub fn close_buffer(file_name: &str) -> Self {
+        Self {
+            title: "Close Buffer".to_string(),
+            message: vec![
+                file_name.to_string(),
+                String::new(),
+                "Unsaved changes will be lost.".to_string(),
+            ],
+            selected: ConfirmButton::default(),
+            on_confirm: Command::ConfirmCloseBuffer,
+            on_cancel: Some(Command::CancelCloseBuffer),
+        }
+    }
+
+    /// Creates a close-terminal confirmation dialog showing the tab title.
+    pub fn close_terminal(tab_title: &str) -> Self {
+        Self {
+            title: "Close Terminal".to_string(),
+            message: vec![
+                tab_title.to_string(),
+                String::new(),
+                "Process is still running.".to_string(),
+            ],
+            selected: ConfirmButton::default(),
+            on_confirm: Command::ForceCloseTerminalTab,
+            on_cancel: Some(Command::CancelCloseTerminalTab),
+        }
+    }
+
+    /// Creates a delete-tree-node confirmation dialog showing the node name.
+    pub fn delete_tree_node(node_name: &str) -> Self {
+        Self {
+            title: "Delete".to_string(),
+            message: vec![
+                node_name.to_string(),
+                String::new(),
+                "This cannot be undone.".to_string(),
+            ],
+            selected: ConfirmButton::default(),
+            on_confirm: Command::ConfirmTreeDelete,
+            on_cancel: Some(Command::CancelTreeDelete),
+        }
+    }
+}
+
 /// Default terminal size used when the actual panel size is not yet known.
 const DEFAULT_TERMINAL_COLS: u16 = 80;
 /// Default terminal rows used when the actual panel size is not yet known.
@@ -144,12 +228,8 @@ pub struct AppState {
     pub show_tree: bool,
     pub show_terminal: bool,
     pub show_help: bool,
-    /// Whether the quit confirmation dialog is visible.
-    pub confirm_quit: bool,
-    /// Whether the "close modified buffer?" confirmation dialog is visible.
-    pub confirm_close_buffer: bool,
-    /// Whether the "close terminal with running process?" confirmation dialog is visible.
-    pub confirm_close_terminal_tab: bool,
+    /// Active confirmation dialog, if any.
+    pub confirm_dialog: Option<ConfirmDialog>,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
     /// Which panel is currently zoomed to full screen, if any.
@@ -233,9 +313,7 @@ impl AppState {
             show_tree: true,
             show_terminal: true,
             show_help: false,
-            confirm_quit: false,
-            confirm_close_buffer: false,
-            confirm_close_terminal_tab: false,
+            confirm_dialog: None,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
             zoomed_panel: None,
@@ -314,7 +392,7 @@ impl AppState {
 
     /// Signals the application to exit the event loop.
     pub fn quit(&mut self) {
-        self.confirm_quit = false;
+        self.confirm_dialog = None;
         self.should_quit = true;
     }
 
@@ -381,37 +459,29 @@ impl AppState {
     /// before normal dispatch. When a help overlay is open, only Quit, ShowHelp,
     /// and CloseOverlay commands are processed; all other keys are consumed silently.
     pub fn handle_key_event(&mut self, key: KeyEvent) {
-        // Quit confirmation dialog intercepts all keys.
-        if self.confirm_quit {
+        // Confirmation dialog intercepts all keys.
+        if let Some(ref mut dialog) = self.confirm_dialog {
             match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => self.execute(Command::Quit),
-                _ => self.confirm_quit = false,
-            }
-            return;
-        }
-
-        // Close-buffer confirmation dialog intercepts all keys.
-        if self.confirm_close_buffer {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.execute(Command::ConfirmCloseBuffer);
+                KeyCode::Left => dialog.selected = ConfirmButton::Yes,
+                KeyCode::Right => dialog.selected = ConfirmButton::No,
+                KeyCode::Enter => {
+                    let cmd = match dialog.selected {
+                        ConfirmButton::Yes => Some(dialog.on_confirm.clone()),
+                        ConfirmButton::No => dialog.on_cancel.clone(),
+                    };
+                    self.confirm_dialog = None;
+                    if let Some(cmd) = cmd {
+                        self.execute(cmd);
+                    }
                 }
-                _ => {
-                    self.execute(Command::CancelCloseBuffer);
+                KeyCode::Esc => {
+                    let cmd = dialog.on_cancel.clone();
+                    self.confirm_dialog = None;
+                    if let Some(cmd) = cmd {
+                        self.execute(cmd);
+                    }
                 }
-            }
-            return;
-        }
-
-        // Close-terminal confirmation dialog intercepts all keys.
-        if self.confirm_close_terminal_tab {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.execute(Command::ForceCloseTerminalTab);
-                }
-                _ => {
-                    self.execute(Command::CancelCloseTerminalTab);
-                }
+                _ => {} // Consume all other keys
             }
             return;
         }
@@ -537,14 +607,9 @@ impl AppState {
             if let Some(ref mut tree) = self.file_tree {
                 if tree.is_action_active() {
                     match tree.action().clone() {
-                        axe_tree::TreeAction::ConfirmDelete { .. } => match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                let _ = tree.confirm_delete();
-                            }
-                            _ => {
-                                tree.cancel_action();
-                            }
-                        },
+                        axe_tree::TreeAction::ConfirmDelete { .. } => {
+                            // Handled by the unified confirm dialog above; should not reach here.
+                        }
                         axe_tree::TreeAction::Creating { .. }
                         | axe_tree::TreeAction::Renaming { .. } => match key.code {
                             KeyCode::Enter => {
@@ -630,7 +695,7 @@ impl AppState {
     pub fn execute(&mut self, cmd: Command) {
         match cmd {
             Command::Quit => self.quit(),
-            Command::RequestQuit => self.confirm_quit = true,
+            Command::RequestQuit => self.confirm_dialog = Some(ConfirmDialog::quit()),
             Command::FocusNext => self.cycle_focus_next(),
             Command::FocusPrev => self.cycle_focus_prev(),
             Command::FocusTree => self.focus = FocusTarget::Tree,
@@ -718,7 +783,27 @@ impl AppState {
             }
             Command::TreeDelete => {
                 if let Some(ref mut tree) = self.file_tree {
+                    // Get the node name before starting the action.
+                    let node_name = tree
+                        .selected_node()
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
                     tree.start_delete();
+                    // Only show dialog if start_delete actually set the action
+                    // (it's a noop on root node).
+                    if matches!(tree.action(), axe_tree::TreeAction::ConfirmDelete { .. }) {
+                        self.confirm_dialog = Some(ConfirmDialog::delete_tree_node(&node_name));
+                    }
+                }
+            }
+            Command::ConfirmTreeDelete => {
+                if let Some(ref mut tree) = self.file_tree {
+                    let _ = tree.confirm_delete();
+                }
+            }
+            Command::CancelTreeDelete => {
+                if let Some(ref mut tree) = self.file_tree {
+                    tree.cancel_action();
                 }
             }
             Command::ToggleIcons => {
@@ -757,18 +842,21 @@ impl AppState {
             Command::CloseTerminalTab => {
                 if let Some(ref mut mgr) = self.terminal_manager {
                     if mgr.active_tab_is_alive() {
-                        self.confirm_close_terminal_tab = true;
+                        let tab_title = mgr
+                            .active_tab()
+                            .map(|t| t.title().to_string())
+                            .unwrap_or_else(|| "terminal".to_string());
+                        self.confirm_dialog = Some(ConfirmDialog::close_terminal(&tab_title));
                     } else {
                         self.close_terminal_tab();
                     }
                 }
             }
             Command::ForceCloseTerminalTab => {
-                self.confirm_close_terminal_tab = false;
                 self.close_terminal_tab();
             }
             Command::CancelCloseTerminalTab => {
-                self.confirm_close_terminal_tab = false;
+                // Dialog already dismissed by the input handler.
             }
             Command::ActivateTerminalTab(idx) => self.activate_terminal_tab(idx),
             Command::TerminalScrollPageUp => {
@@ -1094,7 +1182,8 @@ impl AppState {
             Command::CloseBuffer => {
                 if let Some(buf) = self.buffer_manager.active_buffer() {
                     if buf.modified {
-                        self.confirm_close_buffer = true;
+                        let file_name = buf.file_name().unwrap_or("[untitled]").to_string();
+                        self.confirm_dialog = Some(ConfirmDialog::close_buffer(&file_name));
                     } else {
                         let idx = self.buffer_manager.active_index();
                         self.buffer_manager.close_buffer(idx);
@@ -1103,13 +1192,12 @@ impl AppState {
                 }
             }
             Command::ConfirmCloseBuffer => {
-                self.confirm_close_buffer = false;
                 let idx = self.buffer_manager.active_index();
                 self.buffer_manager.close_buffer(idx);
                 self.search = None;
             }
             Command::CancelCloseBuffer => {
-                self.confirm_close_buffer = false;
+                // Dialog already dismissed by the input handler.
             }
         }
         // Auto-promote preview buffer if user started editing it.
@@ -1996,6 +2084,53 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::Tree);
     }
 
+    // --- ConfirmDialog / ConfirmButton tests ---
+
+    #[test]
+    fn confirm_button_default_is_no() {
+        assert_eq!(ConfirmButton::default(), ConfirmButton::No);
+    }
+
+    #[test]
+    fn confirm_dialog_quit_has_correct_fields() {
+        let d = ConfirmDialog::quit();
+        assert_eq!(d.title, "Quit");
+        assert_eq!(d.message, vec!["Are you sure?"]);
+        assert_eq!(d.selected, ConfirmButton::No);
+        assert_eq!(d.on_confirm, Command::Quit);
+        assert!(d.on_cancel.is_none());
+    }
+
+    #[test]
+    fn confirm_dialog_close_buffer_has_correct_fields() {
+        let d = ConfirmDialog::close_buffer("main.rs");
+        assert_eq!(d.title, "Close Buffer");
+        assert_eq!(d.message[0], "main.rs");
+        assert_eq!(d.message[2], "Unsaved changes will be lost.");
+        assert_eq!(d.on_confirm, Command::ConfirmCloseBuffer);
+        assert_eq!(d.on_cancel, Some(Command::CancelCloseBuffer));
+    }
+
+    #[test]
+    fn confirm_dialog_close_terminal_has_correct_fields() {
+        let d = ConfirmDialog::close_terminal("bash");
+        assert_eq!(d.title, "Close Terminal");
+        assert_eq!(d.message[0], "bash");
+        assert_eq!(d.message[2], "Process is still running.");
+        assert_eq!(d.on_confirm, Command::ForceCloseTerminalTab);
+        assert_eq!(d.on_cancel, Some(Command::CancelCloseTerminalTab));
+    }
+
+    #[test]
+    fn confirm_dialog_delete_tree_node_has_correct_fields() {
+        let d = ConfirmDialog::delete_tree_node("file.txt");
+        assert_eq!(d.title, "Delete");
+        assert_eq!(d.message[0], "file.txt");
+        assert_eq!(d.message[2], "This cannot be undone.");
+        assert_eq!(d.on_confirm, Command::ConfirmTreeDelete);
+        assert_eq!(d.on_cancel, Some(Command::CancelTreeDelete));
+    }
+
     // --- Execute command tests ---
 
     #[test]
@@ -2121,34 +2256,74 @@ mod tests {
         let mut app = AppState::new();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(!app.should_quit, "Ctrl+Q should not quit immediately");
-        assert!(app.confirm_quit, "Ctrl+Q should show quit confirmation");
+        assert!(
+            app.confirm_dialog.is_some(),
+            "Ctrl+Q should show quit confirmation"
+        );
     }
 
     #[test]
-    fn confirm_quit_y_quits() {
+    fn confirm_dialog_left_selects_yes() {
         let mut app = AppState::new();
-        app.confirm_quit = true;
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        app.confirm_dialog = Some(ConfirmDialog::quit());
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.confirm_dialog.as_ref().unwrap().selected,
+            ConfirmButton::Yes
+        );
+    }
+
+    #[test]
+    fn confirm_dialog_right_selects_no() {
+        let mut app = AppState::new();
+        app.confirm_dialog = Some(ConfirmDialog::quit());
+        // First move to Yes, then back to No.
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(
+            app.confirm_dialog.as_ref().unwrap().selected,
+            ConfirmButton::No
+        );
+    }
+
+    #[test]
+    fn confirm_dialog_enter_on_yes_dispatches_confirm() {
+        let mut app = AppState::new();
+        app.confirm_dialog = Some(ConfirmDialog::quit());
+        // Select Yes, then press Enter.
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.should_quit);
-        assert!(!app.confirm_quit);
+        assert!(app.confirm_dialog.is_none());
     }
 
     #[test]
-    fn confirm_quit_other_key_cancels() {
+    fn confirm_dialog_enter_on_no_dispatches_cancel() {
         let mut app = AppState::new();
-        app.confirm_quit = true;
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.confirm_dialog = Some(ConfirmDialog::quit());
+        // Default is No, just press Enter.
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(!app.should_quit);
-        assert!(!app.confirm_quit);
+        assert!(app.confirm_dialog.is_none());
     }
 
     #[test]
-    fn confirm_quit_esc_cancels() {
+    fn confirm_dialog_esc_dispatches_cancel() {
         let mut app = AppState::new();
-        app.confirm_quit = true;
+        app.confirm_dialog = Some(ConfirmDialog::quit());
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.should_quit);
-        assert!(!app.confirm_quit);
+        assert!(app.confirm_dialog.is_none());
+    }
+
+    #[test]
+    fn confirm_dialog_other_keys_consumed() {
+        let mut app = AppState::new();
+        app.confirm_dialog = Some(ConfirmDialog::quit());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        // Dialog should still be open — key consumed without action.
+        assert!(app.confirm_dialog.is_some());
+        assert!(!app.should_quit);
     }
 
     #[test]
@@ -2163,7 +2338,7 @@ mod tests {
         let mut app = AppState::new();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(!app.should_quit);
-        assert!(!app.confirm_quit);
+        assert!(app.confirm_dialog.is_none());
     }
 
     #[test]
@@ -2274,7 +2449,7 @@ mod tests {
         app.show_help = true;
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(
-            app.confirm_quit,
+            app.confirm_dialog.is_some(),
             "Ctrl+Q should show quit dialog even with help open"
         );
     }
@@ -2545,7 +2720,7 @@ mod tests {
         app.resize_mode.active = true;
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(
-            app.confirm_quit,
+            app.confirm_dialog.is_some(),
             "Ctrl+Q should show quit dialog in resize mode"
         );
     }
@@ -2896,7 +3071,7 @@ mod tests {
         let mut app = app_with_tree_focused();
         // Ctrl+Q should show quit confirmation
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        assert!(app.confirm_quit);
+        assert!(app.confirm_dialog.is_some());
     }
 
     #[test]
@@ -2959,7 +3134,7 @@ mod tests {
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(
-            app.confirm_quit,
+            app.confirm_dialog.is_some(),
             "Ctrl+Q should show quit dialog from terminal"
         );
         assert!(!app.should_quit);
@@ -2982,7 +3157,7 @@ mod tests {
         app.focus = FocusTarget::Terminal(0);
         app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(!app.should_quit);
-        assert!(!app.confirm_quit);
+        assert!(app.confirm_dialog.is_none());
         assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
@@ -4021,7 +4196,7 @@ mod tests {
         app.buffer_manager.active_buffer_mut().unwrap().modified = true;
 
         app.execute(Command::CloseBuffer);
-        assert!(app.confirm_close_buffer);
+        assert!(app.confirm_dialog.is_some());
         assert_eq!(app.buffer_manager.buffer_count(), 1);
     }
 
@@ -4036,10 +4211,12 @@ mod tests {
         app.buffer_manager.active_buffer_mut().unwrap().modified = true;
 
         app.execute(Command::CloseBuffer);
-        assert!(app.confirm_close_buffer);
+        assert!(app.confirm_dialog.is_some());
 
-        app.execute(Command::ConfirmCloseBuffer);
-        assert!(!app.confirm_close_buffer);
+        // Simulate pressing Left (Yes) + Enter via the dialog.
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.confirm_dialog.is_none());
         assert_eq!(app.buffer_manager.buffer_count(), 0);
     }
 
@@ -4054,10 +4231,11 @@ mod tests {
         app.buffer_manager.active_buffer_mut().unwrap().modified = true;
 
         app.execute(Command::CloseBuffer);
-        assert!(app.confirm_close_buffer);
+        assert!(app.confirm_dialog.is_some());
 
-        app.execute(Command::CancelCloseBuffer);
-        assert!(!app.confirm_close_buffer);
+        // Default is No — press Enter to cancel.
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.confirm_dialog.is_none());
         assert_eq!(app.buffer_manager.buffer_count(), 1);
     }
 
@@ -4095,11 +4273,11 @@ mod tests {
         app.buffer_manager.active_buffer_mut().unwrap().modified = true;
 
         app.execute(Command::CloseBuffer);
-        assert!(app.confirm_close_buffer);
+        assert!(app.confirm_dialog.is_some());
 
-        // Pressing 'n' should cancel the confirmation and keep the buffer.
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-        assert!(!app.confirm_close_buffer);
+        // Pressing Esc should cancel the confirmation and keep the buffer.
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.confirm_dialog.is_none());
         assert_eq!(app.buffer_manager.buffer_count(), 1);
     }
 
@@ -4273,7 +4451,7 @@ mod tests {
 
         app.execute(Command::CloseTerminalTab);
         assert!(
-            app.confirm_close_terminal_tab,
+            app.confirm_dialog.is_some(),
             "Should show confirmation for running process"
         );
         assert_eq!(
@@ -4286,10 +4464,9 @@ mod tests {
     #[test]
     fn force_close_terminal_tab_closes() {
         let mut app = app_with_terminal_tab();
-        app.confirm_close_terminal_tab = true;
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
 
         app.execute(Command::ForceCloseTerminalTab);
-        assert!(!app.confirm_close_terminal_tab, "Flag should be cleared");
         assert_eq!(
             app.terminal_manager.as_ref().unwrap().tab_count(),
             0,
@@ -4300,10 +4477,9 @@ mod tests {
     #[test]
     fn cancel_close_terminal_tab_keeps_tab() {
         let mut app = app_with_terminal_tab();
-        app.confirm_close_terminal_tab = true;
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
 
         app.execute(Command::CancelCloseTerminalTab);
-        assert!(!app.confirm_close_terminal_tab, "Flag should be cleared");
         assert_eq!(
             app.terminal_manager.as_ref().unwrap().tab_count(),
             1,
@@ -4312,36 +4488,38 @@ mod tests {
     }
 
     #[test]
-    fn close_terminal_confirmation_y_confirms() {
+    fn close_terminal_confirmation_enter_yes_confirms() {
         let mut app = app_with_terminal_tab();
-        app.confirm_close_terminal_tab = true;
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
 
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        // Select Yes, then press Enter.
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
-            !app.confirm_close_terminal_tab,
-            "Flag should be cleared after 'y'"
+            app.confirm_dialog.is_none(),
+            "Dialog should be dismissed after Enter"
         );
         assert_eq!(
             app.terminal_manager.as_ref().unwrap().tab_count(),
             0,
-            "Tab should be closed after 'y'"
+            "Tab should be closed after confirming"
         );
     }
 
     #[test]
-    fn close_terminal_confirmation_other_key_cancels() {
+    fn close_terminal_confirmation_esc_cancels() {
         let mut app = app_with_terminal_tab();
-        app.confirm_close_terminal_tab = true;
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
 
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(
-            !app.confirm_close_terminal_tab,
-            "Flag should be cleared after 'n'"
+            app.confirm_dialog.is_none(),
+            "Dialog should be dismissed after Esc"
         );
         assert_eq!(
             app.terminal_manager.as_ref().unwrap().tab_count(),
             1,
-            "Tab should still exist after 'n'"
+            "Tab should still exist after Esc"
         );
     }
 
@@ -4418,7 +4596,7 @@ mod tests {
         app.execute(Command::CloseTab);
         // Live terminal should trigger confirmation dialog.
         assert!(
-            app.confirm_close_terminal_tab,
+            app.confirm_dialog.is_some(),
             "CloseTab on live terminal should show confirmation"
         );
     }

@@ -298,17 +298,34 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     frame.render_widget(help_text, content_area);
 }
 
-/// Width of the quit confirmation overlay in columns.
-const QUIT_OVERLAY_WIDTH: u16 = 30;
-/// Height of the quit confirmation overlay in rows.
-const QUIT_OVERLAY_HEIGHT: u16 = 5;
+/// Minimum width of the confirmation dialog in columns.
+const CONFIRM_DIALOG_MIN_WIDTH: u16 = 30;
+/// Padding for button labels (spaces around text).
+const CONFIRM_BUTTON_PADDING: usize = 2;
 
-/// Renders a centered quit confirmation dialog.
-fn render_quit_overlay(frame: &mut Frame, theme: &Theme) {
+/// Renders a centered confirmation dialog with navigable [Yes] / [No] buttons.
+fn render_confirm_dialog(dialog: &axe_core::ConfirmDialog, frame: &mut Frame, theme: &Theme) {
+    use axe_core::ConfirmButton;
+
     let area = frame.area();
 
-    let overlay_width = QUIT_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
-    let overlay_height = QUIT_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
+    // Calculate width based on longest message line.
+    let max_message_width = dialog
+        .message
+        .iter()
+        .map(|l| l.len() as u16)
+        .max()
+        .unwrap_or(0);
+    // Button row: "  [ Yes ]  [ No ]  " = ~20 chars
+    let button_row_width: u16 = 20;
+    let content_width = max_message_width.max(button_row_width);
+    // +4 for border (2) + inner padding (2)
+    let overlay_width = (content_width + 4)
+        .max(CONFIRM_DIALOG_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    // Height: border(2) + top padding(1) + message lines + gap(1) + button row(1) + bottom padding(1)
+    let overlay_height =
+        (2 + 1 + dialog.message.len() as u16 + 1 + 1 + 1).min(area.height.saturating_sub(2));
 
     let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
         .flex(Flex::Center)
@@ -320,8 +337,9 @@ fn render_quit_overlay(frame: &mut Frame, theme: &Theme) {
 
     frame.render_widget(Clear, overlay_area);
 
+    let title = format!(" {} ", dialog.title);
     let block = Block::default()
-        .title(" Quit ")
+        .title(title)
         .title_style(
             Style::default()
                 .fg(theme.overlay_border)
@@ -335,164 +353,59 @@ fn render_quit_overlay(frame: &mut Frame, theme: &Theme) {
     let inner = block.inner(overlay_area);
     frame.render_widget(block, overlay_area);
 
-    let text = Line::from(vec![
-        Span::raw("Are you sure? "),
-        Span::styled(
-            "(y/N)",
+    // Build message lines.
+    let mut lines: Vec<Line<'_>> = dialog
+        .message
+        .iter()
+        .map(|msg| {
+            if msg.is_empty() {
+                Line::from("")
+            } else {
+                Line::from(Span::styled(
+                    msg.clone(),
+                    Style::default().fg(theme.foreground),
+                ))
+            }
+        })
+        .collect();
+
+    // Empty line before buttons.
+    lines.push(Line::from(""));
+
+    // Button row.
+    let yes_label = " Yes ";
+    let no_label = " No ";
+    let (yes_style, no_style) = match dialog.selected {
+        ConfirmButton::Yes => (
             Style::default()
-                .fg(theme.panel_border_active)
+                .fg(theme.overlay_bg)
+                .bg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.foreground).bg(theme.overlay_bg),
+        ),
+        ConfirmButton::No => (
+            Style::default().fg(theme.foreground).bg(theme.overlay_bg),
+            Style::default()
+                .fg(theme.overlay_bg)
+                .bg(theme.panel_border_active)
                 .add_modifier(Modifier::BOLD),
         ),
+    };
+
+    let button_line = Line::from(vec![
+        Span::styled(
+            format!("{:>pad$}", "[", pad = CONFIRM_BUTTON_PADDING),
+            Style::default(),
+        ),
+        Span::styled(yes_label, yes_style),
+        Span::styled(" ]  [ ", Style::default()),
+        Span::styled(no_label, no_style),
+        Span::styled(
+            format!("{:<pad$}", "]", pad = CONFIRM_BUTTON_PADDING),
+            Style::default(),
+        ),
     ]);
-
-    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
-    let content_area = Rect {
-        y: inner.y + inner.height / 2,
-        height: 1,
-        ..inner
-    };
-    frame.render_widget(paragraph, content_area);
-}
-
-/// Width of the close-buffer confirmation overlay in columns.
-const CLOSE_BUFFER_OVERLAY_WIDTH: u16 = 36;
-/// Height of the close-buffer confirmation overlay in rows.
-const CLOSE_BUFFER_OVERLAY_HEIGHT: u16 = 7;
-
-/// Renders a centered close-buffer confirmation dialog.
-///
-/// Shows the filename being closed and a warning about unsaved changes.
-fn render_close_buffer_overlay(app: &AppState, frame: &mut Frame, theme: &Theme) {
-    let area = frame.area();
-
-    let overlay_width = CLOSE_BUFFER_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
-    let overlay_height = CLOSE_BUFFER_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
-
-    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
-        .flex(Flex::Center)
-        .split(area);
-    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
-        .flex(Flex::Center)
-        .split(horizontal[0]);
-    let overlay_area = vertical[0];
-
-    frame.render_widget(Clear, overlay_area);
-
-    let block = Block::default()
-        .title(" Close Buffer ")
-        .title_style(
-            Style::default()
-                .fg(theme.overlay_border)
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.overlay_border))
-        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
-
-    let inner = block.inner(overlay_area);
-    frame.render_widget(block, overlay_area);
-
-    let file_name = app
-        .buffer_manager
-        .active_buffer()
-        .and_then(|b| b.file_name())
-        .unwrap_or("[untitled]");
-
-    let lines = vec![
-        Line::from(Span::styled(
-            file_name,
-            Style::default()
-                .fg(theme.panel_border_active)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("Unsaved changes will be lost."),
-        Line::from(vec![
-            Span::raw("Close? "),
-            Span::styled(
-                "(y/N)",
-                Style::default()
-                    .fg(theme.panel_border_active)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
-
-    let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-    let content_area = Rect {
-        y: inner.y + 1,
-        height: inner.height.saturating_sub(1),
-        ..inner
-    };
-    frame.render_widget(paragraph, content_area);
-}
-
-/// Width of the close-terminal confirmation overlay in columns.
-const CLOSE_TERMINAL_OVERLAY_WIDTH: u16 = 40;
-/// Height of the close-terminal confirmation overlay in rows.
-const CLOSE_TERMINAL_OVERLAY_HEIGHT: u16 = 7;
-
-/// Renders a centered close-terminal confirmation dialog.
-///
-/// Shows the tab title and a warning about a still-running process.
-fn render_close_terminal_overlay(app: &AppState, frame: &mut Frame, theme: &Theme) {
-    let area = frame.area();
-
-    let overlay_width = CLOSE_TERMINAL_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
-    let overlay_height = CLOSE_TERMINAL_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
-
-    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
-        .flex(Flex::Center)
-        .split(area);
-    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
-        .flex(Flex::Center)
-        .split(horizontal[0]);
-    let overlay_area = vertical[0];
-
-    frame.render_widget(Clear, overlay_area);
-
-    let block = Block::default()
-        .title(" Close Terminal ")
-        .title_style(
-            Style::default()
-                .fg(theme.overlay_border)
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.overlay_border))
-        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
-
-    let inner = block.inner(overlay_area);
-    frame.render_widget(block, overlay_area);
-
-    let tab_title = app
-        .terminal_manager
-        .as_ref()
-        .and_then(|m| m.active_tab())
-        .map(|t| t.title())
-        .unwrap_or("terminal");
-
-    let lines = vec![
-        Line::from(Span::styled(
-            tab_title,
-            Style::default()
-                .fg(theme.panel_border_active)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("Process is still running."),
-        Line::from(vec![
-            Span::raw("Close? "),
-            Span::styled(
-                "(y/N)",
-                Style::default()
-                    .fg(theme.panel_border_active)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
+    lines.push(button_line);
 
     let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
     let content_area = Rect {
@@ -520,16 +433,6 @@ fn render_inline_input_line(
     theme: &Theme,
 ) -> Line<'static> {
     let text = format!("{indent}  > {input}|");
-    let padded = format!("{:<width$}", text, width = area_width);
-    let style = Style::default()
-        .fg(theme.panel_border_active)
-        .bg(theme.tree_selection_bg);
-    Line::from(Span::styled(padded, style))
-}
-
-/// Renders a delete confirmation line.
-fn render_delete_confirm_line(area_width: usize, theme: &Theme) -> Line<'static> {
-    let text = "  Delete? [y/N]";
     let padded = format!("{:<width$}", text, width = area_width);
     let style = Style::default()
         .fg(theme.panel_border_active)
@@ -617,9 +520,9 @@ fn build_plain_line(
 
 // IMPACT ANALYSIS — render_tree_content
 // Parents: render() calls this for tree panel content (normal and zoomed views).
-// Children: build_icon_line(), build_plain_line(), render_inline_input_line(),
-//           render_delete_confirm_line().
-// Siblings: Tree actions (create/rename/delete) inject inline input lines.
+// Children: build_icon_line(), build_plain_line(), render_inline_input_line().
+// Siblings: Tree actions (create/rename) inject inline input lines;
+//           delete confirmation is handled by the unified confirm dialog overlay.
 //           show_icons toggle changes rendering path.
 
 /// Renders file tree content into the given area, with selection highlight and scrolling.
@@ -693,14 +596,8 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
         lines.push(line);
 
         if is_selected && lines.len() < visible_count {
-            match action {
-                TreeAction::Creating { input, .. } => {
-                    lines.push(render_inline_input_line(&indent, input, area_width, theme));
-                }
-                TreeAction::ConfirmDelete { .. } => {
-                    lines.push(render_delete_confirm_line(area_width, theme));
-                }
-                _ => {}
+            if let TreeAction::Creating { input, .. } = action {
+                lines.push(render_inline_input_line(&indent, input, area_width, theme));
             }
         }
     }
@@ -1576,12 +1473,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     frame.render_widget(status_bar, status_area);
 
     // Overlays (on top of everything)
-    if app.confirm_close_terminal_tab {
-        render_close_terminal_overlay(app, frame, theme);
-    } else if app.confirm_close_buffer {
-        render_close_buffer_overlay(app, frame, theme);
-    } else if app.confirm_quit {
-        render_quit_overlay(frame, theme);
+    if let Some(ref dialog) = app.confirm_dialog {
+        render_confirm_dialog(dialog, frame, theme);
     } else if app.show_help {
         render_help_overlay(frame, theme);
     }
@@ -2322,43 +2215,51 @@ mod tests {
     }
 
     #[test]
-    fn render_quit_overlay_when_confirm_quit() {
+    fn render_confirm_dialog_when_quit() {
         let mut app = AppState::new();
-        app.confirm_quit = true;
+        app.confirm_dialog = Some(axe_core::ConfirmDialog::quit());
         let content = render_app_to_string(&app, 80, 24);
         assert!(
-            content.contains("y/N"),
-            "expected 'y/N' in quit confirmation overlay"
+            content.contains("Yes"),
+            "expected 'Yes' button in quit confirmation overlay"
+        );
+        assert!(
+            content.contains("No"),
+            "expected 'No' button in quit confirmation overlay"
+        );
+        assert!(
+            content.contains("Quit"),
+            "expected 'Quit' title in quit confirmation overlay"
         );
     }
 
     #[test]
-    fn render_no_quit_overlay_by_default() {
+    fn render_no_confirm_dialog_by_default() {
         let app = AppState::new();
         let content = render_app_to_string(&app, 80, 24);
         assert!(
-            !content.contains("y/N"),
-            "quit overlay should not appear by default"
+            !content.contains("[ Yes ]"),
+            "confirm dialog should not appear by default"
         );
     }
 
     #[test]
-    fn render_close_buffer_overlay_when_confirm_close() {
+    fn render_confirm_dialog_close_buffer() {
         let mut app = AppState::new();
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
         std::io::Write::flush(&mut tmp).unwrap();
         app.execute(axe_core::Command::OpenFile(tmp.path().to_path_buf()));
         app.buffer_manager.active_buffer_mut().unwrap().modified = true;
-        app.confirm_close_buffer = true;
+        app.confirm_dialog = Some(axe_core::ConfirmDialog::close_buffer("test.txt"));
         let content = render_app_to_string(&app, 80, 24);
         assert!(
             content.contains("Unsaved"),
             "expected 'Unsaved' in close-buffer overlay"
         );
         assert!(
-            content.contains("y/N"),
-            "expected 'y/N' in close-buffer overlay"
+            content.contains("Yes"),
+            "expected 'Yes' button in close-buffer overlay"
         );
     }
 
