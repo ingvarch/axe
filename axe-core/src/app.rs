@@ -9,6 +9,7 @@ use alacritty_terminal::selection::SelectionType;
 use axe_tree::NodeKind;
 
 use crate::command::Command;
+use crate::command_palette::CommandPalette;
 use crate::file_finder::FileFinder;
 use crate::keymap::KeymapResolver;
 use crate::search::SearchState;
@@ -291,6 +292,8 @@ pub struct AppState {
     pub search: Option<SearchState>,
     /// Active file finder overlay state, if open.
     pub file_finder: Option<FileFinder>,
+    /// Active command palette overlay state, if open.
+    pub command_palette: Option<CommandPalette>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
     /// Whether a terminal text selection drag is currently in progress.
@@ -338,6 +341,7 @@ impl AppState {
             clipboard: None,
             search: None,
             file_finder: None,
+            command_palette: None,
             editor_selecting: false,
             last_tree_click: None,
             terminal_selecting: false,
@@ -486,6 +490,27 @@ impl AppState {
                     }
                 }
                 _ => {} // Consume all other keys
+            }
+            return;
+        }
+
+        // Command palette overlay intercepts all keys when open.
+        if let Some(ref mut palette) = self.command_palette {
+            match key.code {
+                KeyCode::Esc => {
+                    self.command_palette = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(cmd) = palette.selected_command().cloned() {
+                        self.command_palette = None;
+                        self.execute(cmd);
+                    }
+                }
+                KeyCode::Up => palette.move_up(),
+                KeyCode::Down => palette.move_down(),
+                KeyCode::Backspace => palette.input_backspace(),
+                KeyCode::Char(c) => palette.input_char(c),
+                _ => {}
             }
             return;
         }
@@ -730,7 +755,9 @@ impl AppState {
             Command::ToggleTerminal => self.toggle_terminal(),
             Command::ShowHelp => self.show_help = !self.show_help,
             Command::CloseOverlay => {
-                if self.file_finder.is_some() {
+                if self.command_palette.is_some() {
+                    self.command_palette = None;
+                } else if self.file_finder.is_some() {
                     self.file_finder = None;
                 } else {
                     self.show_help = false;
@@ -841,6 +868,9 @@ impl AppState {
                 if let Some(ref root) = self.project_root {
                     self.file_finder = Some(FileFinder::new(root));
                 }
+            }
+            Command::OpenCommandPalette => {
+                self.command_palette = Some(CommandPalette::new(&self.keymap));
             }
             Command::ToggleIcons => {
                 if let Some(ref mut tree) = self.file_tree {
@@ -5061,5 +5091,101 @@ mod tests {
         assert_eq!(app.file_finder.as_ref().unwrap().query, "x");
         // No buffer is open, so nothing should have been inserted.
         assert!(app.buffer_manager.active_buffer().is_none());
+    }
+
+    // --- Command palette tests ---
+
+    #[test]
+    fn open_command_palette_sets_field() {
+        let mut app = AppState::new();
+        assert!(app.command_palette.is_none());
+        app.execute(Command::OpenCommandPalette);
+        assert!(app.command_palette.is_some());
+    }
+
+    #[test]
+    fn command_palette_esc_closes() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenCommandPalette);
+        assert!(app.command_palette.is_some());
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.command_palette.is_none());
+    }
+
+    #[test]
+    fn command_palette_char_input_updates_query() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenCommandPalette);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(app.command_palette.as_ref().unwrap().query, "s");
+    }
+
+    #[test]
+    fn command_palette_up_down_navigate() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenCommandPalette);
+        assert_eq!(app.command_palette.as_ref().unwrap().selected, 0);
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.command_palette.as_ref().unwrap().selected, 1);
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.command_palette.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn command_palette_enter_executes_and_closes() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenCommandPalette);
+        assert!(app.command_palette.is_some());
+        // First item is "Quit" (RequestQuit) — pressing Enter should trigger it.
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            app.command_palette.is_none(),
+            "Palette should close after Enter"
+        );
+        // RequestQuit opens a confirm dialog.
+        assert!(
+            app.confirm_dialog.is_some(),
+            "Enter on Quit should trigger RequestQuit confirmation"
+        );
+    }
+
+    #[test]
+    fn command_palette_backspace_removes_query_char() {
+        let mut app = AppState::new();
+        app.execute(Command::OpenCommandPalette);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.command_palette.as_ref().unwrap().query, "ab");
+        app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.command_palette.as_ref().unwrap().query, "a");
+    }
+
+    #[test]
+    fn close_overlay_closes_command_palette_first() {
+        let mut app = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        app.project_root = Some(tmp.path().to_path_buf());
+        app.show_help = true;
+        app.execute(Command::OpenFileFinder);
+        app.execute(Command::OpenCommandPalette);
+        assert!(app.command_palette.is_some());
+        assert!(app.file_finder.is_some());
+        assert!(app.show_help);
+        // First CloseOverlay closes palette.
+        app.execute(Command::CloseOverlay);
+        assert!(
+            app.command_palette.is_none(),
+            "CloseOverlay should close palette first"
+        );
+        assert!(app.file_finder.is_some(), "Finder should remain open");
+        assert!(app.show_help, "Help should remain open");
+        // Second closes finder.
+        app.execute(Command::CloseOverlay);
+        assert!(app.file_finder.is_none());
+        assert!(app.show_help);
+        // Third closes help.
+        app.execute(Command::CloseOverlay);
+        assert!(!app.show_help);
     }
 }

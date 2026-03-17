@@ -198,6 +198,8 @@ pub enum Command {
     CancelTreeDelete,
     /// Open the fuzzy file finder overlay (Ctrl+P).
     OpenFileFinder,
+    /// Open the command palette overlay (Ctrl+Shift+P).
+    OpenCommandPalette,
 }
 
 #[cfg(test)]
@@ -324,6 +326,7 @@ mod tests {
             Command::ConfirmTreeDelete,
             Command::CancelTreeDelete,
             Command::OpenFileFinder,
+            Command::OpenCommandPalette,
         ];
 
         for (i, a) in variants.iter().enumerate() {

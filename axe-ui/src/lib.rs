@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use axe_core::{AppState, FileFinder, FocusTarget, SearchState};
+use axe_core::{AppState, CommandPalette, FileFinder, FocusTarget, SearchState};
 use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
@@ -229,6 +229,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Y", "Redo"),
     ("Ctrl+S", "Save"),
     ("Ctrl+P", "Open file finder"),
+    ("F1 / Ctrl+Shift+P", "Command palette"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -586,6 +587,206 @@ fn render_file_finder(finder: &FileFinder, frame: &mut Frame, theme: &Theme) {
                 " {} / {} files",
                 finder.filtered.len(),
                 finder.total_files()
+            )
+        };
+        let footer_line = Line::from(Span::styled(
+            count_text,
+            Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+/// Width of the command palette overlay as a percentage of screen width.
+const CMD_PALETTE_WIDTH_PCT: u16 = 60;
+/// Height of the command palette overlay as a percentage of screen height.
+const CMD_PALETTE_HEIGHT_PCT: u16 = 50;
+/// Minimum width of the command palette overlay.
+const CMD_PALETTE_MIN_WIDTH: u16 = 40;
+/// Minimum height of the command palette overlay.
+const CMD_PALETTE_MIN_HEIGHT: u16 = 8;
+
+/// Renders the command palette overlay centered on the screen.
+fn render_command_palette(palette: &CommandPalette, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = (area.width * CMD_PALETTE_WIDTH_PCT / 100)
+        .max(CMD_PALETTE_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * CMD_PALETTE_HEIGHT_PCT / 100)
+        .max(CMD_PALETTE_MIN_HEIGHT)
+        .min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Command Palette ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Input line: "> query|"
+    let input_line = Line::from(vec![
+        Span::styled(
+            " > ",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(&palette.query, Style::default().fg(theme.foreground)),
+        Span::styled("|", Style::default().fg(theme.panel_border_active)),
+    ]);
+    let input_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Separator
+    if inner.height > 1 {
+        let sep = Line::from(Span::styled(
+            "\u{2500}".repeat(inner.width as usize),
+            Style::default().fg(theme.panel_border),
+        ));
+        let sep_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(sep), sep_area);
+    }
+
+    // Results list
+    let results_start_y = inner.y + 2;
+    let results_height = inner.height.saturating_sub(3); // input + sep + footer
+    let max_visible = results_height as usize;
+
+    // Adjust scroll offset to keep selection visible.
+    let scroll_offset = if palette.selected < palette.scroll_offset {
+        palette.selected
+    } else if palette.selected >= palette.scroll_offset + max_visible {
+        palette
+            .selected
+            .saturating_sub(max_visible.saturating_sub(1))
+    } else {
+        palette.scroll_offset
+    };
+
+    for (i, filtered_item) in palette
+        .filtered
+        .iter()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .enumerate()
+    {
+        let item = &palette.items[filtered_item.index];
+        let is_selected = scroll_offset + i == palette.selected;
+        let row_y = results_start_y + i as u16;
+
+        let row_area = Rect {
+            y: row_y,
+            height: 1,
+            ..inner
+        };
+
+        let bg = if is_selected {
+            theme.tree_selection_bg
+        } else {
+            theme.overlay_bg
+        };
+
+        // Build styled spans: prefix + display_name (with match highlighting) + keybinding (right-aligned)
+        let prefix = if is_selected { " > " } else { "   " };
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default()
+                .fg(if is_selected {
+                    theme.panel_border_active
+                } else {
+                    theme.foreground
+                })
+                .bg(bg)
+                .add_modifier(if is_selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )];
+
+        // Render display name with matched character highlighting.
+        for (char_idx, ch) in item.display_name.chars().enumerate() {
+            let is_match = filtered_item.match_indices.contains(&(char_idx as u32));
+            let style = if is_match {
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground).bg(bg)
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+
+        // Right-align keybinding if present.
+        if !item.keybinding.is_empty() {
+            let name_width = prefix.len() + item.display_name.chars().count();
+            let kb_width = item.keybinding.len();
+            let available = inner.width as usize;
+            let gap = available.saturating_sub(name_width + kb_width + 1);
+            if gap > 0 {
+                spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
+                spans.push(Span::styled(
+                    &item.keybinding,
+                    Style::default().fg(theme.panel_border).bg(bg),
+                ));
+            }
+        }
+
+        // Fill remaining width with background color for selected row.
+        if is_selected {
+            let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let remaining = (inner.width as usize).saturating_sub(used);
+            if remaining > 0 {
+                spans.push(Span::styled(" ".repeat(remaining), Style::default().bg(bg)));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+    }
+
+    // Footer: command count
+    if inner.height > 2 {
+        let footer_y = inner.y + inner.height - 1;
+        let count_text = if palette.query.is_empty() {
+            format!(" {} commands", palette.total_commands())
+        } else {
+            format!(
+                " {} / {} commands",
+                palette.filtered.len(),
+                palette.total_commands()
             )
         };
         let footer_line = Line::from(Span::styled(
@@ -1660,6 +1861,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {
         render_confirm_dialog(dialog, frame, theme);
+    } else if let Some(ref palette) = app.command_palette {
+        render_command_palette(palette, frame, theme);
     } else if let Some(ref finder) = app.file_finder {
         render_file_finder(finder, frame, theme);
     } else if app.show_help {

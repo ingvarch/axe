@@ -709,17 +709,17 @@ Quick file search across the project.
 
 ---
 
-### Task 8.2 — Command Palette (Ctrl+Shift+P)
+### Task 8.2 — Command Palette (Ctrl+Shift+P) [DONE]
 
 Search and execute any available command.
 
 **Acceptance criteria:**
-- `Ctrl+Shift+P` opens the command palette overlay
-- Lists all available commands with their keybindings shown on the right
-- Fuzzy search filters commands as you type
-- `Enter` executes the selected command
-- `Esc` closes the palette
-- Commands are listed with human-readable names (e.g., "File: Save", "View: Toggle Terminal")
+- [x] `Ctrl+Shift+P` opens the command palette overlay
+- [x] Lists all available commands with their keybindings shown on the right
+- [x] Fuzzy search filters commands as you type
+- [x] `Enter` executes the selected command
+- [x] `Esc` closes the palette
+- [x] Commands are listed with human-readable names (e.g., "File: Save", "View: Toggle Terminal")
 
 **Implementation details:**
 - Reuse the same fuzzy finder widget as Ctrl+P, but with commands as the data source

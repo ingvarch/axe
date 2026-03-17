@@ -173,8 +173,53 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "search_toggle_case" => Some(Command::SearchToggleCase),
         "search_toggle_regex" => Some(Command::SearchToggleRegex),
         "open_file_finder" => Some(Command::OpenFileFinder),
+        "open_command_palette" => Some(Command::OpenCommandPalette),
         _ => None,
     }
+}
+
+/// Formats a key combo into a human-readable string (inverse of `parse_key_combo`).
+///
+/// # Examples
+/// - `(CONTROL, Char('s'))` -> `"Ctrl+S"`
+/// - `(ALT, Char(']'))` -> `"Alt+]"`
+/// - `(NONE, Esc)` -> `"Esc"`
+pub fn format_key_combo(modifiers: KeyModifiers, code: KeyCode) -> String {
+    let mut parts = Vec::new();
+
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl".to_string());
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt".to_string());
+    }
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("Shift".to_string());
+    }
+
+    let key = match code {
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "BackTab".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(c) => c.to_uppercase().to_string(),
+        KeyCode::F(n) => format!("F{n}"),
+        _ => format!("{code:?}"),
+    };
+
+    parts.push(key);
+    parts.join("+")
 }
 
 /// Resolves key events to commands using a configurable binding map.
@@ -298,6 +343,24 @@ impl KeymapResolver {
             KeyCode::Char('p'),
             Command::OpenFileFinder,
         );
+        // Ctrl+Shift+P: terminals without Kitty protocol report uppercase 'P'.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('P'),
+            Command::OpenCommandPalette,
+        );
+        // Ctrl+Shift+P: terminals with Kitty protocol report lowercase 'p' + SHIFT.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('p'),
+            Command::OpenCommandPalette,
+        );
+        // F1 as universal fallback — works in terminals without Kitty keyboard protocol.
+        resolver.bind(
+            KeyModifiers::NONE,
+            KeyCode::F(1),
+            Command::OpenCommandPalette,
+        );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal
         // based on current focus. Alt+] / Alt+[ avoids terminal emulator conflicts
@@ -345,6 +408,18 @@ impl KeymapResolver {
     /// Adds or overwrites a keybinding.
     pub fn bind(&mut self, modifiers: KeyModifiers, code: KeyCode, cmd: Command) {
         self.global.insert((modifiers, code), cmd);
+    }
+
+    /// Returns the human-readable keybinding string for a command, if bound.
+    ///
+    /// When multiple bindings exist for the same command, returns the shortest
+    /// string representation (simplest binding) for deterministic display.
+    pub fn binding_for(&self, cmd: &Command) -> Option<String> {
+        self.global
+            .iter()
+            .filter(|(_, c)| *c == cmd)
+            .map(|((modifiers, code), _)| format_key_combo(*modifiers, *code))
+            .min_by_key(|s| s.len())
     }
 
     /// Resolves a key event to a command, if one is bound.
@@ -873,5 +948,130 @@ mod tests {
             command_from_str("open_file_finder"),
             Some(Command::OpenFileFinder)
         );
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_p_opens_command_palette() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('P'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenCommandPalette));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_lowercase_p_opens_command_palette() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenCommandPalette));
+    }
+
+    #[test]
+    fn default_bindings_f1_opens_command_palette() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::OpenCommandPalette));
+    }
+
+    #[test]
+    fn command_from_str_open_command_palette() {
+        assert_eq!(
+            command_from_str("open_command_palette"),
+            Some(Command::OpenCommandPalette)
+        );
+    }
+
+    // --- format_key_combo ---
+
+    #[test]
+    fn format_key_combo_ctrl_q() {
+        let s = format_key_combo(KeyModifiers::CONTROL, KeyCode::Char('q'));
+        assert_eq!(s, "Ctrl+Q");
+    }
+
+    #[test]
+    fn format_key_combo_ctrl_shift_z() {
+        let s = format_key_combo(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('Z'),
+        );
+        assert_eq!(s, "Ctrl+Shift+Z");
+    }
+
+    #[test]
+    fn format_key_combo_alt_bracket() {
+        let s = format_key_combo(KeyModifiers::ALT, KeyCode::Char(']'));
+        assert_eq!(s, "Alt+]");
+    }
+
+    #[test]
+    fn format_key_combo_esc() {
+        let s = format_key_combo(KeyModifiers::NONE, KeyCode::Esc);
+        assert_eq!(s, "Esc");
+    }
+
+    #[test]
+    fn format_key_combo_f12() {
+        let s = format_key_combo(KeyModifiers::NONE, KeyCode::F(12));
+        assert_eq!(s, "F12");
+    }
+
+    #[test]
+    fn format_key_combo_shift_backtab() {
+        let s = format_key_combo(KeyModifiers::SHIFT, KeyCode::BackTab);
+        assert_eq!(s, "Shift+BackTab");
+    }
+
+    #[test]
+    fn format_key_combo_space() {
+        let s = format_key_combo(KeyModifiers::NONE, KeyCode::Char(' '));
+        assert_eq!(s, "Space");
+    }
+
+    #[test]
+    fn format_key_combo_shift_page_up() {
+        let s = format_key_combo(KeyModifiers::SHIFT, KeyCode::PageUp);
+        assert_eq!(s, "Shift+PageUp");
+    }
+
+    // --- binding_for ---
+
+    #[test]
+    fn binding_for_request_quit_returns_ctrl_q() {
+        let resolver = KeymapResolver::with_defaults();
+        assert_eq!(
+            resolver.binding_for(&Command::RequestQuit),
+            Some("Ctrl+Q".to_string())
+        );
+    }
+
+    #[test]
+    fn binding_for_unbound_command_returns_none() {
+        let resolver = KeymapResolver::with_defaults();
+        // Quit (not RequestQuit) has no direct binding.
+        assert_eq!(resolver.binding_for(&Command::Quit), None);
+    }
+
+    #[test]
+    fn format_key_combo_roundtrips_with_parse() {
+        // Test that format -> parse roundtrip works for common combos.
+        let combos = vec![
+            (KeyModifiers::CONTROL, KeyCode::Char('s')),
+            (KeyModifiers::ALT, KeyCode::Char('t')),
+            (KeyModifiers::NONE, KeyCode::Esc),
+            (KeyModifiers::NONE, KeyCode::F(5)),
+        ];
+        for (mods, code) in combos {
+            let formatted = format_key_combo(mods, code);
+            let parsed = parse_key_combo(&formatted.to_lowercase());
+            assert!(parsed.is_some(), "Failed to roundtrip: {formatted}");
+            let (pm, pc) = parsed.unwrap();
+            assert_eq!(pm, mods, "Modifiers mismatch for {formatted}");
+            assert_eq!(pc, code, "KeyCode mismatch for {formatted}");
+        }
     }
 }

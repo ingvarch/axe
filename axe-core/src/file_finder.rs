@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
 
-/// Maximum number of filtered results to display.
-const MAX_RESULTS: usize = 1000;
+use crate::fuzzy::{FilteredItem, MAX_RESULTS};
 
 /// A single file entry in the finder.
 #[derive(Debug, Clone)]
@@ -20,17 +19,6 @@ pub struct FileFinderItem {
     pub relative_path: String,
     /// Absolute path used for opening the file.
     pub absolute_path: PathBuf,
-}
-
-/// A matched result with score and highlight positions.
-#[derive(Debug, Clone)]
-pub struct FilteredItem {
-    /// Index into the `items` vector.
-    pub index: usize,
-    /// Match score from nucleo (higher is better).
-    pub score: u32,
-    /// Character positions in the relative path that matched the query.
-    pub match_indices: Vec<u32>,
 }
 
 /// Fuzzy file finder state.

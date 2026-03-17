@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::terminal::{
     self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
     LeaveAlternateScreen,
@@ -37,11 +40,20 @@ fn setup_terminal() -> Result<Term> {
     terminal::enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
+    // Enable Kitty keyboard protocol for terminals that support it.
+    // This allows correct reporting of Ctrl+Shift+<key> combos.
+    if terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        stdout().execute(PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+        ))?;
+    }
     let backend = CrosstermBackend::new(stdout());
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal() {
+    // Pop keyboard enhancement if it was pushed (safe to call even if not pushed).
+    let _ = stdout().execute(PopKeyboardEnhancementFlags);
     if let Err(e) = stdout().execute(DisableMouseCapture) {
         eprintln!("Failed to disable mouse capture: {e}");
     }
