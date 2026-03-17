@@ -1,6 +1,6 @@
 // IMPACT ANALYSIS — tab module
 // Parents: TerminalManager creates and owns TerminalTab instances.
-// Children: pty::spawn_shell() for PTY creation; Term<AltScreenListener> for VT parsing.
+// Children: pty::spawn_shell() for PTY creation; Term<PtyEventListener> for VT parsing.
 //           The background reader thread reads from the PTY reader.
 // Siblings: manager.rs polls output and feeds it to the active tab via process_output().
 //           axe-ui reads tab.term() for rendering.
@@ -8,6 +8,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Direction, Point};
@@ -18,7 +19,7 @@ use alacritty_terminal::Term;
 use anyhow::{Context, Result};
 use portable_pty::{Child, MasterPty, PtySize};
 
-use crate::event_listener::AltScreenListener;
+use crate::event_listener::{PtyEvent, PtyEventListener};
 use crate::pty;
 
 /// Dimensions adapter for creating and resizing a `Term`.
@@ -47,7 +48,8 @@ pub struct TerminalTab {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
-    term: Term<AltScreenListener>,
+    term: Term<PtyEventListener>,
+    pty_event_rx: mpsc::Receiver<PtyEvent>,
     processor: ansi::Processor,
     last_cols: u16,
     last_rows: u16,
@@ -86,7 +88,12 @@ impl TerminalTab {
             cols: cols as usize,
             rows: rows as usize,
         };
-        let term = Term::new(TermConfig::default(), &size, AltScreenListener);
+        let (pty_event_tx, pty_event_rx) = mpsc::channel();
+        let term = Term::new(
+            TermConfig::default(),
+            &size,
+            PtyEventListener::new(pty_event_tx),
+        );
         let processor = ansi::Processor::new();
 
         let tab = Self {
@@ -95,6 +102,7 @@ impl TerminalTab {
             writer,
             child,
             term,
+            pty_event_rx,
             processor,
             last_cols: cols,
             last_rows: rows,
@@ -113,8 +121,36 @@ impl TerminalTab {
     }
 
     /// Feeds raw bytes from the PTY into the VT parser, updating the terminal grid.
+    ///
+    /// After parsing, drains any events emitted by the terminal emulator (e.g., DSR
+    /// cursor position responses) and writes them back to the PTY master.
     pub fn process_output(&mut self, data: &[u8]) {
         self.processor.advance(&mut self.term, data);
+        self.drain_pty_events();
+    }
+
+    /// Drains pending events from the terminal emulator and handles them.
+    fn drain_pty_events(&mut self) {
+        while let Ok(event) = self.pty_event_rx.try_recv() {
+            match event {
+                PtyEvent::Write(s) => {
+                    if let Err(e) = self.writer.write_all(s.as_bytes()) {
+                        log::warn!("Failed to write PTY event response: {e}");
+                        return;
+                    }
+                    if let Err(e) = self.writer.flush() {
+                        log::warn!("Failed to flush PTY after event response: {e}");
+                        return;
+                    }
+                }
+                PtyEvent::Title(s) => {
+                    self.title = s;
+                }
+                PtyEvent::Bell => {
+                    // Future: emit event to core for visual/audio bell.
+                }
+            }
+        }
     }
 
     /// Resizes the PTY and terminal grid to new dimensions.
@@ -145,7 +181,7 @@ impl TerminalTab {
     }
 
     /// Returns a reference to the alacritty terminal state for rendering.
-    pub fn term(&self) -> &Term<AltScreenListener> {
+    pub fn term(&self) -> &Term<PtyEventListener> {
         &self.term
     }
 
@@ -170,7 +206,7 @@ impl TerminalTab {
     }
 
     /// Returns a mutable reference to the alacritty terminal state.
-    pub fn term_mut(&mut self) -> &mut Term<AltScreenListener> {
+    pub fn term_mut(&mut self) -> &mut Term<PtyEventListener> {
         &mut self.term
     }
 

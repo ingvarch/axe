@@ -912,7 +912,7 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
 /// The thumb position is proportional to the scroll position within the history.
 /// When there is no scrollback history, renders nothing (empty column).
 fn render_terminal_scrollbar(
-    term: &alacritty_terminal::Term<axe_terminal::event_listener::AltScreenListener>,
+    term: &alacritty_terminal::Term<axe_terminal::event_listener::PtyEventListener>,
     display_offset: usize,
     scrollbar_area: Rect,
     buf: &mut ratatui::buffer::Buffer,
