@@ -1230,8 +1230,7 @@ fn adjust_terminal_rect(rect: Rect, has_tabs: bool) -> Rect {
 }
 
 /// Renders the full IDE interface with conditional panel visibility and a status bar.
-pub fn render(app: &AppState, frame: &mut Frame) {
-    let theme = Theme::default();
+pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
         show_terminal: app.show_terminal,
@@ -1253,18 +1252,18 @@ pub fn render(app: &AppState, frame: &mut Frame) {
             FocusTarget::Editor => (editor_title(app, true), FocusTarget::Editor),
             FocusTarget::Terminal(id) => (" Terminal (zoomed) ", FocusTarget::Terminal(*id)),
         };
-        let block = panel_block(title, &app.focus, &panel_target, &theme, resize_active);
+        let block = panel_block(title, &app.focus, &panel_target, theme, resize_active);
         let inner = block.inner(main_area);
         frame.render_widget(block, main_area);
         match zoomed {
             FocusTarget::Tree => {
                 if let Some(ref tree) = app.file_tree {
-                    render_tree_content(tree, inner, frame, &theme);
+                    render_tree_content(tree, inner, frame, theme);
                 }
             }
             FocusTarget::Terminal(_) => {
                 if let Some(ref mgr) = app.terminal_manager {
-                    render_terminal_content(mgr, inner, frame, &theme);
+                    render_terminal_content(mgr, inner, frame, theme);
                 }
             }
             FocusTarget::Editor => {
@@ -1282,7 +1281,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
                         buffer,
                         inner,
                         frame,
-                        &theme,
+                        theme,
                         focused,
                         app.search.as_ref(),
                         tab_bar,
@@ -1304,22 +1303,22 @@ pub fn render(app: &AppState, frame: &mut Frame) {
             " Files ",
             &app.focus,
             &FocusTarget::Tree,
-            &theme,
+            theme,
             resize_active,
         );
         let tree_inner = tree_block.inner(tree_area);
         frame.render_widget(tree_block, tree_area);
         if let Some(ref tree) = app.file_tree {
-            render_tree_content(tree, tree_inner, frame, &theme);
+            render_tree_content(tree, tree_inner, frame, theme);
         }
 
-        render_right_panels(app, frame, right_area, &layout_mgr, &theme, resize_active);
+        render_right_panels(app, frame, right_area, &layout_mgr, theme, resize_active);
     } else {
-        render_right_panels(app, frame, main_area, &layout_mgr, &theme, resize_active);
+        render_right_panels(app, frame, main_area, &layout_mgr, theme, resize_active);
     }
 
     // Status bar with hotkey hints
-    let status_line = build_status_bar(app, &theme);
+    let status_line = build_status_bar(app, theme);
     let status_bar = Paragraph::new(status_line).style(
         Style::default()
             .bg(theme.status_bar_bg)
@@ -1329,11 +1328,11 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Overlays (on top of everything)
     if app.confirm_close_buffer {
-        render_close_buffer_overlay(app, frame, &theme);
+        render_close_buffer_overlay(app, frame, theme);
     } else if app.confirm_quit {
-        render_quit_overlay(frame, &theme);
+        render_quit_overlay(frame, theme);
     } else if app.show_help {
-        render_help_overlay(frame, &theme);
+        render_help_overlay(frame, theme);
     }
 }
 
@@ -1872,7 +1871,8 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(app, frame)).unwrap();
+        let theme = Theme::default();
+        terminal.draw(|frame| render(app, frame, &theme)).unwrap();
 
         terminal
             .backend()

@@ -59,7 +59,24 @@ impl TerminalTab {
     /// The caller is responsible for reading from the returned reader in a background
     /// thread and feeding the data back through `process_output()`.
     pub fn new(cols: u16, rows: u16, cwd: &Path) -> Result<(Self, Box<dyn Read + Send>)> {
-        let shell = pty::detect_shell();
+        Self::new_with_shell(cols, rows, cwd, None)
+    }
+
+    /// Spawns a new shell in a PTY, optionally overriding the detected shell.
+    ///
+    /// If `shell` is `None` or an empty string, falls back to `detect_shell()`.
+    /// The caller is responsible for reading from the returned reader in a background
+    /// thread and feeding the data back through `process_output()`.
+    pub fn new_with_shell(
+        cols: u16,
+        rows: u16,
+        cwd: &Path,
+        shell: Option<&str>,
+    ) -> Result<(Self, Box<dyn Read + Send>)> {
+        let shell = match shell {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => pty::detect_shell(),
+        };
         let (master, child, reader) =
             pty::spawn_shell(&shell, cols, rows, cwd).context("Failed to spawn terminal shell")?;
 
@@ -561,5 +578,47 @@ mod tests {
     fn selection_to_string_returns_none_without_selection() {
         let (tab, _reader) = TerminalTab::new(80, 24, &std::env::current_dir().unwrap()).unwrap();
         assert_eq!(tab.selection_to_string(), None);
+    }
+
+    // --- Shell override tests ---
+
+    #[test]
+    fn new_with_none_shell_uses_default() {
+        let cwd = std::env::current_dir().unwrap();
+        let result = TerminalTab::new_with_shell(80, 24, &cwd, None);
+        assert!(
+            result.is_ok(),
+            "new_with_shell(None) should succeed: {:?}",
+            result.err()
+        );
+        let (mut tab, _reader) = result.unwrap();
+        assert!(tab.is_alive());
+    }
+
+    #[test]
+    fn new_with_empty_shell_uses_default() {
+        let cwd = std::env::current_dir().unwrap();
+        let result = TerminalTab::new_with_shell(80, 24, &cwd, Some(""));
+        assert!(
+            result.is_ok(),
+            "new_with_shell(Some(\"\")) should succeed: {:?}",
+            result.err()
+        );
+        let (mut tab, _reader) = result.unwrap();
+        assert!(tab.is_alive());
+    }
+
+    #[test]
+    fn new_with_explicit_shell_uses_that_shell() {
+        let cwd = std::env::current_dir().unwrap();
+        // Use /bin/sh which exists on all Unix systems.
+        let result = TerminalTab::new_with_shell(80, 24, &cwd, Some("/bin/sh"));
+        assert!(
+            result.is_ok(),
+            "new_with_shell(Some(\"/bin/sh\")) should succeed: {:?}",
+            result.err()
+        );
+        let (mut tab, _reader) = result.unwrap();
+        assert!(tab.is_alive());
     }
 }

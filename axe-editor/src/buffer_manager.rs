@@ -11,6 +11,10 @@ use crate::buffer::EditorBuffer;
 pub struct BufferManager {
     buffers: Vec<EditorBuffer>,
     active: usize,
+    /// Tab size to apply to newly created buffers.
+    tab_size: usize,
+    /// Whether new buffers should insert spaces for tabs.
+    insert_spaces: bool,
 }
 
 impl Default for BufferManager {
@@ -21,11 +25,37 @@ impl Default for BufferManager {
 
 impl BufferManager {
     /// Creates a new empty buffer manager with no open buffers.
+    ///
+    /// Uses default tab configuration (4 spaces, insert spaces mode).
     pub fn new() -> Self {
         Self {
             buffers: Vec::new(),
             active: 0,
+            tab_size: 4,
+            insert_spaces: true,
         }
+    }
+
+    /// Creates a new buffer manager with custom tab configuration.
+    ///
+    /// All subsequently opened or created buffers will inherit these settings.
+    pub fn with_editor_config(tab_size: usize, insert_spaces: bool) -> Self {
+        Self {
+            buffers: Vec::new(),
+            active: 0,
+            tab_size,
+            insert_spaces,
+        }
+    }
+
+    /// Returns the configured tab size for new buffers.
+    pub fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+
+    /// Returns whether new buffers insert spaces for tabs.
+    pub fn insert_spaces(&self) -> bool {
+        self.insert_spaces
     }
 
     /// Opens a file as a new buffer, or switches to it if already open.
@@ -47,7 +77,8 @@ impl BufferManager {
             }
         }
 
-        let buffer = EditorBuffer::from_file(path)?;
+        let mut buffer = EditorBuffer::from_file(path)?;
+        buffer.set_tab_config(self.tab_size, self.insert_spaces);
         self.buffers.push(buffer);
         self.active = self.buffers.len() - 1;
         Ok(())
@@ -327,5 +358,44 @@ mod tests {
         mgr.open_file(tmp.path()).unwrap();
         mgr.next_buffer();
         assert_eq!(mgr.active_index(), 0);
+    }
+
+    // --- tab config propagation tests ---
+
+    #[test]
+    fn with_editor_config_stores_settings() {
+        let mgr = BufferManager::with_editor_config(2, false);
+        assert_eq!(mgr.buffer_count(), 0);
+        // Settings are stored and will be applied to newly opened buffers.
+        assert_eq!(mgr.tab_size(), 2);
+        assert!(!mgr.insert_spaces());
+    }
+
+    #[test]
+    fn with_editor_config_passes_to_opened_buffers() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::with_editor_config(2, false);
+        mgr.open_file(tmp.path()).unwrap();
+
+        let buf = mgr.active_buffer().unwrap();
+        assert_eq!(buf.tab_size(), 2);
+        assert!(!buf.insert_spaces());
+    }
+
+    #[test]
+    fn default_manager_uses_default_tab_config() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+
+        let buf = mgr.active_buffer().unwrap();
+        assert_eq!(buf.tab_size(), 4);
+        assert!(buf.insert_spaces());
     }
 }

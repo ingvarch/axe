@@ -455,17 +455,17 @@ Add syntax highlighting using tree-sitter for the most common languages.
 
 ---
 
-### Task 5.2 — Theme Engine: Load Themes from TOML
+### Task 5.2 — Theme Engine: Load Themes from TOML ✅
 
 Load syntax and UI colors from TOML theme files.
 
 **Acceptance criteria:**
-- Ship at least two built-in themes: `axe-dark` (default) and `axe-light`
-- Theme file defines all colors: UI chrome, gutter, diagnostics, syntax scopes
-- Syntax scopes map to tree-sitter capture names
-- Config option: `ui.theme = "axe-dark"` selects the theme
-- Theme files are loaded from `~/.config/axe/themes/` (user themes) or bundled
-- Changing the theme via command palette reloads all colors immediately
+- [x] Ship at least two built-in themes: `axe-dark` (default) and `axe-light`
+- [x] Theme file defines all colors: UI chrome, gutter, diagnostics, syntax scopes
+- [x] Syntax scopes map to tree-sitter capture names
+- [x] Config option: `ui.theme = "axe-dark"` selects the theme
+- [x] Theme files are loaded from `~/.config/axe/themes/` (user themes) or bundled
+- [ ] Changing the theme via command palette reloads all colors immediately (requires Task 8.2 — Command Palette)
 
 **Implementation details:**
 - Theme TOML structure as defined in `AXE_ARCHITECTURE.md` section 3.6
@@ -804,20 +804,20 @@ Show git status for files in the file tree.
 
 ## Phase 10: Configuration & Polish
 
-### Task 10.1 — Configuration File Loading
+### Task 10.1 — Configuration File Loading ✅
 
 Load user configuration from TOML file.
 
 **Acceptance criteria:**
-- On startup, load `~/.config/axe/config.toml` if it exists
-- Project-level `.axe/config.toml` overrides global config
-- All keybindings configurable
-- All theme colors configurable
-- Editor settings: tab size, spaces vs tabs, word wrap, format on save
-- Tree settings: show hidden, show icons, sort order
-- Terminal settings: shell command, scrollback size
-- If config file has errors, show a notification and use defaults
-- `ReloadConfig` command re-reads config without restarting
+- [x] On startup, load `~/.config/axe/config.toml` if it exists
+- [x] Project-level `.axe/config.toml` overrides global config
+- [x] All keybindings configurable (`[keybindings]` section with key combo parsing)
+- [x] All theme colors configurable (theme TOML files with `from_theme_file`)
+- [x] Editor settings: tab size, spaces vs tabs, word wrap, format on save
+- [x] Tree settings: show hidden, show icons, sort order
+- [x] Terminal settings: shell command, scrollback size
+- [x] If config file has errors, show a notification and use defaults
+- [ ] `ReloadConfig` command re-reads config without restarting (deferred — needs runtime re-apply of all settings)
 
 **Implementation details:**
 - Deserialize with `serde` + `toml`

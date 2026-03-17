@@ -1,0 +1,47 @@
+[base]
+background = "#fafafa"
+foreground = "#383a42"
+
+[ui]
+panel_border = "#d3d3d3"
+panel_border_active = "#4078f2"
+status_bar_bg = "#eaeaeb"
+status_bar_fg = "#383a42"
+status_bar_key = "#696c77"
+overlay_border = "#4078f2"
+overlay_bg = "#fafafa"
+resize_border = "#c18401"
+tree_selection_bg = "#e8e8e8"
+tab_bar_bg = "#eaeaeb"
+tab_active_bg = "#fafafa"
+tab_active_fg = "#383a42"
+tab_inactive_fg = "#696c77"
+
+[gutter]
+bg = "#f0f0f0"
+line_number = "#d3d3d3"
+line_number_active = "#383a42"
+
+[editor]
+cursor_line_bg = "#f2f2f2"
+selection_bg = "#bfceff"
+search_match_bg = "#ffeaa0"
+search_active_match_bg = "#c18401"
+search_active_match_fg = "#fafafa"
+
+[syntax]
+keyword = { fg = "#a626a4" }
+string = { fg = "#50a14f" }
+comment = { fg = "#a0a1a7", italic = true }
+function = { fg = "#4078f2" }
+type = { fg = "#c18401" }
+variable = { fg = "#e45649" }
+constant = { fg = "#986801" }
+number = { fg = "#986801" }
+operator = { fg = "#0184bc" }
+punctuation = { fg = "#383a42" }
+property = { fg = "#e45649" }
+attribute = { fg = "#c18401" }
+tag = { fg = "#e45649" }
+escape = { fg = "#0184bc" }
+builtin = { fg = "#0184bc" }

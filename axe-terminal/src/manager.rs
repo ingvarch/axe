@@ -70,12 +70,26 @@ impl TerminalManager {
     ///
     /// Returns the index of the new tab. Fails if the maximum number of tabs is reached.
     pub fn spawn_tab(&mut self, cols: u16, rows: u16, cwd: &Path) -> Result<usize> {
+        self.spawn_tab_with_shell(cols, rows, cwd, None)
+    }
+
+    /// Spawns a new terminal tab, optionally overriding the detected shell.
+    ///
+    /// If `shell` is `None` or an empty string, falls back to the detected shell.
+    /// Returns the index of the new tab. Fails if the maximum number of tabs is reached.
+    pub fn spawn_tab_with_shell(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cwd: &Path,
+        shell: Option<&str>,
+    ) -> Result<usize> {
         if self.tabs.len() >= MAX_TERMINAL_TABS {
             anyhow::bail!("Maximum of {MAX_TERMINAL_TABS} terminal tabs reached");
         }
 
-        let (tab, reader) =
-            TerminalTab::new(cols, rows, cwd).context("Failed to create terminal tab")?;
+        let (tab, reader) = TerminalTab::new_with_shell(cols, rows, cwd, shell)
+            .context("Failed to create terminal tab")?;
 
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -94,7 +108,20 @@ impl TerminalManager {
     ///
     /// Sets the new tab as active.
     pub fn spawn_default_tab(&mut self, cols: u16, rows: u16, cwd: &Path) -> Result<()> {
-        let idx = self.spawn_tab(cols, rows, cwd)?;
+        self.spawn_default_tab_with_shell(cols, rows, cwd, None)
+    }
+
+    /// Spawns a new terminal tab with an optional shell override (convenience wrapper).
+    ///
+    /// Sets the new tab as active.
+    pub fn spawn_default_tab_with_shell(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cwd: &Path,
+        shell: Option<&str>,
+    ) -> Result<()> {
+        let idx = self.spawn_tab_with_shell(cols, rows, cwd, shell)?;
         self.active = idx;
         Ok(())
     }
@@ -761,6 +788,44 @@ mod tests {
             !mgr.active_tab().unwrap().has_selection(),
             "Selection should be cleared"
         );
+    }
+
+    // --- Shell override tests ---
+
+    #[test]
+    fn spawn_tab_with_shell_none_uses_default() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let result = mgr.spawn_tab_with_shell(80, 24, &cwd, None);
+        assert!(
+            result.is_ok(),
+            "spawn_tab_with_shell(None) should succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(mgr.tab_count(), 1);
+    }
+
+    #[test]
+    fn spawn_tab_with_shell_explicit_uses_that_shell() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let result = mgr.spawn_tab_with_shell(80, 24, &cwd, Some("/bin/sh"));
+        assert!(
+            result.is_ok(),
+            "spawn_tab_with_shell(Some(\"/bin/sh\")) should succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(mgr.tab_count(), 1);
+    }
+
+    #[test]
+    fn spawn_default_tab_with_shell_sets_active() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let result = mgr.spawn_default_tab_with_shell(80, 24, &cwd, None);
+        assert!(result.is_ok());
+        assert_eq!(mgr.tab_count(), 1);
+        assert!(mgr.active_tab().is_some());
     }
 
     #[test]

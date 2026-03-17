@@ -10,8 +10,8 @@ use crate::highlight::{self, HighlightSpan, HighlightState};
 use crate::history::{Edit, EditHistory};
 use crate::selection::Selection;
 
-/// Number of spaces inserted for a tab.
-const TAB_WIDTH: usize = 4;
+/// Default number of spaces inserted for a tab.
+const DEFAULT_TAB_SIZE: usize = 4;
 
 /// A single editor buffer holding file content as a rope.
 ///
@@ -34,6 +34,10 @@ pub struct EditorBuffer {
     pub selection: Option<Selection>,
     /// Syntax highlighting state, if the file type is supported.
     highlight: Option<HighlightState>,
+    /// Number of spaces (or columns) per tab stop.
+    tab_size: usize,
+    /// Whether Tab key inserts spaces (`true`) or a literal tab character (`false`).
+    insert_spaces: bool,
 }
 
 impl Default for EditorBuffer {
@@ -44,6 +48,8 @@ impl Default for EditorBuffer {
 
 impl EditorBuffer {
     /// Creates a new empty buffer with no associated file path.
+    ///
+    /// Uses default tab configuration (4 spaces, insert spaces mode).
     pub fn new() -> Self {
         Self {
             content: Rope::new(),
@@ -55,7 +61,34 @@ impl EditorBuffer {
             history: EditHistory::new(),
             selection: None,
             highlight: None,
+            tab_size: DEFAULT_TAB_SIZE,
+            insert_spaces: true,
         }
+    }
+
+    /// Creates a new empty buffer with custom tab configuration.
+    pub fn with_tab_config(tab_size: usize, insert_spaces: bool) -> Self {
+        Self {
+            tab_size,
+            insert_spaces,
+            ..Self::new()
+        }
+    }
+
+    /// Returns the configured tab size.
+    pub fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+
+    /// Returns whether the buffer inserts spaces for tabs.
+    pub fn insert_spaces(&self) -> bool {
+        self.insert_spaces
+    }
+
+    /// Sets the tab configuration for this buffer.
+    pub fn set_tab_config(&mut self, tab_size: usize, insert_spaces: bool) {
+        self.tab_size = tab_size;
+        self.insert_spaces = insert_spaces;
     }
 
     /// Loads a buffer from a file on disk.
@@ -83,6 +116,8 @@ impl EditorBuffer {
             history: EditHistory::new(),
             selection: None,
             highlight,
+            tab_size: DEFAULT_TAB_SIZE,
+            insert_spaces: true,
         })
     }
 
@@ -403,11 +438,13 @@ impl EditorBuffer {
 
     // IMPACT ANALYSIS — insert_tab
     // Parents: KeyEvent → Command::EditorTab → this function
-    // Children: Inserts TAB_WIDTH spaces, cursor advances
+    // Children: Inserts tab_size spaces (or a literal \t), cursor advances
     // Siblings: Same as insert_char
 
-    /// Inserts a tab (TAB_WIDTH spaces) at the current cursor position.
+    /// Inserts a tab at the current cursor position.
     ///
+    /// When `insert_spaces` is `true`, inserts `tab_size` space characters.
+    /// When `insert_spaces` is `false`, inserts a single literal tab character.
     /// If a selection is active, deletes it first.
     pub fn insert_tab(&mut self) {
         if self.selection.is_some() {
@@ -415,21 +452,27 @@ impl EditorBuffer {
         }
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         let cursor_before = self.cursor.clone();
-        let spaces = " ".repeat(TAB_WIDTH);
-        self.content.insert(char_idx, &spaces);
-        self.cursor.col += TAB_WIDTH;
+
+        let (insert_text, advance) = if self.insert_spaces {
+            (" ".repeat(self.tab_size), self.tab_size)
+        } else {
+            ("\t".to_owned(), 1)
+        };
+
+        self.content.insert(char_idx, &insert_text);
+        self.cursor.col += advance;
         self.cursor.desired_col = self.cursor.col;
         self.modified = true;
         self.history.record(
             Edit {
                 char_idx,
                 old_text: String::new(),
-                new_text: spaces,
+                new_text: insert_text,
             },
             cursor_before,
             self.cursor.clone(),
         );
-        self.notify_highlight_insert(char_idx, TAB_WIDTH);
+        self.notify_highlight_insert(char_idx, advance);
     }
 
     // IMPACT ANALYSIS — delete_char_backward
@@ -1062,6 +1105,8 @@ mod tests {
                 history: EditHistory::new(),
                 selection: None,
                 highlight: None,
+                tab_size: DEFAULT_TAB_SIZE,
+                insert_spaces: true,
             };
             assert_eq!(buf.file_type(), expected_type, "wrong type for {filename}");
         }
@@ -1079,6 +1124,8 @@ mod tests {
             history: EditHistory::new(),
             selection: None,
             highlight: None,
+            tab_size: DEFAULT_TAB_SIZE,
+            insert_spaces: true,
         };
         assert_eq!(buf.file_type(), "Plain Text");
     }
@@ -2262,5 +2309,56 @@ mod tests {
             "expected 'fn' keyword after undo, got: {:?}",
             spans[0]
         );
+    }
+
+    // --- tab_size / insert_spaces config tests ---
+
+    #[test]
+    fn buffer_default_tab_size_is_4() {
+        let buf = EditorBuffer::new();
+        assert_eq!(buf.tab_size(), 4);
+    }
+
+    #[test]
+    fn buffer_default_insert_spaces_is_true() {
+        let buf = EditorBuffer::new();
+        assert!(buf.insert_spaces());
+    }
+
+    #[test]
+    fn buffer_with_custom_tab_size() {
+        let buf = EditorBuffer::with_tab_config(2, true);
+        assert_eq!(buf.tab_size(), 2);
+    }
+
+    #[test]
+    fn buffer_with_insert_spaces_false() {
+        let buf = EditorBuffer::with_tab_config(4, false);
+        assert!(!buf.insert_spaces());
+    }
+
+    #[test]
+    fn buffer_insert_tab_uses_configured_size() {
+        let mut buf = EditorBuffer::with_tab_config(2, true);
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "  ");
+        assert_eq!(buf.cursor.col, 2);
+    }
+
+    #[test]
+    fn buffer_insert_tab_with_spaces_false_inserts_tab_char() {
+        let mut buf = EditorBuffer::with_tab_config(4, false);
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "\t");
+        assert_eq!(buf.cursor.col, 1);
+    }
+
+    #[test]
+    fn buffer_insert_tab_with_spaces_false_and_custom_size() {
+        // insert_spaces=false always inserts a single \t regardless of tab_size
+        let mut buf = EditorBuffer::with_tab_config(8, false);
+        buf.insert_tab();
+        assert_eq!(buf.line_at(0).unwrap().to_string(), "\t");
+        assert_eq!(buf.cursor.col, 1);
     }
 }

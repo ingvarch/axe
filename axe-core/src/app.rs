@@ -24,8 +24,6 @@ const MIN_PANEL_PCT: u16 = 10;
 const MAX_PANEL_PCT: u16 = 90;
 /// Number of lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: i32 = 3;
-/// Delay after the last edit before triggering autosave.
-const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
 /// How long a status message remains visible.
 const STATUS_MESSAGE_DURATION: Duration = Duration::from_secs(3);
 
@@ -160,6 +158,8 @@ pub struct AppState {
     /// Used to distinguish clicks (no movement) from drags.
     terminal_select_start: Option<(u16, u16)>,
     keymap: KeymapResolver,
+    /// Application configuration loaded from TOML files.
+    pub config: axe_config::AppConfig,
 }
 
 impl AppState {
@@ -195,23 +195,51 @@ impl AppState {
             terminal_selecting: false,
             terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
+            config: axe_config::AppConfig::default(),
         }
     }
 
     /// Creates a new `AppState` with a file tree loaded from the given root directory.
     ///
     /// If the directory cannot be read, logs a warning and falls back to no file tree.
+    /// Loads configuration from global and project-level config files and applies
+    /// tree settings (show_icons, show_hidden) to the file tree.
     pub fn new_with_root(root: PathBuf) -> Self {
+        let (config, mut warnings) = axe_config::AppConfig::load_with_warnings(Some(&root));
         let file_tree = match axe_tree::FileTree::new(root.clone()) {
-            Ok(tree) => Some(tree),
+            Ok(mut tree) => {
+                tree.set_show_icons(config.tree.show_icons);
+                tree.set_show_ignored(config.tree.show_hidden);
+                Some(tree)
+            }
             Err(e) => {
                 log::warn!("Failed to load file tree: {e}");
                 None
             }
         };
+        let buffer_manager = axe_editor::BufferManager::with_editor_config(
+            config.editor.tab_size,
+            config.editor.insert_spaces,
+        );
+        let mut keymap = KeymapResolver::with_defaults();
+        let keybinding_warnings = keymap.apply_overrides(&config.keybindings);
+        warnings.extend(keybinding_warnings);
+
+        let status_message = if warnings.is_empty() {
+            None
+        } else {
+            let msg = format!("Config: {}", warnings.join("; "));
+            log::warn!("{msg}");
+            Some((msg, Instant::now()))
+        };
+
         Self {
             file_tree,
             project_root: Some(root),
+            buffer_manager,
+            config,
+            keymap,
+            status_message,
             ..Self::new()
         }
     }
@@ -1332,8 +1360,19 @@ impl AppState {
             .clone()
             .unwrap_or_else(|| PathBuf::from("."));
 
+        let shell = if self.config.terminal.shell.is_empty() {
+            None
+        } else {
+            Some(self.config.terminal.shell.as_str())
+        };
+
         if let Some(ref mut mgr) = self.terminal_manager {
-            match mgr.spawn_tab(self.last_terminal_cols, self.last_terminal_rows, &cwd) {
+            match mgr.spawn_tab_with_shell(
+                self.last_terminal_cols,
+                self.last_terminal_rows,
+                &cwd,
+                shell,
+            ) {
                 Ok(idx) => {
                     mgr.activate_tab(idx);
                     self.focus = FocusTarget::Terminal(idx);
@@ -1345,7 +1384,12 @@ impl AppState {
         } else {
             // No manager yet — create one with a first tab.
             let mut mgr = axe_terminal::TerminalManager::new();
-            match mgr.spawn_tab(self.last_terminal_cols, self.last_terminal_rows, &cwd) {
+            match mgr.spawn_tab_with_shell(
+                self.last_terminal_cols,
+                self.last_terminal_rows,
+                &cwd,
+                shell,
+            ) {
                 Ok(idx) => {
                     mgr.activate_tab(idx);
                     self.focus = FocusTarget::Terminal(idx);
@@ -1389,8 +1433,12 @@ impl AppState {
     /// Saves the active buffer if it has been modified and has a file path,
     /// and at least `AUTOSAVE_DELAY` has passed since the last edit.
     pub fn check_autosave(&mut self) {
+        if !self.config.editor.auto_save {
+            return;
+        }
+        let delay = Duration::from_millis(self.config.editor.auto_save_delay_ms);
         if let Some(last_edit) = self.last_edit_time {
-            if last_edit.elapsed() >= AUTOSAVE_DELAY {
+            if last_edit.elapsed() >= delay {
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                     if buf.modified && buf.path().is_some() {
                         if let Err(e) = buf.save_to_file() {
@@ -2606,17 +2654,19 @@ mod tests {
     #[test]
     fn toggle_ignored_toggles_filter() {
         let mut app = app_with_tree_focused();
-        assert!(app.file_tree.as_ref().unwrap().show_ignored());
-        app.execute(Command::ToggleIgnored);
+        // Default config has show_hidden=false, so show_ignored starts as false.
         assert!(!app.file_tree.as_ref().unwrap().show_ignored());
+        app.execute(Command::ToggleIgnored);
+        assert!(app.file_tree.as_ref().unwrap().show_ignored());
     }
 
     #[test]
     fn ctrl_g_toggles_ignored() {
         let mut app = app_with_tree_focused();
-        assert!(app.file_tree.as_ref().unwrap().show_ignored());
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        // Default config has show_hidden=false, so show_ignored starts as false.
         assert!(!app.file_tree.as_ref().unwrap().show_ignored());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(app.file_tree.as_ref().unwrap().show_ignored());
     }
 
     #[test]
@@ -3037,6 +3087,8 @@ mod tests {
         std::io::Write::flush(&mut tmp).unwrap();
 
         let mut app = AppState::new();
+        app.config.editor.auto_save = true;
+        app.config.editor.auto_save_delay_ms = 2000;
         app.buffer_manager.open_file(tmp.path()).expect("open file");
         app.focus = FocusTarget::Editor;
 
@@ -3633,5 +3685,93 @@ mod tests {
             "clicking first tab should activate buffer 0"
         );
         assert_eq!(app.focus, FocusTarget::Editor);
+    }
+
+    // --- autosave config tests ---
+
+    #[test]
+    fn autosave_disabled_by_default_config() {
+        let app = AppState::new();
+        assert!(!app.config.editor.auto_save);
+    }
+
+    #[test]
+    fn autosave_skipped_when_auto_save_disabled() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        // auto_save is false by default
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('z'));
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+
+        // Backdate to well past the delay.
+        app.last_edit_time = Some(Instant::now() - Duration::from_secs(10));
+        app.check_autosave();
+
+        // Buffer should still be modified because auto_save is disabled.
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+    }
+
+    #[test]
+    fn autosave_triggers_when_auto_save_enabled() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.config.editor.auto_save = true;
+        app.config.editor.auto_save_delay_ms = 500;
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('z'));
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+
+        // Backdate past the configured delay.
+        app.last_edit_time = Some(Instant::now() - Duration::from_secs(2));
+        app.check_autosave();
+
+        assert!(!app.buffer_manager.active_buffer().unwrap().modified);
+        assert!(app.last_edit_time.is_none());
+    }
+
+    #[test]
+    fn autosave_uses_configured_delay() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.config.editor.auto_save = true;
+        app.config.editor.auto_save_delay_ms = 5000; // 5 seconds
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('z'));
+
+        // Only 1 second has passed -- should NOT trigger.
+        app.last_edit_time = Some(Instant::now() - Duration::from_secs(1));
+        app.check_autosave();
+
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+        assert!(app.last_edit_time.is_some());
+    }
+
+    // --- buffer_manager config wiring test ---
+
+    #[test]
+    fn new_with_root_passes_editor_config_to_buffer_manager() {
+        // AppState::new() uses default config; verify buffer_manager has matching defaults.
+        let app = AppState::new();
+        assert_eq!(app.buffer_manager.tab_size(), app.config.editor.tab_size);
+        assert_eq!(
+            app.buffer_manager.insert_spaces(),
+            app.config.editor.insert_spaces
+        );
     }
 }

@@ -83,6 +83,11 @@ impl TreeFilter {
         self.show_ignored
     }
 
+    /// Sets whether ignored files are shown.
+    pub fn set_show_ignored(&mut self, show: bool) {
+        self.show_ignored = show;
+    }
+
     /// Walks up from `start` looking for a `.git/` directory.
     fn find_git_root(start: &Path) -> Option<PathBuf> {
         let mut current = start.to_path_buf();
@@ -257,6 +262,24 @@ mod tests {
         // No .git directory
         let filter = TreeFilter::new(tmp.path());
         assert!(filter.is_visible(&tmp.path().join("anything.txt"), false));
+    }
+
+    #[test]
+    fn set_show_ignored_sets_value_directly() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join(".gitignore"), "*.log\n").unwrap();
+
+        let mut filter = TreeFilter::new(tmp.path());
+        assert!(filter.show_ignored());
+
+        filter.set_show_ignored(false);
+        assert!(!filter.show_ignored());
+        assert!(!filter.is_visible(&tmp.path().join("debug.log"), false));
+
+        filter.set_show_ignored(true);
+        assert!(filter.show_ignored());
+        assert!(filter.is_visible(&tmp.path().join("debug.log"), false));
     }
 
     #[test]

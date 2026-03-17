@@ -4,6 +4,7 @@
 /// Uses One Dark color scheme by default.
 use ratatui::style::Color;
 
+use axe_config::theme::{parse_hex_color, ThemeFile};
 use axe_editor::HighlightKind;
 
 /// Holds all UI colors for rendering the IDE.
@@ -88,6 +89,83 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Builds a Theme from a parsed theme file, using `Default` for any missing colors.
+    pub fn from_theme_file(tf: &ThemeFile) -> Self {
+        let defaults = Self::default();
+
+        /// Resolves an optional hex string to a Color, falling back to a default.
+        fn color_or(hex: &Option<String>, fallback: Color) -> Color {
+            hex.as_deref()
+                .and_then(|h| {
+                    let c = parse_hex_color(h);
+                    if c.is_none() {
+                        log::warn!("Invalid hex color: {h}");
+                    }
+                    c
+                })
+                .unwrap_or(fallback)
+        }
+
+        /// Resolves a syntax entry's foreground color.
+        fn syntax_fg(tf: &ThemeFile, key: &str, fallback: Color) -> Color {
+            tf.syntax
+                .get(key)
+                .and_then(|s| s.fg.as_deref())
+                .and_then(parse_hex_color)
+                .unwrap_or(fallback)
+        }
+
+        Self {
+            background: color_or(&tf.base.background, defaults.background),
+            foreground: color_or(&tf.base.foreground, defaults.foreground),
+            panel_border: color_or(&tf.ui.panel_border, defaults.panel_border),
+            panel_border_active: color_or(&tf.ui.panel_border_active, defaults.panel_border_active),
+            status_bar_bg: color_or(&tf.ui.status_bar_bg, defaults.status_bar_bg),
+            status_bar_fg: color_or(&tf.ui.status_bar_fg, defaults.status_bar_fg),
+            status_bar_key: color_or(&tf.ui.status_bar_key, defaults.status_bar_key),
+            overlay_border: color_or(&tf.ui.overlay_border, defaults.overlay_border),
+            overlay_bg: color_or(&tf.ui.overlay_bg, defaults.overlay_bg),
+            resize_border: color_or(&tf.ui.resize_border, defaults.resize_border),
+            tree_selection_bg: color_or(&tf.ui.tree_selection_bg, defaults.tree_selection_bg),
+            gutter_bg: color_or(&tf.gutter.bg, defaults.gutter_bg),
+            line_number: color_or(&tf.gutter.line_number, defaults.line_number),
+            line_number_active: color_or(
+                &tf.gutter.line_number_active,
+                defaults.line_number_active,
+            ),
+            cursor_line_bg: color_or(&tf.editor.cursor_line_bg, defaults.cursor_line_bg),
+            selection_bg: color_or(&tf.editor.selection_bg, defaults.selection_bg),
+            search_match_bg: color_or(&tf.editor.search_match_bg, defaults.search_match_bg),
+            search_active_match_bg: color_or(
+                &tf.editor.search_active_match_bg,
+                defaults.search_active_match_bg,
+            ),
+            search_active_match_fg: color_or(
+                &tf.editor.search_active_match_fg,
+                defaults.search_active_match_fg,
+            ),
+            tab_bar_bg: color_or(&tf.ui.tab_bar_bg, defaults.tab_bar_bg),
+            tab_active_bg: color_or(&tf.ui.tab_active_bg, defaults.tab_active_bg),
+            tab_active_fg: color_or(&tf.ui.tab_active_fg, defaults.tab_active_fg),
+            tab_inactive_fg: color_or(&tf.ui.tab_inactive_fg, defaults.tab_inactive_fg),
+            syntax_keyword: syntax_fg(tf, "keyword", defaults.syntax_keyword),
+            syntax_string: syntax_fg(tf, "string", defaults.syntax_string),
+            syntax_comment: syntax_fg(tf, "comment", defaults.syntax_comment),
+            syntax_function: syntax_fg(tf, "function", defaults.syntax_function),
+            syntax_type: syntax_fg(tf, "type", defaults.syntax_type),
+            syntax_variable: syntax_fg(tf, "variable", defaults.syntax_variable),
+            syntax_constant: syntax_fg(tf, "constant", defaults.syntax_constant),
+            syntax_number: syntax_fg(tf, "number", defaults.syntax_number),
+            syntax_operator: syntax_fg(tf, "operator", defaults.syntax_operator),
+            syntax_punctuation: syntax_fg(tf, "punctuation", defaults.syntax_punctuation),
+            syntax_property: syntax_fg(tf, "property", defaults.syntax_property),
+            syntax_attribute: syntax_fg(tf, "attribute", defaults.syntax_attribute),
+            syntax_tag: syntax_fg(tf, "tag", defaults.syntax_tag),
+            syntax_escape: syntax_fg(tf, "escape", defaults.syntax_escape),
+            syntax_builtin: syntax_fg(tf, "builtin", defaults.syntax_builtin),
+        }
+    }
+
     /// Returns the foreground color for a syntax highlight kind.
     pub fn syntax_color(&self, kind: HighlightKind) -> Color {
         match kind {
@@ -288,6 +366,84 @@ mod tests {
         assert_ne!(
             theme.syntax_keyword, theme.syntax_string,
             "keyword and string should have different colors"
+        );
+    }
+
+    #[test]
+    fn from_empty_theme_file_equals_default() {
+        let tf = ThemeFile::default();
+        let theme = Theme::from_theme_file(&tf);
+        let defaults = Theme::default();
+        assert_eq!(theme.background, defaults.background);
+        assert_eq!(theme.foreground, defaults.foreground);
+        assert_eq!(theme.syntax_keyword, defaults.syntax_keyword);
+    }
+
+    #[test]
+    fn from_theme_file_overrides_colors() {
+        let mut tf = ThemeFile::default();
+        tf.base.background = Some("#112233".to_string());
+        tf.base.foreground = Some("#aabbcc".to_string());
+        let theme = Theme::from_theme_file(&tf);
+        assert_eq!(theme.background, Color::Rgb(0x11, 0x22, 0x33));
+        assert_eq!(theme.foreground, Color::Rgb(0xaa, 0xbb, 0xcc));
+        let defaults = Theme::default();
+        assert_eq!(theme.panel_border, defaults.panel_border);
+    }
+
+    #[test]
+    fn from_theme_file_invalid_hex_falls_back() {
+        let mut tf = ThemeFile::default();
+        tf.base.background = Some("not-a-color".to_string());
+        let theme = Theme::from_theme_file(&tf);
+        let defaults = Theme::default();
+        assert_eq!(theme.background, defaults.background);
+    }
+
+    #[test]
+    fn from_theme_file_syntax_colors() {
+        use axe_config::theme::SyntaxStyle;
+        use std::collections::HashMap;
+
+        let mut syntax = HashMap::new();
+        syntax.insert(
+            "keyword".to_string(),
+            SyntaxStyle {
+                fg: Some("#ff0000".to_string()),
+                bg: None,
+                bold: None,
+                italic: None,
+            },
+        );
+        let tf = ThemeFile {
+            syntax,
+            ..ThemeFile::default()
+        };
+        let theme = Theme::from_theme_file(&tf);
+        assert_eq!(theme.syntax_keyword, Color::Rgb(255, 0, 0));
+        let defaults = Theme::default();
+        assert_eq!(theme.syntax_string, defaults.syntax_string);
+    }
+
+    #[test]
+    fn from_bundled_axe_dark_matches_default() {
+        let tf = axe_config::theme::load_theme("axe-dark").expect("bundled theme should load");
+        let theme = Theme::from_theme_file(&tf);
+        let defaults = Theme::default();
+        assert_eq!(theme.background, defaults.background);
+        assert_eq!(theme.foreground, defaults.foreground);
+        assert_eq!(theme.syntax_keyword, defaults.syntax_keyword);
+        assert_eq!(theme.syntax_string, defaults.syntax_string);
+    }
+
+    #[test]
+    fn from_bundled_axe_light_differs_from_default() {
+        let tf = axe_config::theme::load_theme("axe-light").expect("bundled theme should load");
+        let theme = Theme::from_theme_file(&tf);
+        let defaults = Theme::default();
+        assert_ne!(
+            theme.background, defaults.background,
+            "light theme should have different background"
         );
     }
 }

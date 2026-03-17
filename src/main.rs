@@ -11,7 +11,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
+use axe_config::theme::load_theme;
 use axe_core::AppState;
+use axe_ui::theme::Theme;
 
 /// Initial terminal size used before the first frame is rendered.
 const INITIAL_TERM_COLS: u16 = 80;
@@ -65,12 +67,22 @@ async fn main() -> Result<()> {
     let mut terminal = setup_terminal()?;
     let root = cli.path.canonicalize().unwrap_or(cli.path);
 
-    // Initialize terminal emulator with default shell in the project directory.
-    let mut mgr = axe_terminal::TerminalManager::new();
-    mgr.spawn_default_tab(INITIAL_TERM_COLS, INITIAL_TERM_ROWS, &root)
-        .context("Failed to spawn terminal")?;
+    let mut app = AppState::new_with_root(root.clone());
 
-    let mut app = AppState::new_with_root(root);
+    // Build theme from config — resolved once at startup.
+    let theme = load_theme(&app.config.ui.theme)
+        .map(|tf| Theme::from_theme_file(&tf))
+        .unwrap_or_default();
+
+    // Initialize terminal emulator, using shell from config if set.
+    let shell_override = if app.config.terminal.shell.is_empty() {
+        None
+    } else {
+        Some(app.config.terminal.shell.as_str())
+    };
+    let mut mgr = axe_terminal::TerminalManager::new();
+    mgr.spawn_default_tab_with_shell(INITIAL_TERM_COLS, INITIAL_TERM_ROWS, &root, shell_override)
+        .context("Failed to spawn terminal")?;
     app.terminal_manager = Some(mgr);
 
     // Track terminal panel size to detect resize.
@@ -95,7 +107,7 @@ async fn main() -> Result<()> {
         // Clear expired status messages.
         app.expire_status_message();
 
-        terminal.draw(|frame| axe_ui::render(&app, frame))?;
+        terminal.draw(|frame| axe_ui::render(&app, frame, &theme))?;
 
         // Sync panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);

@@ -4,6 +4,172 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::command::Command;
 
+/// Parses a key combo string into crossterm modifiers and key code.
+///
+/// Format: `[modifier+]*key` where modifiers are `ctrl`, `alt`, `shift`
+/// (case-insensitive) and key is a character or special key name.
+///
+/// # Examples
+///
+/// ```
+/// use axe_core::keymap::parse_key_combo;
+/// use crossterm::event::{KeyCode, KeyModifiers};
+///
+/// assert_eq!(
+///     parse_key_combo("ctrl+q"),
+///     Some((KeyModifiers::CONTROL, KeyCode::Char('q')))
+/// );
+/// ```
+pub fn parse_key_combo(s: &str) -> Option<(KeyModifiers, KeyCode)> {
+    if s.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = s.split('+').collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Last part is the key, everything before is modifiers.
+    let key_part = *parts.last()?;
+    if key_part.is_empty() {
+        return None;
+    }
+
+    let modifier_parts = &parts[..parts.len() - 1];
+    let mut modifiers = KeyModifiers::NONE;
+    for &m in modifier_parts {
+        match m.to_lowercase().as_str() {
+            "ctrl" => modifiers |= KeyModifiers::CONTROL,
+            "alt" => modifiers |= KeyModifiers::ALT,
+            "shift" => modifiers |= KeyModifiers::SHIFT,
+            _ => return None,
+        }
+    }
+
+    let code = parse_key_name(key_part)?;
+    Some((modifiers, code))
+}
+
+/// Parses a key name string into a `KeyCode`.
+fn parse_key_name(s: &str) -> Option<KeyCode> {
+    let lower = s.to_lowercase();
+    match lower.as_str() {
+        "esc" => Some(KeyCode::Esc),
+        "enter" | "return" => Some(KeyCode::Enter),
+        "tab" => Some(KeyCode::Tab),
+        "backtab" => Some(KeyCode::BackTab),
+        "backspace" => Some(KeyCode::Backspace),
+        "delete" | "del" => Some(KeyCode::Delete),
+        "up" => Some(KeyCode::Up),
+        "down" => Some(KeyCode::Down),
+        "left" => Some(KeyCode::Left),
+        "right" => Some(KeyCode::Right),
+        "home" => Some(KeyCode::Home),
+        "end" => Some(KeyCode::End),
+        "pageup" => Some(KeyCode::PageUp),
+        "pagedown" => Some(KeyCode::PageDown),
+        "space" => Some(KeyCode::Char(' ')),
+        _ if lower.starts_with('f') && lower.len() >= 2 => {
+            let num: u8 = lower[1..].parse().ok()?;
+            if (1..=12).contains(&num) {
+                Some(KeyCode::F(num))
+            } else {
+                None
+            }
+        }
+        _ => {
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() == 1 {
+                Some(KeyCode::Char(chars[0]))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Parses a snake_case command name string into a `Command`.
+///
+/// Parameterized commands use `:` as separator (e.g., `activate_terminal_tab:3`).
+/// Returns `None` for unknown command names.
+pub fn command_from_str(s: &str) -> Option<Command> {
+    // Check for parameterized commands first.
+    if let Some((name, param)) = s.split_once(':') {
+        return match name {
+            "activate_terminal_tab" => {
+                let idx: usize = param.parse().ok()?;
+                Some(Command::ActivateTerminalTab(idx))
+            }
+            "activate_buffer" => {
+                let idx: usize = param.parse().ok()?;
+                Some(Command::ActivateBuffer(idx))
+            }
+            _ => None,
+        };
+    }
+
+    match s {
+        "quit" => Some(Command::Quit),
+        "request_quit" => Some(Command::RequestQuit),
+        "save" => Some(Command::EditorSave),
+        "toggle_tree" => Some(Command::ToggleTree),
+        "toggle_terminal" => Some(Command::ToggleTerminal),
+        "focus_next" => Some(Command::FocusNext),
+        "focus_prev" => Some(Command::FocusPrev),
+        "focus_tree" => Some(Command::FocusTree),
+        "focus_editor" => Some(Command::FocusEditor),
+        "focus_terminal" => Some(Command::FocusTerminal),
+        "show_help" => Some(Command::ShowHelp),
+        "close_overlay" => Some(Command::CloseOverlay),
+        "enter_resize_mode" => Some(Command::EnterResizeMode),
+        "exit_resize_mode" => Some(Command::ExitResizeMode),
+        "resize_left" => Some(Command::ResizeLeft),
+        "resize_right" => Some(Command::ResizeRight),
+        "resize_up" => Some(Command::ResizeUp),
+        "resize_down" => Some(Command::ResizeDown),
+        "equalize_layout" => Some(Command::EqualizeLayout),
+        "zoom_panel" => Some(Command::ZoomPanel),
+        "undo" => Some(Command::EditorUndo),
+        "redo" => Some(Command::EditorRedo),
+        "copy" => Some(Command::EditorCopy),
+        "cut" => Some(Command::EditorCut),
+        "paste" => Some(Command::EditorPaste),
+        "select_all" => Some(Command::EditorSelectAll),
+        "find" => Some(Command::EditorFind),
+        "close_buffer" => Some(Command::CloseBuffer),
+        "next_buffer" => Some(Command::NextBuffer),
+        "prev_buffer" => Some(Command::PrevBuffer),
+        "new_terminal_tab" => Some(Command::NewTerminalTab),
+        "close_terminal_tab" => Some(Command::CloseTerminalTab),
+        "toggle_icons" => Some(Command::ToggleIcons),
+        "toggle_ignored" => Some(Command::ToggleIgnored),
+        "scroll_terminal_up" => Some(Command::TerminalScrollPageUp),
+        "scroll_terminal_down" => Some(Command::TerminalScrollPageDown),
+        "scroll_terminal_top" => Some(Command::TerminalScrollTop),
+        "scroll_terminal_bottom" => Some(Command::TerminalScrollBottom),
+        "tree_up" => Some(Command::TreeUp),
+        "tree_down" => Some(Command::TreeDown),
+        "tree_toggle" => Some(Command::TreeToggle),
+        "tree_expand" => Some(Command::TreeExpand),
+        "tree_collapse_or_parent" => Some(Command::TreeCollapseOrParent),
+        "tree_home" => Some(Command::TreeHome),
+        "tree_end" => Some(Command::TreeEnd),
+        "tree_create_file" => Some(Command::TreeCreateFile),
+        "tree_create_dir" => Some(Command::TreeCreateDir),
+        "tree_rename" => Some(Command::TreeRename),
+        "tree_delete" => Some(Command::TreeDelete),
+        "confirm_close_buffer" => Some(Command::ConfirmCloseBuffer),
+        "cancel_close_buffer" => Some(Command::CancelCloseBuffer),
+        "search_close" => Some(Command::SearchClose),
+        "search_next_match" => Some(Command::SearchNextMatch),
+        "search_prev_match" => Some(Command::SearchPrevMatch),
+        "search_toggle_case" => Some(Command::SearchToggleCase),
+        "search_toggle_regex" => Some(Command::SearchToggleRegex),
+        _ => None,
+    }
+}
+
 /// Resolves key events to commands using a configurable binding map.
 ///
 /// Currently supports global-only bindings. Context-aware resolution
@@ -186,6 +352,30 @@ impl KeymapResolver {
     /// Resolves a key event to a command, if one is bound.
     pub fn resolve(&self, key: &KeyEvent) -> Option<Command> {
         self.global.get(&(key.modifiers, key.code)).cloned()
+    }
+
+    /// Applies user-configured keybinding overrides on top of defaults.
+    ///
+    /// Each entry maps a key combo string (e.g., "ctrl+q") to a command name
+    /// (e.g., "request_quit"). Invalid entries are collected as warnings.
+    pub fn apply_overrides(&mut self, bindings: &HashMap<String, String>) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        for (key_str, cmd_str) in bindings {
+            let Some((modifiers, code)) = parse_key_combo(key_str) else {
+                warnings.push(format!("Invalid key combo: {key_str:?}"));
+                continue;
+            };
+            let Some(cmd) = command_from_str(cmd_str) else {
+                warnings.push(format!(
+                    "Unknown command {cmd_str:?} for key combo {key_str:?}"
+                ));
+                continue;
+            };
+            self.bind(modifiers, code, cmd);
+        }
+
+        warnings
     }
 }
 
@@ -472,5 +662,156 @@ mod tests {
             resolver.resolve(&key),
             Some(Command::ActivateTerminalTab(4))
         );
+    }
+
+    // --- Key combo parsing ---
+
+    #[test]
+    fn parse_key_combo_ctrl_q() {
+        assert_eq!(
+            parse_key_combo("ctrl+q"),
+            Some((KeyModifiers::CONTROL, KeyCode::Char('q')))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_ctrl_shift_z() {
+        assert_eq!(
+            parse_key_combo("ctrl+shift+z"),
+            Some((
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                KeyCode::Char('z')
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_alt_bracket_right() {
+        assert_eq!(
+            parse_key_combo("alt+]"),
+            Some((KeyModifiers::ALT, KeyCode::Char(']')))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_esc() {
+        assert_eq!(
+            parse_key_combo("esc"),
+            Some((KeyModifiers::NONE, KeyCode::Esc))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_f12() {
+        assert_eq!(
+            parse_key_combo("f12"),
+            Some((KeyModifiers::NONE, KeyCode::F(12)))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_enter() {
+        assert_eq!(
+            parse_key_combo("enter"),
+            Some((KeyModifiers::NONE, KeyCode::Enter))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_backtab() {
+        assert_eq!(
+            parse_key_combo("backtab"),
+            Some((KeyModifiers::NONE, KeyCode::BackTab))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_space() {
+        assert_eq!(
+            parse_key_combo("space"),
+            Some((KeyModifiers::NONE, KeyCode::Char(' ')))
+        );
+    }
+
+    #[test]
+    fn parse_key_combo_invalid_empty() {
+        assert_eq!(parse_key_combo(""), None);
+    }
+
+    #[test]
+    fn parse_key_combo_invalid_modifier_only() {
+        assert_eq!(parse_key_combo("ctrl+"), None);
+    }
+
+    // --- Command name parsing ---
+
+    #[test]
+    fn command_from_str_request_quit() {
+        assert_eq!(command_from_str("request_quit"), Some(Command::RequestQuit));
+    }
+
+    #[test]
+    fn command_from_str_save() {
+        assert_eq!(command_from_str("save"), Some(Command::EditorSave));
+    }
+
+    #[test]
+    fn command_from_str_toggle_tree() {
+        assert_eq!(command_from_str("toggle_tree"), Some(Command::ToggleTree));
+    }
+
+    #[test]
+    fn command_from_str_activate_terminal_tab() {
+        assert_eq!(
+            command_from_str("activate_terminal_tab:3"),
+            Some(Command::ActivateTerminalTab(3))
+        );
+    }
+
+    #[test]
+    fn command_from_str_unknown() {
+        assert_eq!(command_from_str("nonexistent"), None);
+    }
+
+    // --- Apply overrides ---
+
+    #[test]
+    fn apply_overrides_replaces_binding() {
+        let mut resolver = KeymapResolver::with_defaults();
+        let mut bindings = HashMap::new();
+        bindings.insert("ctrl+q".to_string(), "toggle_tree".to_string());
+        let warnings = resolver.apply_overrides(&bindings);
+        assert!(warnings.is_empty());
+        let event = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&event), Some(Command::ToggleTree));
+    }
+
+    #[test]
+    fn apply_overrides_adds_new_binding() {
+        let mut resolver = KeymapResolver::with_defaults();
+        let mut bindings = HashMap::new();
+        bindings.insert("ctrl+p".to_string(), "find".to_string());
+        let warnings = resolver.apply_overrides(&bindings);
+        assert!(warnings.is_empty());
+        let event = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&event), Some(Command::EditorFind));
+    }
+
+    #[test]
+    fn apply_overrides_invalid_key_returns_warning() {
+        let mut resolver = KeymapResolver::with_defaults();
+        let mut bindings = HashMap::new();
+        bindings.insert(String::new(), "save".to_string());
+        let warnings = resolver.apply_overrides(&bindings);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn apply_overrides_invalid_command_returns_warning() {
+        let mut resolver = KeymapResolver::with_defaults();
+        let mut bindings = HashMap::new();
+        bindings.insert("ctrl+q".to_string(), "nonexistent".to_string());
+        let warnings = resolver.apply_overrides(&bindings);
+        assert_eq!(warnings.len(), 1);
     }
 }

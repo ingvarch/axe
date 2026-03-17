@@ -305,6 +305,16 @@ impl FileTree {
         self.show_icons = !self.show_icons;
     }
 
+    /// Sets whether file type icons are shown in the tree.
+    pub fn set_show_icons(&mut self, show: bool) {
+        self.show_icons = show;
+    }
+
+    /// Sets whether ignored/hidden files are shown in the tree.
+    pub fn set_show_ignored(&mut self, show: bool) {
+        self.filter.set_show_ignored(show);
+    }
+
     /// Returns the current tree action state.
     pub fn action(&self) -> &TreeAction {
         &self.action
@@ -1515,5 +1525,27 @@ mod tests {
         assert!(!tree.show_icons());
         tree.toggle_show_icons();
         assert!(tree.show_icons());
+    }
+
+    #[test]
+    fn set_show_icons_sets_value() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_show_icons(false);
+        assert!(!tree.show_icons());
+        tree.set_show_icons(true);
+        assert!(tree.show_icons());
+    }
+
+    #[test]
+    fn set_show_ignored_sets_value() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Default is true (show all).
+        assert!(tree.show_ignored());
+        tree.set_show_ignored(false);
+        assert!(!tree.show_ignored());
+        tree.set_show_ignored(true);
+        assert!(tree.show_ignored());
     }
 }
