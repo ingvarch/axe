@@ -306,6 +306,14 @@ impl TerminalManager {
         }
     }
 
+    /// Returns whether the active terminal tab's child process is still running.
+    pub fn active_tab_is_alive(&mut self) -> bool {
+        self.tabs
+            .get_mut(self.active)
+            .map(|tab| tab.is_alive())
+            .unwrap_or(false)
+    }
+
     /// Provides access to the event sender for testing.
     #[cfg(test)]
     fn send_event(&self, event: TermEvent) {
@@ -826,6 +834,23 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(mgr.tab_count(), 1);
         assert!(mgr.active_tab().is_some());
+    }
+
+    #[test]
+    fn active_tab_is_alive_returns_true_for_running() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        assert!(
+            mgr.active_tab_is_alive(),
+            "Freshly spawned tab should be alive"
+        );
+    }
+
+    #[test]
+    fn active_tab_is_alive_returns_false_no_tabs() {
+        let mut mgr = TerminalManager::new();
+        assert!(!mgr.active_tab_is_alive(), "No tabs means not alive");
     }
 
     #[test]

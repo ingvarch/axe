@@ -72,8 +72,12 @@ pub enum Command {
     ToggleIcons,
     /// Create a new terminal tab.
     NewTerminalTab,
-    /// Close the active terminal tab.
+    /// Close the active terminal tab (checks if process is alive first).
     CloseTerminalTab,
+    /// Force-close the active terminal tab without further prompts.
+    ForceCloseTerminalTab,
+    /// Cancel the close-terminal-tab confirmation dialog.
+    CancelCloseTerminalTab,
     /// Activate a specific terminal tab by index (0-based).
     ActivateTerminalTab(usize),
     /// Scroll terminal up by one page.
@@ -223,6 +227,8 @@ mod tests {
             Command::ToggleIcons,
             Command::NewTerminalTab,
             Command::CloseTerminalTab,
+            Command::ForceCloseTerminalTab,
+            Command::CancelCloseTerminalTab,
             Command::ActivateTerminalTab(0),
             Command::ActivateTerminalTab(1),
             Command::TerminalScrollPageUp,

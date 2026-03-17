@@ -106,6 +106,8 @@ pub struct AppState {
     pub confirm_quit: bool,
     /// Whether the "close modified buffer?" confirmation dialog is visible.
     pub confirm_close_buffer: bool,
+    /// Whether the "close terminal with running process?" confirmation dialog is visible.
+    pub confirm_close_terminal_tab: bool,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
     /// Which panel is currently zoomed to full screen, if any.
@@ -182,6 +184,7 @@ impl AppState {
             show_help: false,
             confirm_quit: false,
             confirm_close_buffer: false,
+            confirm_close_terminal_tab: false,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
             zoomed_panel: None,
@@ -341,6 +344,19 @@ impl AppState {
                 }
                 _ => {
                     self.execute(Command::CancelCloseBuffer);
+                }
+            }
+            return;
+        }
+
+        // Close-terminal confirmation dialog intercepts all keys.
+        if self.confirm_close_terminal_tab {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.execute(Command::ForceCloseTerminalTab);
+                }
+                _ => {
+                    self.execute(Command::CancelCloseTerminalTab);
                 }
             }
             return;
@@ -657,7 +673,22 @@ impl AppState {
                 }
             }
             Command::NewTerminalTab => self.new_terminal_tab(),
-            Command::CloseTerminalTab => self.close_terminal_tab(),
+            Command::CloseTerminalTab => {
+                if let Some(ref mut mgr) = self.terminal_manager {
+                    if mgr.active_tab_is_alive() {
+                        self.confirm_close_terminal_tab = true;
+                    } else {
+                        self.close_terminal_tab();
+                    }
+                }
+            }
+            Command::ForceCloseTerminalTab => {
+                self.confirm_close_terminal_tab = false;
+                self.close_terminal_tab();
+            }
+            Command::CancelCloseTerminalTab => {
+                self.confirm_close_terminal_tab = false;
+            }
             Command::ActivateTerminalTab(idx) => self.activate_terminal_tab(idx),
             Command::TerminalScrollPageUp => {
                 self.terminal_scroll(alacritty_terminal::grid::Scroll::PageUp);
@@ -4033,6 +4064,101 @@ mod tests {
         assert_eq!(
             app.buffer_manager.insert_spaces(),
             app.config.editor.insert_spaces
+        );
+    }
+
+    // --- Terminal close confirmation tests ---
+
+    /// Helper: create an AppState with a live terminal tab.
+    fn app_with_terminal_tab() -> AppState {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_default_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        app.focus = FocusTarget::Terminal(0);
+        app
+    }
+
+    #[test]
+    fn close_terminal_tab_running_shows_confirmation() {
+        let mut app = app_with_terminal_tab();
+        assert!(
+            app.terminal_manager.as_mut().unwrap().active_tab_is_alive(),
+            "Tab should be alive"
+        );
+
+        app.execute(Command::CloseTerminalTab);
+        assert!(
+            app.confirm_close_terminal_tab,
+            "Should show confirmation for running process"
+        );
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            1,
+            "Tab should still exist"
+        );
+    }
+
+    #[test]
+    fn force_close_terminal_tab_closes() {
+        let mut app = app_with_terminal_tab();
+        app.confirm_close_terminal_tab = true;
+
+        app.execute(Command::ForceCloseTerminalTab);
+        assert!(!app.confirm_close_terminal_tab, "Flag should be cleared");
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            0,
+            "Tab should be removed"
+        );
+    }
+
+    #[test]
+    fn cancel_close_terminal_tab_keeps_tab() {
+        let mut app = app_with_terminal_tab();
+        app.confirm_close_terminal_tab = true;
+
+        app.execute(Command::CancelCloseTerminalTab);
+        assert!(!app.confirm_close_terminal_tab, "Flag should be cleared");
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            1,
+            "Tab should still exist"
+        );
+    }
+
+    #[test]
+    fn close_terminal_confirmation_y_confirms() {
+        let mut app = app_with_terminal_tab();
+        app.confirm_close_terminal_tab = true;
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(
+            !app.confirm_close_terminal_tab,
+            "Flag should be cleared after 'y'"
+        );
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            0,
+            "Tab should be closed after 'y'"
+        );
+    }
+
+    #[test]
+    fn close_terminal_confirmation_other_key_cancels() {
+        let mut app = app_with_terminal_tab();
+        app.confirm_close_terminal_tab = true;
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(
+            !app.confirm_close_terminal_tab,
+            "Flag should be cleared after 'n'"
+        );
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            1,
+            "Tab should still exist after 'n'"
         );
     }
 }

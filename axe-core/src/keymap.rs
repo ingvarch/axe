@@ -142,6 +142,8 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "prev_buffer" => Some(Command::PrevBuffer),
         "new_terminal_tab" => Some(Command::NewTerminalTab),
         "close_terminal_tab" => Some(Command::CloseTerminalTab),
+        "force_close_terminal_tab" => Some(Command::ForceCloseTerminalTab),
+        "cancel_close_terminal_tab" => Some(Command::CancelCloseTerminalTab),
         "toggle_icons" => Some(Command::ToggleIcons),
         "toggle_ignored" => Some(Command::ToggleIgnored),
         "scroll_terminal_up" => Some(Command::TerminalScrollPageUp),
@@ -765,6 +767,22 @@ mod tests {
         assert_eq!(
             command_from_str("activate_terminal_tab:3"),
             Some(Command::ActivateTerminalTab(3))
+        );
+    }
+
+    #[test]
+    fn command_from_str_force_close_terminal_tab() {
+        assert_eq!(
+            command_from_str("force_close_terminal_tab"),
+            Some(Command::ForceCloseTerminalTab)
+        );
+    }
+
+    #[test]
+    fn command_from_str_cancel_close_terminal_tab() {
+        assert_eq!(
+            command_from_str("cancel_close_terminal_tab"),
+            Some(Command::CancelCloseTerminalTab)
         );
     }
 

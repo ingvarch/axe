@@ -427,6 +427,81 @@ fn render_close_buffer_overlay(app: &AppState, frame: &mut Frame, theme: &Theme)
     frame.render_widget(paragraph, content_area);
 }
 
+/// Width of the close-terminal confirmation overlay in columns.
+const CLOSE_TERMINAL_OVERLAY_WIDTH: u16 = 40;
+/// Height of the close-terminal confirmation overlay in rows.
+const CLOSE_TERMINAL_OVERLAY_HEIGHT: u16 = 7;
+
+/// Renders a centered close-terminal confirmation dialog.
+///
+/// Shows the tab title and a warning about a still-running process.
+fn render_close_terminal_overlay(app: &AppState, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = CLOSE_TERMINAL_OVERLAY_WIDTH.min(area.width.saturating_sub(4));
+    let overlay_height = CLOSE_TERMINAL_OVERLAY_HEIGHT.min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Close Terminal ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    let tab_title = app
+        .terminal_manager
+        .as_ref()
+        .and_then(|m| m.active_tab())
+        .map(|t| t.title())
+        .unwrap_or("terminal");
+
+    let lines = vec![
+        Line::from(Span::styled(
+            tab_title,
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Process is still running."),
+        Line::from(vec![
+            Span::raw("Close? "),
+            Span::styled(
+                "(y/N)",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
+    let content_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    frame.render_widget(paragraph, content_area);
+}
+
 /// Indentation width per nesting level in the file tree.
 const TREE_INDENT: usize = 2;
 /// Prefix for collapsed directories.
@@ -1379,7 +1454,9 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     frame.render_widget(status_bar, status_area);
 
     // Overlays (on top of everything)
-    if app.confirm_close_buffer {
+    if app.confirm_close_terminal_tab {
+        render_close_terminal_overlay(app, frame, theme);
+    } else if app.confirm_close_buffer {
         render_close_buffer_overlay(app, frame, theme);
     } else if app.confirm_quit {
         render_quit_overlay(frame, theme);
