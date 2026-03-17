@@ -131,8 +131,9 @@ impl HighlightState {
 
     /// Parses the full rope content, replacing any previous tree.
     pub fn parse_full(&mut self, rope: &Rope) {
-        let tree = self.parser.parse_with(
+        let tree = self.parser.parse_with_options(
             &mut |byte_offset, _position| rope_callback(rope, byte_offset),
+            None,
             None,
         );
         self.tree = tree;
@@ -143,9 +144,10 @@ impl HighlightState {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(edit);
         }
-        let new_tree = self.parser.parse_with(
+        let new_tree = self.parser.parse_with_options(
             &mut |byte_offset, _position| rope_callback(rope, byte_offset),
             self.tree.as_ref(),
+            None,
         );
         self.tree = new_tree;
     }

@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow = "1"
 ignore = "0.4"
-ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_28"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

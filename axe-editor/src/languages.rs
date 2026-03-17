@@ -60,7 +60,7 @@ pub fn language_for_extension(ext: &str) -> Option<LanguageConfig> {
             include_str!("../queries/json/highlights.scm"),
         ),
         "toml" => (
-            tree_sitter_toml_ng::language(),
+            tree_sitter_toml_ng::LANGUAGE.into(),
             include_str!("../queries/toml/highlights.scm"),
         ),
         "sh" | "bash" | "zsh" | "fish" => (

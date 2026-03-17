@@ -10,7 +10,7 @@ axe-config = { path = "../axe-config" }
 axe-terminal = { path = "../axe-terminal" }
 axe-editor = { path = "../axe-editor" }
 axe-tree = { path = "../axe-tree" }
-crossterm = "0.28"
+crossterm = "0.29"
 regex = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
