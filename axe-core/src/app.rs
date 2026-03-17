@@ -150,6 +150,11 @@ pub struct AppState {
     /// Set each frame by the UI when tab bar is visible.
     /// Used for detecting mouse clicks on editor buffer tabs.
     pub editor_tab_bar_area: Option<(u16, u16, u16, u16)>,
+    /// Terminal tab bar area in screen coordinates (x, y, width, height).
+    ///
+    /// Set each frame by the UI when terminal tab bar is visible.
+    /// Used for detecting mouse clicks on terminal tabs.
+    pub terminal_tab_bar_area: Option<(u16, u16, u16, u16)>,
     /// Timestamp of the last edit operation, used for autosave debouncing.
     pub last_edit_time: Option<Instant>,
     /// System clipboard for copy/paste operations.
@@ -201,6 +206,7 @@ impl AppState {
             tree_inner_area: None,
             editor_inner_area: None,
             editor_tab_bar_area: None,
+            terminal_tab_bar_area: None,
             last_edit_time: None,
             clipboard: None,
             search: None,
@@ -1079,7 +1085,7 @@ impl AppState {
 
                 // Tab bar click takes priority — its row overlaps with border tolerance.
                 if self.show_terminal {
-                    if let Some(tab_idx) = self.tab_bar_hit(col, row, screen_width, main_height) {
+                    if let Some(tab_idx) = self.tab_bar_hit(col, row) {
                         self.activate_terminal_tab(tab_idx);
                         return;
                     }
@@ -1375,41 +1381,16 @@ impl AppState {
     ///
     /// The tab bar is the first row inside the terminal panel border.
     /// Returns `None` if the click is outside the tab bar or if there's no terminal manager.
-    fn tab_bar_hit(
-        &self,
-        col: u16,
-        row: u16,
-        screen_width: u16,
-        main_height: u16,
-    ) -> Option<usize> {
+    fn tab_bar_hit(&self, col: u16, row: u16) -> Option<usize> {
         let mgr = self.terminal_manager.as_ref()?;
         if !mgr.has_tabs() {
             return None;
         }
-
-        // Compute terminal panel position.
-        let term_x_start = if self.show_tree {
-            (u32::from(screen_width) * u32::from(self.tree_width_pct) / 100) as u16
-        } else {
-            0
-        };
-        let term_y_start =
-            (u32::from(main_height) * u32::from(self.editor_height_pct) / 100) as u16;
-
-        // The tab bar row is at term_y_start + 1 (after the top border).
-        let tab_bar_row = term_y_start + 1;
-        if row != tab_bar_row {
+        let (tx, ty, tw, _th) = self.terminal_tab_bar_area?;
+        if row != ty || col < tx || col >= tx + tw {
             return None;
         }
-
-        // The tab bar content starts at term_x_start + 1 (after the left border).
-        let tab_bar_x_start = term_x_start + 1;
-        if col < tab_bar_x_start {
-            return None;
-        }
-
-        let x_offset = (col - tab_bar_x_start) as usize;
-        mgr.tab_at_x_offset(x_offset)
+        mgr.tab_at_x_offset((col - tx) as usize)
     }
 
     /// Lazily initializes the system clipboard.
@@ -4159,6 +4140,56 @@ mod tests {
             app.terminal_manager.as_ref().unwrap().tab_count(),
             1,
             "Tab should still exist after 'n'"
+        );
+    }
+
+    // --- tab_bar_hit with stored area tests ---
+
+    #[test]
+    fn tab_bar_hit_uses_stored_area() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        // Simulate stored tab bar area at row 20, starting at x=10, width=60.
+        app.terminal_tab_bar_area = Some((10, 20, 60, 1));
+
+        // Click on stored row at x=10 → should hit tab 0.
+        let result = app.tab_bar_hit(10, 20);
+        assert!(result.is_some(), "expected hit on stored tab bar row");
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn tab_bar_hit_misses_wrong_row() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        app.terminal_tab_bar_area = Some((10, 20, 60, 1));
+
+        // Click above the stored row.
+        assert!(app.tab_bar_hit(10, 19).is_none(), "row above should miss");
+        // Click below the stored row.
+        assert!(app.tab_bar_hit(10, 21).is_none(), "row below should miss");
+    }
+
+    #[test]
+    fn tab_bar_hit_returns_none_when_area_not_set() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        app.terminal_tab_bar_area = None;
+
+        assert!(
+            app.tab_bar_hit(10, 20).is_none(),
+            "should return None when area not set"
         );
     }
 }

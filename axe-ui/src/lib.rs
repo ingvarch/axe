@@ -1274,6 +1274,94 @@ pub fn editor_tab_bar_rect(app: &AppState, area: Rect) -> Option<Rect> {
     })
 }
 
+/// Computes the terminal tab bar rect in screen coordinates.
+///
+/// Returns the first row inside the terminal panel border where tab labels are
+/// rendered. Returns `None` if the terminal is hidden, has no tabs, or is not
+/// visible (e.g., another panel is zoomed).
+pub fn terminal_tab_bar_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    let has_tabs = app
+        .terminal_manager
+        .as_ref()
+        .is_some_and(|mgr| mgr.has_tabs());
+    if !has_tabs {
+        return None;
+    }
+
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    if !layout_mgr.show_terminal {
+        return None;
+    }
+
+    if let Some(ref zoomed) = app.zoomed_panel {
+        if !matches!(zoomed, FocusTarget::Terminal(_)) {
+            return None;
+        }
+        let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        let block = panel_block(
+            " Terminal (zoomed) ",
+            &app.focus,
+            &FocusTarget::Terminal(0),
+            &Theme::default(),
+            false,
+        );
+        let inner = block.inner(vertical[0]);
+        if inner.height < 2 {
+            return None;
+        }
+        return Some(Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        });
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let right_area = if layout_mgr.show_tree {
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(layout_mgr.tree_width_pct),
+            Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+        ])
+        .split(main_area);
+        horizontal[1]
+    } else {
+        main_area
+    };
+
+    let right_split = Layout::vertical([
+        Constraint::Percentage(layout_mgr.editor_height_pct),
+        Constraint::Percentage(100 - layout_mgr.editor_height_pct),
+    ])
+    .split(right_area);
+
+    let term_block = panel_block(
+        " Terminal ",
+        &app.focus,
+        &FocusTarget::Terminal(0),
+        &Theme::default(),
+        false,
+    );
+    let inner = term_block.inner(right_split[1]);
+    if inner.height < 2 {
+        return None;
+    }
+    Some(Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    })
+}
+
 pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
@@ -2672,5 +2760,45 @@ mod tests {
         let has_close_buffer = HELP_LINES.iter().any(|(k, _)| *k == "Ctrl+W");
         assert!(has_next_buffer, "expected 'Alt+]/[' in HELP_LINES");
         assert!(has_close_buffer, "expected 'Ctrl+W' in HELP_LINES");
+    }
+
+    #[test]
+    fn terminal_tab_bar_rect_returns_some_when_tabs_exist() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+
+        let area = Rect::new(0, 0, 120, 40);
+        let result = terminal_tab_bar_rect(&app, area);
+        assert!(result.is_some(), "expected Some when terminal has tabs");
+        let rect = result.unwrap();
+        assert_eq!(rect.height, 1, "tab bar should be 1 row tall");
+    }
+
+    #[test]
+    fn terminal_tab_bar_rect_returns_none_when_no_tabs() {
+        let app = AppState::new();
+        // No terminal manager at all.
+        let area = Rect::new(0, 0, 120, 40);
+        let result = terminal_tab_bar_rect(&app, area);
+        assert!(result.is_none(), "expected None when no terminal manager");
+    }
+
+    #[test]
+    fn terminal_tab_bar_rect_returns_none_when_terminal_hidden() {
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+        app.show_terminal = false;
+
+        let area = Rect::new(0, 0, 120, 40);
+        let result = terminal_tab_bar_rect(&app, area);
+        assert!(result.is_none(), "expected None when terminal is hidden");
     }
 }
