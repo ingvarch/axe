@@ -1609,7 +1609,7 @@ fn render_editor_content(
     });
 
     // Render file content with scroll offset, current-line background,
-    // selection highlight, and search match highlighting.
+    // syntax highlighting, selection highlight, and search match highlighting.
     let content_style = Style::default().fg(theme.foreground).bg(theme.background);
     let cursor_line_style = Style::default()
         .fg(theme.foreground)
@@ -1622,10 +1622,18 @@ fn render_editor_content(
         .fg(theme.search_active_match_fg)
         .bg(theme.search_active_match_bg);
 
+    // Fetch syntax highlight data for visible lines.
+    let syntax_data = buffer.highlight_range(scroll_row, scroll_row + visible_lines);
+
     let content_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
             let file_line = scroll_row + i;
             let is_cursor_line = file_line == cursor_row && editor_focused;
+            let base_bg = if is_cursor_line {
+                theme.cursor_line_bg
+            } else {
+                theme.background
+            };
             let base_style = if is_cursor_line {
                 cursor_line_style
             } else {
@@ -1643,9 +1651,26 @@ fn render_editor_content(
                     .collect();
 
                 // Collect highlight ranges: (col_start, col_end, style) in display coords.
+                // Priority: syntax (base fg) < search (bg override) < selection (bg override).
+                // Later entries in this vec override earlier ones in the per-char style map.
                 let mut highlights: Vec<(usize, usize, Style)> = Vec::new();
 
-                // Search match highlights.
+                // Syntax highlights (lowest priority — set fg, preserve base bg).
+                if let Some(line_hl) = syntax_data.get(i) {
+                    for span in line_hl {
+                        let hs = span.col_start.saturating_sub(scroll_col);
+                        let he = span
+                            .col_end
+                            .saturating_sub(scroll_col)
+                            .min(content_w as usize);
+                        if he > hs {
+                            let color = theme.syntax_color(span.kind);
+                            highlights.push((hs, he, Style::default().fg(color).bg(base_bg)));
+                        }
+                    }
+                }
+
+                // Search match highlights (override syntax bg).
                 if let Some(s) = search {
                     for (idx, m) in s.matches.iter().enumerate() {
                         if m.row == file_line {
@@ -1663,7 +1688,7 @@ fn render_editor_content(
                     }
                 }
 
-                // Selection highlight (takes priority over search matches).
+                // Selection highlight (highest priority — override bg).
                 if let Some((sr, sc, er, ec)) = sel_range {
                     if file_line >= sr && file_line <= er {
                         let line_sel_start = if file_line == sr {

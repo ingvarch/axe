@@ -434,7 +434,7 @@ Support multiple open files with a tab bar.
 
 ## Phase 5: Syntax Highlighting
 
-### Task 5.1 — Tree-sitter Integration: Basic Highlighting
+### Task 5.1 — Tree-sitter Integration: Basic Highlighting ✅
 
 Add syntax highlighting using tree-sitter for the most common languages.
 

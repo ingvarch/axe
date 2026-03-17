@@ -1,8 +1,10 @@
 /// Visual theme definition for the IDE UI.
 ///
-/// Contains colors for panels, borders, and the status bar.
+/// Contains colors for panels, borders, status bar, and syntax highlighting.
 /// Uses One Dark color scheme by default.
 use ratatui::style::Color;
+
+use axe_editor::HighlightKind;
 
 /// Holds all UI colors for rendering the IDE.
 pub struct Theme {
@@ -52,6 +54,60 @@ pub struct Theme {
     pub tab_active_fg: Color,
     /// Foreground color for inactive tabs.
     pub tab_inactive_fg: Color,
+    // --- Syntax highlighting colors ---
+    /// Keyword color (purple).
+    pub syntax_keyword: Color,
+    /// String literal color (green).
+    pub syntax_string: Color,
+    /// Comment color (grey).
+    pub syntax_comment: Color,
+    /// Function name color (blue).
+    pub syntax_function: Color,
+    /// Type name color (yellow).
+    pub syntax_type: Color,
+    /// Variable color (red).
+    pub syntax_variable: Color,
+    /// Constant color (orange).
+    pub syntax_constant: Color,
+    /// Number literal color (orange).
+    pub syntax_number: Color,
+    /// Operator color (cyan).
+    pub syntax_operator: Color,
+    /// Punctuation color (foreground).
+    pub syntax_punctuation: Color,
+    /// Property/field color (red).
+    pub syntax_property: Color,
+    /// Attribute color (yellow).
+    pub syntax_attribute: Color,
+    /// Tag color (red).
+    pub syntax_tag: Color,
+    /// Escape sequence color (cyan).
+    pub syntax_escape: Color,
+    /// Builtin function/variable color (cyan).
+    pub syntax_builtin: Color,
+}
+
+impl Theme {
+    /// Returns the foreground color for a syntax highlight kind.
+    pub fn syntax_color(&self, kind: HighlightKind) -> Color {
+        match kind {
+            HighlightKind::Keyword => self.syntax_keyword,
+            HighlightKind::String => self.syntax_string,
+            HighlightKind::Comment => self.syntax_comment,
+            HighlightKind::Function => self.syntax_function,
+            HighlightKind::Type => self.syntax_type,
+            HighlightKind::Variable => self.syntax_variable,
+            HighlightKind::Constant => self.syntax_constant,
+            HighlightKind::Number => self.syntax_number,
+            HighlightKind::Operator => self.syntax_operator,
+            HighlightKind::Punctuation => self.syntax_punctuation,
+            HighlightKind::Property => self.syntax_property,
+            HighlightKind::Attribute => self.syntax_attribute,
+            HighlightKind::Tag => self.syntax_tag,
+            HighlightKind::Escape => self.syntax_escape,
+            HighlightKind::Builtin => self.syntax_builtin,
+        }
+    }
 }
 
 impl Default for Theme {
@@ -80,6 +136,22 @@ impl Default for Theme {
             tab_active_bg: Color::Rgb(40, 44, 52),             // #282c34 — same as editor bg
             tab_active_fg: Color::Rgb(171, 178, 191),          // #abb2bf — bright foreground
             tab_inactive_fg: Color::Rgb(130, 137, 151),        // #828997 — dim foreground
+            // One Dark syntax colors
+            syntax_keyword: Color::Rgb(198, 120, 221), // #c678dd — purple
+            syntax_string: Color::Rgb(152, 195, 121),  // #98c379 — green
+            syntax_comment: Color::Rgb(92, 99, 112),   // #5c6370 — grey
+            syntax_function: Color::Rgb(97, 175, 239), // #61afef — blue
+            syntax_type: Color::Rgb(229, 192, 123),    // #e5c07b — yellow
+            syntax_variable: Color::Rgb(224, 108, 117), // #e06c75 — red
+            syntax_constant: Color::Rgb(209, 154, 102), // #d19a66 — orange
+            syntax_number: Color::Rgb(209, 154, 102),  // #d19a66 — orange
+            syntax_operator: Color::Rgb(86, 182, 194), // #56b6c2 — cyan
+            syntax_punctuation: Color::Rgb(171, 178, 191), // #abb2bf — foreground
+            syntax_property: Color::Rgb(224, 108, 117), // #e06c75 — red
+            syntax_attribute: Color::Rgb(229, 192, 123), // #e5c07b — yellow
+            syntax_tag: Color::Rgb(224, 108, 117),     // #e06c75 — red
+            syntax_escape: Color::Rgb(86, 182, 194),   // #56b6c2 — cyan
+            syntax_builtin: Color::Rgb(86, 182, 194),  // #56b6c2 — cyan
         }
     }
 }
@@ -167,5 +239,55 @@ mod tests {
         assert_ne!(theme.panel_border_active, black);
         assert_ne!(theme.status_bar_bg, black);
         assert_ne!(theme.status_bar_fg, black);
+    }
+
+    #[test]
+    fn syntax_colors_differ_from_background() {
+        let theme = Theme::default();
+        assert_ne!(theme.syntax_keyword, theme.background);
+        assert_ne!(theme.syntax_string, theme.background);
+        assert_ne!(theme.syntax_comment, theme.background);
+        assert_ne!(theme.syntax_function, theme.background);
+        assert_ne!(theme.syntax_type, theme.background);
+        assert_ne!(theme.syntax_number, theme.background);
+    }
+
+    #[test]
+    fn syntax_color_maps_all_kinds() {
+        let theme = Theme::default();
+        let kinds = [
+            HighlightKind::Keyword,
+            HighlightKind::String,
+            HighlightKind::Comment,
+            HighlightKind::Function,
+            HighlightKind::Type,
+            HighlightKind::Variable,
+            HighlightKind::Constant,
+            HighlightKind::Number,
+            HighlightKind::Operator,
+            HighlightKind::Punctuation,
+            HighlightKind::Property,
+            HighlightKind::Attribute,
+            HighlightKind::Tag,
+            HighlightKind::Escape,
+            HighlightKind::Builtin,
+        ];
+        for kind in kinds {
+            let color = theme.syntax_color(kind);
+            assert_ne!(
+                color,
+                Color::Black,
+                "syntax_color({kind:?}) should not be black"
+            );
+        }
+    }
+
+    #[test]
+    fn syntax_keyword_differs_from_string() {
+        let theme = Theme::default();
+        assert_ne!(
+            theme.syntax_keyword, theme.syntax_string,
+            "keyword and string should have different colors"
+        );
     }
 }

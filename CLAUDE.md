@@ -11,7 +11,6 @@ possible. You use the type system to make illegal states unrepresentable.
 ---
 
 ## Workspace Structure
-[<35;41;25M[<35;70;28M
 ```
 axe/
 ├── Cargo.toml          # Workspace root

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
+use crate::highlight::{self, HighlightSpan, HighlightState};
 use crate::history::{Edit, EditHistory};
 use crate::selection::Selection;
 
@@ -31,6 +32,8 @@ pub struct EditorBuffer {
     history: EditHistory,
     /// Current text selection, if any.
     pub selection: Option<Selection>,
+    /// Syntax highlighting state, if the file type is supported.
+    highlight: Option<HighlightState>,
 }
 
 impl Default for EditorBuffer {
@@ -51,6 +54,7 @@ impl EditorBuffer {
             scroll_col: 0,
             history: EditHistory::new(),
             selection: None,
+            highlight: None,
         }
     }
 
@@ -62,6 +66,13 @@ impl EditorBuffer {
             File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
         let content = Rope::from_reader(BufReader::new(file))
             .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let mut highlight = HighlightState::new(ext);
+        if let Some(hl) = highlight.as_mut() {
+            hl.parse_full(&content);
+        }
+
         Ok(Self {
             content,
             path: Some(path.to_path_buf()),
@@ -71,6 +82,7 @@ impl EditorBuffer {
             scroll_col: 0,
             history: EditHistory::new(),
             selection: None,
+            highlight,
         })
     }
 
@@ -243,6 +255,88 @@ impl EditorBuffer {
         self.cursor.col = self.cursor.desired_col.min(line_len);
     }
 
+    /// Returns highlight spans for the given line range `[start, end)`.
+    ///
+    /// Each element in the returned `Vec` corresponds to one line and
+    /// contains the spans for that line. Returns an empty set of spans
+    /// per line if no highlighting is available.
+    pub fn highlight_range(&self, start: usize, end: usize) -> Vec<Vec<HighlightSpan>> {
+        match self.highlight.as_ref() {
+            Some(hl) => hl.highlights_for_range(start, end, &self.content),
+            None => vec![Vec::new(); end.saturating_sub(start)],
+        }
+    }
+
+    /// Notifies the tree-sitter highlighter about a text edit and re-parses.
+    ///
+    /// Must be called AFTER the rope has been mutated. The `start_char`,
+    /// `old_end_char` refer to positions in the OLD rope (before the edit),
+    /// and `new_end_char` refers to the position in the NEW rope.
+    fn notify_highlight_insert(&mut self, start_char: usize, chars_inserted: usize) {
+        if let Some(hl) = self.highlight.as_mut() {
+            // Build a snapshot of the old rope state for InputEdit.
+            // Since the rope has already been mutated, we reconstruct old positions.
+            let new_end_char = start_char + chars_inserted;
+            let start_byte = self
+                .content
+                .char_to_byte(start_char.min(self.content.len_chars()));
+            let new_end_byte = self
+                .content
+                .char_to_byte(new_end_char.min(self.content.len_chars()));
+
+            let start_position = highlight::byte_to_point(&self.content, start_byte);
+            // Old end = start (it was an insertion, no old text removed).
+            let old_end_position = start_position;
+            let new_end_position = highlight::byte_to_point(&self.content, new_end_byte);
+
+            let edit = tree_sitter::InputEdit {
+                start_byte,
+                old_end_byte: start_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            };
+            hl.edit_and_reparse(&edit, &self.content);
+        }
+    }
+
+    /// Notifies the tree-sitter highlighter about a deletion and re-parses.
+    ///
+    /// `start_char` is the char index where deletion starts (in both old and new),
+    /// `chars_deleted` is how many chars were removed.
+    fn notify_highlight_delete(
+        &mut self,
+        start_char: usize,
+        _chars_deleted: usize,
+        old_bytes: usize,
+        old_end_position: tree_sitter::Point,
+    ) {
+        if let Some(hl) = self.highlight.as_mut() {
+            let start_byte = self
+                .content
+                .char_to_byte(start_char.min(self.content.len_chars()));
+            let start_position = highlight::byte_to_point(&self.content, start_byte);
+
+            let edit = tree_sitter::InputEdit {
+                start_byte,
+                old_end_byte: start_byte + old_bytes,
+                new_end_byte: start_byte,
+                start_position,
+                old_end_position,
+                new_end_position: start_position,
+            };
+            hl.edit_and_reparse(&edit, &self.content);
+        }
+    }
+
+    /// Re-parses the full content for highlight after undo/redo.
+    fn reparse_highlight_full(&mut self) {
+        if let Some(hl) = self.highlight.as_mut() {
+            hl.parse_full(&self.content);
+        }
+    }
+
     // IMPACT ANALYSIS — insert_char
     // Parents: KeyEvent → Command::EditorInsertChar(ch) → this function
     // Children: UI renders updated content, cursor advances, modified flag set
@@ -270,6 +364,7 @@ impl EditorBuffer {
             cursor_before,
             self.cursor.clone(),
         );
+        self.notify_highlight_insert(char_idx, 1);
     }
 
     // IMPACT ANALYSIS — insert_newline
@@ -288,6 +383,7 @@ impl EditorBuffer {
         let cursor_before = self.cursor.clone();
         let indent = self.leading_whitespace(self.cursor.row);
         let insert_str = format!("\n{indent}");
+        let insert_chars = insert_str.chars().count();
         self.content.insert(char_idx, &insert_str);
         self.cursor.row += 1;
         self.cursor.col = indent.len();
@@ -302,6 +398,7 @@ impl EditorBuffer {
             cursor_before,
             self.cursor.clone(),
         );
+        self.notify_highlight_insert(char_idx, insert_chars);
     }
 
     // IMPACT ANALYSIS — insert_tab
@@ -332,6 +429,7 @@ impl EditorBuffer {
             cursor_before,
             self.cursor.clone(),
         );
+        self.notify_highlight_insert(char_idx, TAB_WIDTH);
     }
 
     // IMPACT ANALYSIS — delete_char_backward
@@ -353,6 +451,9 @@ impl EditorBuffer {
             let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
             let cursor_before = self.cursor.clone();
             let deleted: String = self.content.slice(char_idx - 1..char_idx).into();
+            let old_byte_len = deleted.len();
+            let old_end_pos =
+                highlight::byte_to_point(&self.content, self.content.char_to_byte(char_idx));
             self.content.remove(char_idx - 1..char_idx);
             self.cursor.col -= 1;
             self.cursor.desired_col = self.cursor.col;
@@ -366,6 +467,7 @@ impl EditorBuffer {
                 cursor_before,
                 self.cursor.clone(),
             );
+            self.notify_highlight_delete(char_idx - 1, 1, old_byte_len, old_end_pos);
         } else if self.cursor.row > 0 {
             let cursor_before = self.cursor.clone();
             let prev_line_len = self.line_length(self.cursor.row - 1);
@@ -377,6 +479,10 @@ impl EditorBuffer {
                 char_idx - 1
             };
             let deleted: String = self.content.slice(remove_start..char_idx).into();
+            let old_byte_len = deleted.len();
+            let chars_deleted = char_idx - remove_start;
+            let old_end_pos =
+                highlight::byte_to_point(&self.content, self.content.char_to_byte(char_idx));
             self.content.remove(remove_start..char_idx);
             self.cursor.row -= 1;
             self.cursor.col = prev_line_len;
@@ -391,6 +497,7 @@ impl EditorBuffer {
                 cursor_before,
                 self.cursor.clone(),
             );
+            self.notify_highlight_delete(remove_start, chars_deleted, old_byte_len, old_end_pos);
         }
     }
 
@@ -414,6 +521,9 @@ impl EditorBuffer {
         if self.cursor.col < line_len {
             let cursor_before = self.cursor.clone();
             let deleted: String = self.content.slice(char_idx..char_idx + 1).into();
+            let old_byte_len = deleted.len();
+            let old_end_pos =
+                highlight::byte_to_point(&self.content, self.content.char_to_byte(char_idx + 1));
             self.content.remove(char_idx..char_idx + 1);
             self.modified = true;
             self.history.record(
@@ -425,6 +535,7 @@ impl EditorBuffer {
                 cursor_before,
                 self.cursor.clone(),
             );
+            self.notify_highlight_delete(char_idx, 1, old_byte_len, old_end_pos);
         } else if self.cursor.row + 1 < self.content_line_count() {
             let cursor_before = self.cursor.clone();
             // At end of line — join with next line by removing the newline.
@@ -435,6 +546,10 @@ impl EditorBuffer {
                     char_idx + 1
                 };
             let deleted: String = self.content.slice(char_idx..remove_end).into();
+            let old_byte_len = deleted.len();
+            let chars_deleted = remove_end - char_idx;
+            let old_end_pos =
+                highlight::byte_to_point(&self.content, self.content.char_to_byte(remove_end));
             self.content.remove(char_idx..remove_end);
             self.modified = true;
             self.history.record(
@@ -446,6 +561,7 @@ impl EditorBuffer {
                 cursor_before,
                 self.cursor.clone(),
             );
+            self.notify_highlight_delete(char_idx, chars_deleted, old_byte_len, old_end_pos);
         }
     }
 
@@ -494,6 +610,7 @@ impl EditorBuffer {
             self.cursor = group.cursor_before;
             self.cursor.desired_col = self.cursor.col;
             self.modified = true;
+            self.reparse_highlight_full();
         }
     }
 
@@ -514,6 +631,7 @@ impl EditorBuffer {
             self.cursor = group.cursor_after;
             self.cursor.desired_col = self.cursor.col;
             self.modified = true;
+            self.reparse_highlight_full();
         }
     }
 
@@ -649,6 +767,10 @@ impl EditorBuffer {
         let start_idx = self.content.line_to_char(start_row) + start_col;
         let end_idx = self.content.line_to_char(end_row) + end_col;
         let deleted: String = self.content.slice(start_idx..end_idx).to_string();
+        let old_byte_len = deleted.len();
+        let chars_deleted = end_idx - start_idx;
+        let old_end_pos =
+            highlight::byte_to_point(&self.content, self.content.char_to_byte(end_idx));
 
         let cursor_before = self.cursor.clone();
         self.content.remove(start_idx..end_idx);
@@ -666,6 +788,7 @@ impl EditorBuffer {
             cursor_before,
             self.cursor.clone(),
         );
+        self.notify_highlight_delete(start_idx, chars_deleted, old_byte_len, old_end_pos);
         Some(deleted)
     }
 
@@ -683,6 +806,7 @@ impl EditorBuffer {
         }
         let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
         let cursor_before = self.cursor.clone();
+        let chars_inserted = text.chars().count();
         self.content.insert(char_idx, text);
 
         // Advance cursor past the inserted text.
@@ -705,6 +829,7 @@ impl EditorBuffer {
             cursor_before,
             self.cursor.clone(),
         );
+        self.notify_highlight_insert(char_idx, chars_inserted);
     }
 
     /// Move cursor to the next word boundary.
@@ -936,6 +1061,7 @@ mod tests {
                 scroll_col: 0,
                 history: EditHistory::new(),
                 selection: None,
+                highlight: None,
             };
             assert_eq!(buf.file_type(), expected_type, "wrong type for {filename}");
         }
@@ -952,6 +1078,7 @@ mod tests {
             scroll_col: 0,
             history: EditHistory::new(),
             selection: None,
+            highlight: None,
         };
         assert_eq!(buf.file_type(), "Plain Text");
     }
@@ -2021,5 +2148,119 @@ mod tests {
         buf.delete_char_forward();
         assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
         assert!(buf.selection.is_none());
+    }
+
+    // --- Syntax highlighting integration tests ---
+
+    #[test]
+    fn from_file_initializes_highlight_for_rust() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.rs");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "fn main() {{}}\n").unwrap();
+
+        let buf = EditorBuffer::from_file(&path).unwrap();
+        // highlight should be Some for .rs files.
+        assert!(buf.highlight.is_some());
+    }
+
+    #[test]
+    fn from_file_no_highlight_for_unknown_ext() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xyz");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "hello world\n").unwrap();
+
+        let buf = EditorBuffer::from_file(&path).unwrap();
+        assert!(buf.highlight.is_none());
+    }
+
+    #[test]
+    fn highlight_range_returns_spans_for_rust_file() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.rs");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "fn main() {{}}\n").unwrap();
+
+        let buf = EditorBuffer::from_file(&path).unwrap();
+        let spans = buf.highlight_range(0, 1);
+        assert_eq!(spans.len(), 1);
+        // "fn" should produce a Keyword span.
+        let has_keyword = spans[0]
+            .iter()
+            .any(|s| s.kind == crate::highlight::HighlightKind::Keyword);
+        assert!(
+            has_keyword,
+            "expected keyword highlight, got: {:?}",
+            spans[0]
+        );
+    }
+
+    #[test]
+    fn highlight_range_returns_empty_for_plain_text() {
+        let buf = buffer_from_str("hello world\n");
+        let spans = buf.highlight_range(0, 1);
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].is_empty());
+    }
+
+    #[test]
+    fn highlight_updates_after_insert_char() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.rs");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "// hello\n").unwrap();
+
+        let mut buf = EditorBuffer::from_file(&path).unwrap();
+        // Insert at start of file: "let x = 1;\n"
+        buf.cursor.row = 0;
+        buf.cursor.col = 0;
+        for ch in "let x = 1;\n".chars() {
+            if ch == '\n' {
+                buf.insert_newline();
+            } else {
+                buf.insert_char(ch);
+            }
+        }
+        let spans = buf.highlight_range(0, 1);
+        // First line should now have "let" keyword.
+        let has_let = spans[0]
+            .iter()
+            .any(|s| s.kind == crate::highlight::HighlightKind::Keyword);
+        assert!(
+            has_let,
+            "expected 'let' keyword after insert, got: {:?}",
+            spans[0]
+        );
+    }
+
+    #[test]
+    fn highlight_updates_after_undo() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.rs");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "fn main() {{}}\n").unwrap();
+
+        let mut buf = EditorBuffer::from_file(&path).unwrap();
+        // Type a character.
+        buf.cursor.row = 0;
+        buf.cursor.col = 0;
+        buf.insert_char('x');
+        // Undo — should restore the original parse.
+        buf.undo();
+        let spans = buf.highlight_range(0, 1);
+        let has_fn = spans[0].iter().any(|s| {
+            s.kind == crate::highlight::HighlightKind::Keyword && s.col_start == 0 && s.col_end == 2
+        });
+        assert!(
+            has_fn,
+            "expected 'fn' keyword after undo, got: {:?}",
+            spans[0]
+        );
     }
 }
