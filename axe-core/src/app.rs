@@ -311,6 +311,8 @@ pub struct AppState {
     keymap: KeymapResolver,
     /// Application configuration loaded from TOML files.
     pub config: axe_config::AppConfig,
+    /// LSP manager for language server communication, if initialized.
+    pub lsp_manager: Option<axe_lsp::LspManager>,
 }
 
 impl AppState {
@@ -354,6 +356,7 @@ impl AppState {
             terminal_click_state: ClickState::default(),
             keymap: KeymapResolver::with_defaults(),
             config: axe_config::AppConfig::default(),
+            lsp_manager: None,
         }
     }
 
@@ -383,6 +386,19 @@ impl AppState {
         let keybinding_warnings = keymap.apply_overrides(&config.keybindings);
         warnings.extend(keybinding_warnings);
 
+        // Initialize LSP manager: merge default configs with user overrides.
+        let mut lsp_configs = axe_config::default_lsp_configs();
+        for (lang, user_cfg) in &config.lsp {
+            lsp_configs.insert(lang.clone(), user_cfg.clone());
+        }
+        let lsp_manager = match axe_lsp::LspManager::new(lsp_configs, &root) {
+            Ok(mgr) => Some(mgr),
+            Err(e) => {
+                log::warn!("Failed to initialize LSP manager: {e}");
+                None
+            }
+        };
+
         let status_message = if warnings.is_empty() {
             None
         } else {
@@ -398,6 +414,7 @@ impl AppState {
             config,
             keymap,
             status_message,
+            lsp_manager,
             ..Self::new()
         }
     }
@@ -445,6 +462,53 @@ impl AppState {
     pub fn drain_project_search_results(&mut self) {
         if let Some(ref mut ps) = self.project_search {
             ps.drain_results();
+        }
+    }
+
+    /// Polls LSP events from all active language servers.
+    ///
+    /// Handles initialization events (logs status), crash events (shows status
+    /// message). Call this each frame from the main loop.
+    pub fn poll_lsp(&mut self) {
+        let Some(ref mut lsp) = self.lsp_manager else {
+            return;
+        };
+
+        let events = lsp.poll_events();
+        for event in events {
+            match event {
+                axe_lsp::LspEvent::Initialized { language_id } => {
+                    log::info!("LSP server initialized for {language_id}");
+                    self.set_status_message(format!("LSP: {language_id} ready"));
+                }
+                axe_lsp::LspEvent::ServerCrashed { language_id, error } => {
+                    log::warn!("LSP server crashed for {language_id}: {error}");
+                    self.set_status_message(format!("LSP: {language_id} crashed"));
+                }
+                axe_lsp::LspEvent::ServerNotification { .. } => {
+                    // Diagnostics, etc. — handled in future tasks (7.2+).
+                }
+                axe_lsp::LspEvent::Response { .. } => {
+                    // Non-initialize responses — handled in future tasks.
+                }
+            }
+        }
+    }
+
+    /// Notifies the LSP manager that the active buffer content changed.
+    ///
+    /// Called after every edit command (insert, delete, paste, undo, redo, etc.).
+    fn notify_lsp_change(&mut self) {
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let text = buf.content_string();
+                    let path = path.to_path_buf();
+                    if let Err(e) = lsp.file_changed(&path, &text) {
+                        log::warn!("LSP didChange failed: {e}");
+                    }
+                }
+            }
         }
     }
 
@@ -1032,6 +1096,15 @@ impl AppState {
                 Ok(()) => {
                     self.buffer_manager.promote_preview();
                     self.focus = FocusTarget::Editor;
+                    // Notify LSP about the newly opened file.
+                    if let Some(ref mut lsp) = self.lsp_manager {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            let text = buf.content_string();
+                            if let Err(e) = lsp.file_opened(&path, &text) {
+                                log::warn!("LSP didOpen failed: {e}");
+                            }
+                        }
+                    }
                 }
                 Err(e) => log::warn!("Failed to open file: {e}"),
             },
@@ -1091,6 +1164,7 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorBackspace => {
                 let (h, w) = self.editor_viewport();
@@ -1099,6 +1173,7 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorDelete => {
                 let (h, w) = self.editor_viewport();
@@ -1107,6 +1182,7 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorNewline => {
                 let (h, w) = self.editor_viewport();
@@ -1115,6 +1191,7 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorTab => {
                 let (h, w) = self.editor_viewport();
@@ -1123,11 +1200,23 @@ impl AppState {
                     buf.ensure_cursor_visible(h, w);
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorSave => {
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                     if let Err(e) = buf.save_to_file() {
                         log::warn!("Save failed: {e}");
+                    }
+                }
+                // Notify LSP about save.
+                if let Some(ref mut lsp) = self.lsp_manager {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(path) = buf.path() {
+                            let path = path.to_path_buf();
+                            if let Err(e) = lsp.file_saved(&path) {
+                                log::warn!("LSP didSave failed: {e}");
+                            }
+                        }
                     }
                 }
                 self.last_edit_time = None;
@@ -1142,6 +1231,7 @@ impl AppState {
                     buf.undo();
                     buf.ensure_cursor_visible(h, w);
                 }
+                self.notify_lsp_change();
             }
             Command::EditorRedo => {
                 let (h, w) = self.editor_viewport();
@@ -1149,6 +1239,7 @@ impl AppState {
                     buf.redo();
                     buf.ensure_cursor_visible(h, w);
                 }
+                self.notify_lsp_change();
             }
             // IMPACT ANALYSIS — Selection commands
             // Parents: KeyEvent → Shift+Arrow/Ctrl+Shift+Arrow → these commands
@@ -1232,6 +1323,7 @@ impl AppState {
                     }
                 }
                 self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
             }
             Command::EditorPaste => {
                 let (h, w) = self.editor_viewport();
@@ -1247,6 +1339,7 @@ impl AppState {
                         buf.ensure_cursor_visible(h, w);
                     }
                     self.last_edit_time = Some(Instant::now());
+                    self.notify_lsp_change();
                 }
             }
             // IMPACT ANALYSIS — Search commands
@@ -3258,6 +3351,21 @@ mod tests {
     fn poll_terminal_noop_without_manager() {
         let mut app = AppState::new();
         app.poll_terminal(); // Should not panic.
+    }
+
+    // --- LSP integration tests ---
+
+    #[test]
+    fn poll_lsp_noop_without_manager() {
+        let mut app = AppState::new();
+        app.poll_lsp(); // Should not panic.
+    }
+
+    #[test]
+    fn lsp_manager_initialized_on_new_with_root() {
+        let dir = tempfile::tempdir().expect("should create temp dir");
+        let app = AppState::new_with_root(dir.path().to_path_buf());
+        assert!(app.lsp_manager.is_some());
     }
 
     // --- Terminal key interception tests ---

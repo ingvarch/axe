@@ -190,6 +190,13 @@ impl EditorBuffer {
         self.path.as_deref()
     }
 
+    /// Returns the full buffer content as a `String`.
+    ///
+    /// Used by the LSP subsystem for full-document synchronization.
+    pub fn content_string(&self) -> String {
+        self.content.to_string()
+    }
+
     /// Returns the number of content lines (excludes phantom trailing empty line from ropey).
     fn content_line_count(&self) -> usize {
         let total = self.content.len_lines();
@@ -1087,6 +1094,21 @@ mod tests {
     fn preview_flag_defaults_to_false() {
         let buf = EditorBuffer::new();
         assert!(!buf.is_preview);
+    }
+
+    #[test]
+    fn content_string_returns_buffer_text() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "hello world").unwrap();
+        tmp.flush().unwrap();
+        let buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        assert_eq!(buf.content_string(), "hello world");
+    }
+
+    #[test]
+    fn content_string_empty_buffer() {
+        let buf = EditorBuffer::new();
+        assert_eq!(buf.content_string(), "");
     }
 
     #[test]

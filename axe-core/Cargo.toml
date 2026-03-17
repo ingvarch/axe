@@ -7,6 +7,7 @@ edition.workspace = true
 alacritty_terminal = "0.25"
 arboard = "3"
 axe-config = { path = "../axe-config" }
+axe-lsp = { path = "../axe-lsp" }
 axe-terminal = { path = "../axe-terminal" }
 axe-editor = { path = "../axe-editor" }
 axe-tree = { path = "../axe-tree" }

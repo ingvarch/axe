@@ -556,20 +556,20 @@ Scroll through terminal output history.
 
 ## Phase 7: LSP Integration
 
-### Task 7.1 — LSP: Client Infrastructure
+### Task 7.1 — LSP: Client Infrastructure [DONE]
 
 Set up the LSP client that can start, communicate with, and stop language servers.
 
 **Acceptance criteria:**
-- `LspManager` can start a language server process given a command + args
-- Communication via JSON-RPC over stdin/stdout
-- `initialize` handshake completes successfully
-- `textDocument/didOpen` sent when a file is opened
-- `textDocument/didChange` sent on each edit (incremental sync)
-- `textDocument/didSave` sent on file save
-- Server stdout is parsed correctly (Content-Length header + JSON body)
-- If the server crashes, a notification is shown and LSP features gracefully degrade
-- LSP servers are configured in the config file per language
+- [x] `LspManager` can start a language server process given a command + args
+- [x] Communication via JSON-RPC over stdin/stdout
+- [x] `initialize` handshake completes successfully
+- [x] `textDocument/didOpen` sent when a file is opened
+- [x] `textDocument/didChange` sent on each edit (incremental sync)
+- [x] `textDocument/didSave` sent on file save
+- [x] Server stdout is parsed correctly (Content-Length header + JSON body)
+- [x] If the server crashes, a notification is shown and LSP features gracefully degrade
+- [x] LSP servers are configured in the config file per language
 
 **Implementation details:**
 - Use `lsp-types` crate for all LSP type definitions

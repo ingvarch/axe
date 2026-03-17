@@ -26,6 +26,12 @@ pub struct AppConfig {
     /// (e.g., `"request_quit"`). Applied on top of default bindings.
     #[serde(default)]
     pub keybindings: HashMap<String, String>,
+    /// LSP server configurations, keyed by language ID.
+    ///
+    /// Example TOML: `[lsp.rust]` with `command = "rust-analyzer"`.
+    /// User entries override built-in defaults from `default_lsp_configs()`.
+    #[serde(default)]
+    pub lsp: HashMap<String, LspServerConfig>,
 }
 
 impl Default for AppConfig {
@@ -138,6 +144,109 @@ impl Default for UiConfig {
             border_style: default_border_style(),
         }
     }
+}
+
+/// Configuration for a single LSP server.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LspServerConfig {
+    /// Command to spawn the LSP server (e.g., `"rust-analyzer"`).
+    pub command: String,
+    /// Arguments to pass to the server command.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Optional initialization options sent to the server.
+    #[serde(default)]
+    pub init_options: Option<serde_json::Value>,
+}
+
+/// Returns built-in LSP server configurations for common languages.
+///
+/// These are used as defaults and can be overridden by user config.
+pub fn default_lsp_configs() -> HashMap<String, LspServerConfig> {
+    let mut configs = HashMap::new();
+
+    configs.insert(
+        "rust".to_string(),
+        LspServerConfig {
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "go".to_string(),
+        LspServerConfig {
+            command: "gopls".to_string(),
+            args: vec![],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "python".to_string(),
+        LspServerConfig {
+            command: "pyright-langserver".to_string(),
+            args: vec!["--stdio".to_string()],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "typescript".to_string(),
+        LspServerConfig {
+            command: "typescript-language-server".to_string(),
+            args: vec!["--stdio".to_string()],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "javascript".to_string(),
+        LspServerConfig {
+            command: "typescript-language-server".to_string(),
+            args: vec!["--stdio".to_string()],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "c".to_string(),
+        LspServerConfig {
+            command: "clangd".to_string(),
+            args: vec![],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "cpp".to_string(),
+        LspServerConfig {
+            command: "clangd".to_string(),
+            args: vec![],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "lua".to_string(),
+        LspServerConfig {
+            command: "lua-language-server".to_string(),
+            args: vec![],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "toml".to_string(),
+        LspServerConfig {
+            command: "taplo".to_string(),
+            args: vec!["lsp".to_string(), "stdio".to_string()],
+            init_options: None,
+        },
+    );
+    configs.insert(
+        "shellscript".to_string(),
+        LspServerConfig {
+            command: "bash-language-server".to_string(),
+            args: vec!["start".to_string()],
+            init_options: None,
+        },
+    );
+
+    configs
 }
 
 // --- Default value functions ---
@@ -496,5 +605,53 @@ tab_size = 2
         let (config, warnings) = AppConfig::load_with_warnings(Some(dir.path()));
         assert_eq!(config.editor.tab_size, 4);
         assert!(warnings.is_empty());
+    }
+
+    // --- Part C: LSP config ---
+
+    #[test]
+    fn default_config_has_empty_lsp() {
+        let config = AppConfig::default();
+        assert!(config.lsp.is_empty());
+    }
+
+    #[test]
+    fn parse_lsp_config_from_toml() {
+        let toml_str = r#"
+[lsp.rust]
+command = "rust-analyzer"
+
+[lsp.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse LSP config");
+        assert_eq!(config.lsp.len(), 2);
+        assert_eq!(config.lsp["rust"].command, "rust-analyzer");
+        assert_eq!(config.lsp["python"].command, "pyright-langserver");
+        assert_eq!(config.lsp["python"].args, vec!["--stdio"]);
+    }
+
+    #[test]
+    fn default_lsp_configs_has_common_servers() {
+        let configs = default_lsp_configs();
+        assert!(configs.contains_key("rust"));
+        assert!(configs.contains_key("go"));
+        assert!(configs.contains_key("python"));
+        assert!(configs.contains_key("typescript"));
+        assert!(configs.contains_key("c"));
+        assert!(configs.contains_key("lua"));
+        assert!(configs.contains_key("toml"));
+        assert!(configs.contains_key("shellscript"));
+        assert_eq!(configs["rust"].command, "rust-analyzer");
+        assert_eq!(configs["go"].command, "gopls");
+    }
+
+    #[test]
+    fn lsp_server_config_default() {
+        let config = LspServerConfig::default();
+        assert!(config.command.is_empty());
+        assert!(config.args.is_empty());
+        assert!(config.init_options.is_none());
     }
 }

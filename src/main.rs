@@ -119,6 +119,9 @@ async fn main() -> Result<()> {
         // Drain project search results from background thread.
         app.drain_project_search_results();
 
+        // Poll LSP events from language servers.
+        app.poll_lsp();
+
         // Check if autosave should trigger (debounced 2s after last edit).
         app.check_autosave();
 
@@ -211,6 +214,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
+    }
+
+    // Shut down all LSP servers before exit.
+    if let Some(ref mut lsp) = app.lsp_manager {
+        lsp.shutdown_all();
     }
 
     restore_terminal();
