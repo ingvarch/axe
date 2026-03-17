@@ -11,7 +11,7 @@ axe-editor = { path = "../axe-editor" }
 axe-terminal = { path = "../axe-terminal" }
 axe-tree = { path = "../axe-tree" }
 log = "0.4"
-ratatui = "0.29"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_28"] }
 crossterm = "0.28"
 
 [dev-dependencies]

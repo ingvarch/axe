@@ -923,6 +923,12 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
 
     let term = tab.term();
 
+    // Clear the grid and scrollbar areas before direct buffer manipulation.
+    // This prevents stale content from persisting when scroll position changes
+    // or when the terminal grid has fewer cells than the visible area.
+    frame.render_widget(Clear, grid_area);
+    frame.render_widget(Clear, scrollbar_area);
+
     // Render grid content and cursor, then release the borrow on term for scrollbar rendering.
     let display_offset = {
         let content = term.renderable_content();
@@ -2785,6 +2791,121 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let result = terminal_tab_bar_rect(&app, area);
         assert!(result.is_none(), "expected None when no terminal manager");
+    }
+
+    /// Verifies that the terminal grid area is explicitly cleared before
+    /// rendering content, so stale characters from a previous frame do not
+    /// persist when cells have no terminal output.
+    #[test]
+    fn terminal_grid_area_cleared_before_content_render() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let theme = Theme::default();
+
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // First pass: pre-fill the terminal grid region with stale "X" chars
+        // to simulate leftover content from a previous frame.
+        terminal
+            .draw(|frame| {
+                let buf = frame.buffer_mut();
+                // Fill entire buffer with 'X' to simulate stale content.
+                for y in 0..24u16 {
+                    for x in 0..80u16 {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_char('X');
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        // Second pass: render the actual app. The terminal grid area should be
+        // cleared — no 'X' chars should remain in the terminal grid region.
+        terminal.draw(|frame| render(&app, frame, &theme)).unwrap();
+
+        // Find the terminal grid area by checking where 'X' persists.
+        // After a proper clear + render, the terminal grid cells should NOT
+        // contain 'X' (they should be space/empty from the clear).
+        let buf = terminal.backend().buffer();
+
+        // The terminal panel occupies the bottom-right. Check the interior
+        // cells (skip borders). With default layout, terminal starts roughly
+        // at the bottom half of the right panel.
+        let mut stale_x_count = 0;
+        for y in 0..buf.area().height {
+            for x in 0..buf.area().width {
+                if let Some(cell) = buf.cell((x, y)) {
+                    // Only count 'X' in the lower portion (terminal area).
+                    // The terminal grid is roughly in the bottom-right.
+                    if cell.symbol() == "X" && y > buf.area().height / 2 {
+                        stale_x_count += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            stale_x_count, 0,
+            "Stale 'X' characters found in terminal grid area — grid not cleared before render"
+        );
+    }
+
+    /// Verifies that the terminal scrollbar area is cleared before rendering,
+    /// preventing stale scrollbar artifacts when scroll position changes.
+    #[test]
+    fn terminal_scrollbar_area_cleared_before_render() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let theme = Theme::default();
+
+        let mut app = AppState::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut mgr = axe_terminal::TerminalManager::new();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        app.terminal_manager = Some(mgr);
+
+        // Pre-fill buffer with stale content.
+        terminal
+            .draw(|frame| {
+                let buf = frame.buffer_mut();
+                for y in 0..24u16 {
+                    for x in 0..80u16 {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_char('X');
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        // Render the app. The scrollbar column should not retain 'X'.
+        terminal.draw(|frame| render(&app, frame, &theme)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // The scrollbar is the rightmost column of the terminal panel.
+        // Check all cells in the lower-right region for stale 'X'.
+        let mut stale_in_scrollbar = 0;
+        for y in (buf.area().height / 2)..buf.area().height {
+            // The scrollbar column is 1 column before the right border of the terminal panel.
+            // With default layout (tree 20%, editor 50%), the right border is at col 79.
+            // The scrollbar is at col 78.
+            let x = buf.area().width - 2; // Just inside the right border.
+            if let Some(cell) = buf.cell((x, y)) {
+                if cell.symbol() == "X" {
+                    stale_in_scrollbar += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            stale_in_scrollbar, 0,
+            "Stale 'X' characters found in scrollbar area — scrollbar not cleared before render"
+        );
     }
 
     #[test]

@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
+    LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -107,7 +110,12 @@ async fn main() -> Result<()> {
         // Clear expired status messages.
         app.expire_status_message();
 
+        // Wrap draw in synchronized output to prevent tearing/flicker.
+        // The terminal buffers all output until EndSynchronizedUpdate, then
+        // renders atomically. Unsupported terminals silently ignore the sequences.
+        crossterm::execute!(io::stdout(), BeginSynchronizedUpdate)?;
         terminal.draw(|frame| axe_ui::render(&app, frame, &theme))?;
+        crossterm::execute!(io::stdout(), EndSynchronizedUpdate)?;
 
         // Sync panel dimensions after draw.
         let full_area = Rect::new(0, 0, size.width, size.height);
