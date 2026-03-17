@@ -189,10 +189,9 @@ fn editor_title(app: &AppState, zoomed: bool) -> &'static str {
 /// Help text lines for the help overlay.
 const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+Q", "Quit"),
-    ("Shift+Tab", "Previous panel"),
-    ("Ctrl+1", "Focus Files"),
-    ("Ctrl+2", "Focus Editor"),
-    ("Ctrl+3", "Focus Terminal"),
+    ("Alt+1", "Focus Files"),
+    ("Alt+2", "Focus Editor"),
+    ("Alt+3", "Focus Terminal"),
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
     ("Ctrl+R", "Resize mode"),
@@ -216,7 +215,6 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Alt+T", "New tab (terminal)"),
     ("Alt+W / Ctrl+W", "Close tab"),
     ("Alt+]/[", "Next/prev tab"),
-    ("Alt+1-9", "Terminal tab N"),
     ("", ""),
     ("--- Editor ---", ""),
     ("Ctrl+F", "Find in file"),

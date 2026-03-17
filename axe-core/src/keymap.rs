@@ -248,19 +248,10 @@ impl KeymapResolver {
             KeyCode::Char('q'),
             Command::RequestQuit,
         );
-        resolver.bind(KeyModifiers::SHIFT, KeyCode::BackTab, Command::FocusPrev);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('1'), Command::FocusTree);
+        resolver.bind(KeyModifiers::ALT, KeyCode::Char('2'), Command::FocusEditor);
         resolver.bind(
-            KeyModifiers::CONTROL,
-            KeyCode::Char('1'),
-            Command::FocusTree,
-        );
-        resolver.bind(
-            KeyModifiers::CONTROL,
-            KeyCode::Char('2'),
-            Command::FocusEditor,
-        );
-        resolver.bind(
-            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
             KeyCode::Char('3'),
             Command::FocusTerminal,
         );
@@ -412,15 +403,6 @@ impl KeymapResolver {
             Command::TerminalScrollBottom,
         );
 
-        // Alt+1-9: direct terminal tab access (1-indexed for the user, 0-indexed internally).
-        for i in 1..=9u8 {
-            resolver.bind(
-                KeyModifiers::ALT,
-                KeyCode::Char((b'0' + i) as char),
-                Command::ActivateTerminalTab((i - 1) as usize),
-            );
-        }
-
         resolver
     }
 
@@ -518,30 +500,23 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_backtab_focus_prev() {
+    fn default_bindings_alt_1_focus_tree() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
-        assert_eq!(resolver.resolve(&key), Some(Command::FocusPrev));
-    }
-
-    #[test]
-    fn default_bindings_ctrl_1_focus_tree() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL);
+        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
         assert_eq!(resolver.resolve(&key), Some(Command::FocusTree));
     }
 
     #[test]
-    fn default_bindings_ctrl_2_focus_editor() {
+    fn default_bindings_alt_2_focus_editor() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL);
+        let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT);
         assert_eq!(resolver.resolve(&key), Some(Command::FocusEditor));
     }
 
     #[test]
-    fn default_bindings_ctrl_3_focus_terminal() {
+    fn default_bindings_alt_3_focus_terminal() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::CONTROL);
+        let key = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT);
         assert_eq!(resolver.resolve(&key), Some(Command::FocusTerminal));
     }
 
@@ -629,26 +604,6 @@ mod tests {
     // Legacy NewTerminalTab/CloseTerminalTab are still available via command_from_str.
 
     #[test]
-    fn default_bindings_alt_1_activates_terminal_tab_0() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
-        assert_eq!(
-            resolver.resolve(&key),
-            Some(Command::ActivateTerminalTab(0))
-        );
-    }
-
-    #[test]
-    fn default_bindings_alt_9_activates_terminal_tab_8() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('9'), KeyModifiers::ALT);
-        assert_eq!(
-            resolver.resolve(&key),
-            Some(Command::ActivateTerminalTab(8))
-        );
-    }
-
-    #[test]
     fn default_bindings_shift_page_up_scrolls_terminal() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT);
@@ -716,16 +671,6 @@ mod tests {
 
     // Alt+]/[ and Ctrl+W are now bound to unified NextTab/PrevTab/CloseTab (tested above).
     // Legacy NextBuffer/PrevBuffer/CloseBuffer are still available via command_from_str.
-
-    #[test]
-    fn default_bindings_alt_5_activates_terminal_tab_4() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT);
-        assert_eq!(
-            resolver.resolve(&key),
-            Some(Command::ActivateTerminalTab(4))
-        );
-    }
 
     // --- Unified tab command bindings ---
 

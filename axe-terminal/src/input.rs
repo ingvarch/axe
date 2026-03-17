@@ -43,6 +43,7 @@ pub fn key_to_bytes(key: &KeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
         KeyCode::Enter => Some(vec![0x0D]),
         KeyCode::Backspace => Some(vec![0x7F]),
         KeyCode::Tab => Some(vec![0x09]),
+        KeyCode::BackTab => Some(b"\x1B[Z".to_vec()),
         KeyCode::Esc => Some(vec![0x1B]),
         KeyCode::Up => Some(arrow_key(b'A', app_cursor)),
         KeyCode::Down => Some(arrow_key(b'B', app_cursor)),
@@ -238,6 +239,12 @@ mod tests {
     fn alt_char_sends_esc_prefix() {
         let bytes = key_to_bytes(&key_with(KeyCode::Char('a'), KeyModifiers::ALT), false);
         assert_eq!(bytes, Some(vec![0x1B, 0x61]));
+    }
+
+    #[test]
+    fn backtab_sends_reverse_tab_sequence() {
+        let bytes = key_to_bytes(&key(KeyCode::BackTab), false);
+        assert_eq!(bytes, Some(b"\x1B[Z".to_vec()));
     }
 
     #[test]

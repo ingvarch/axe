@@ -2511,32 +2511,24 @@ mod tests {
     }
 
     #[test]
-    fn handle_shift_tab_cycles_focus_backward() {
+    fn handle_alt_1_focuses_tree() {
         let mut app = AppState::new();
-        assert_eq!(app.focus, FocusTarget::Tree);
-        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-        assert_eq!(app.focus, FocusTarget::Terminal(0));
-    }
-
-    #[test]
-    fn handle_ctrl_1_focuses_tree() {
-        let mut app = AppState::new();
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT));
         assert_eq!(app.focus, FocusTarget::Tree);
     }
 
     #[test]
-    fn handle_ctrl_2_focuses_editor() {
+    fn handle_alt_2_focuses_editor() {
         let mut app = AppState::new();
         app.focus = FocusTarget::Tree;
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT));
         assert_eq!(app.focus, FocusTarget::Editor);
     }
 
     #[test]
-    fn handle_ctrl_3_focuses_terminal() {
+    fn handle_alt_3_focuses_terminal() {
         let mut app = AppState::new();
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::CONTROL));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
         assert_eq!(app.focus, FocusTarget::Terminal(0));
     }
 
