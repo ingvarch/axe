@@ -1498,10 +1498,16 @@ fn render_tab_bar(
             break;
         }
 
-        let style = if i == active_index {
+        let base_style = if i == active_index {
             active_style
         } else {
             inactive_style
+        };
+        // Preview buffers use italic to indicate temporary state.
+        let style = if buf.is_preview {
+            base_style.add_modifier(Modifier::ITALIC)
+        } else {
+            base_style
         };
 
         spans.push(Span::styled(label, style));

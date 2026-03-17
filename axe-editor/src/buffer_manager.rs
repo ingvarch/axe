@@ -143,6 +143,71 @@ impl BufferManager {
         self.active = index.min(self.buffers.len() - 1);
     }
 
+    /// Opens a file as a preview buffer, replacing any existing preview.
+    ///
+    /// If the file is already open (as preview or permanent), switches to it
+    /// without changing its preview status. Otherwise, closes the existing
+    /// preview buffer (if any) and opens a new one marked as preview.
+    pub fn open_file_as_preview(&mut self, path: &Path) -> Result<()> {
+        // Dedup: if already open, just switch to it.
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("Failed to resolve path: {}", path.display()))?;
+
+        for (i, buf) in self.buffers.iter().enumerate() {
+            if let Some(existing) = buf.path() {
+                if let Ok(existing_canonical) = std::fs::canonicalize(existing) {
+                    if existing_canonical == canonical {
+                        self.active = i;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Close existing preview buffer (if any).
+        if let Some(preview_idx) = self.preview_index() {
+            self.buffers.remove(preview_idx);
+            if self.active > preview_idx && self.active > 0 {
+                self.active -= 1;
+            } else if self.active >= self.buffers.len() && !self.buffers.is_empty() {
+                self.active = self.buffers.len() - 1;
+            }
+        }
+
+        let mut buffer = EditorBuffer::from_file(path)?;
+        buffer.set_tab_config(self.tab_size, self.insert_spaces);
+        buffer.is_preview = true;
+        self.buffers.push(buffer);
+        self.active = self.buffers.len() - 1;
+        Ok(())
+    }
+
+    /// Promotes the active buffer from preview to permanent.
+    ///
+    /// Does nothing if the active buffer is not a preview.
+    pub fn promote_preview(&mut self) {
+        if let Some(buf) = self.buffers.get_mut(self.active) {
+            buf.is_preview = false;
+        }
+    }
+
+    /// Promotes the active buffer if it has been modified.
+    ///
+    /// Called after edit operations to automatically convert a preview
+    /// into a permanent buffer when the user starts editing.
+    pub fn auto_promote_if_modified(&mut self) {
+        if let Some(buf) = self.buffers.get_mut(self.active) {
+            if buf.is_preview && buf.modified {
+                buf.is_preview = false;
+            }
+        }
+    }
+
+    /// Returns the index of the current preview buffer, if any.
+    fn preview_index(&self) -> Option<usize> {
+        self.buffers.iter().position(|b| b.is_preview)
+    }
+
     /// Closes the buffer at the given index and adjusts the active index.
     ///
     /// Does nothing if the index is out of bounds. After removal, if the
@@ -358,6 +423,103 @@ mod tests {
         mgr.open_file(tmp.path()).unwrap();
         mgr.next_buffer();
         assert_eq!(mgr.active_index(), 0);
+    }
+
+    // --- preview buffer tests ---
+
+    #[test]
+    fn open_file_as_preview_marks_buffer_preview() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file_as_preview(tmp.path()).unwrap();
+        assert_eq!(mgr.buffer_count(), 1);
+        assert!(mgr.active_buffer().unwrap().is_preview);
+    }
+
+    #[test]
+    fn open_preview_replaces_existing_preview() {
+        let mut tmp1 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp1, "file1").unwrap();
+        tmp1.flush().unwrap();
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp2, "file2").unwrap();
+        tmp2.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file_as_preview(tmp1.path()).unwrap();
+        mgr.open_file_as_preview(tmp2.path()).unwrap();
+        // Should replace, not add
+        assert_eq!(mgr.buffer_count(), 1);
+        assert!(mgr.active_buffer().unwrap().is_preview);
+        let name = mgr
+            .active_buffer()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string();
+        let expected = tmp2.path().file_name().unwrap().to_str().unwrap();
+        assert_eq!(name, expected);
+    }
+
+    #[test]
+    fn open_preview_does_not_replace_permanent_buffer() {
+        let mut tmp1 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp1, "permanent").unwrap();
+        tmp1.flush().unwrap();
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp2, "preview").unwrap();
+        tmp2.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp1.path()).unwrap(); // permanent
+        mgr.open_file_as_preview(tmp2.path()).unwrap();
+        assert_eq!(mgr.buffer_count(), 2);
+        assert!(!mgr.buffers()[0].is_preview);
+        assert!(mgr.active_buffer().unwrap().is_preview);
+    }
+
+    #[test]
+    fn promote_preview_makes_buffer_permanent() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file_as_preview(tmp.path()).unwrap();
+        assert!(mgr.active_buffer().unwrap().is_preview);
+        mgr.promote_preview();
+        assert!(!mgr.active_buffer().unwrap().is_preview);
+    }
+
+    #[test]
+    fn open_preview_on_already_open_file_switches_to_it() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "content").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap(); // permanent
+        mgr.open_file_as_preview(tmp.path()).unwrap(); // should just switch
+        assert_eq!(mgr.buffer_count(), 1);
+        assert!(!mgr.active_buffer().unwrap().is_preview); // stays permanent
+    }
+
+    #[test]
+    fn editing_preview_promotes_it() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file_as_preview(tmp.path()).unwrap();
+        assert!(mgr.active_buffer().unwrap().is_preview);
+        // Simulate an edit by marking modified
+        mgr.active_buffer_mut().unwrap().modified = true;
+        mgr.auto_promote_if_modified();
+        assert!(!mgr.active_buffer().unwrap().is_preview);
     }
 
     // --- tab config propagation tests ---

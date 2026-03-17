@@ -22,6 +22,8 @@ pub struct EditorBuffer {
     path: Option<PathBuf>,
     /// Whether the buffer has unsaved modifications.
     pub modified: bool,
+    /// Whether this buffer is a preview (single-click open, replaced by next preview).
+    pub is_preview: bool,
     /// Current cursor position within this buffer.
     pub cursor: CursorState,
     /// First visible line (vertical scroll offset).
@@ -55,6 +57,7 @@ impl EditorBuffer {
             content: Rope::new(),
             path: None,
             modified: false,
+            is_preview: false,
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
@@ -110,6 +113,7 @@ impl EditorBuffer {
             content,
             path: Some(path.to_path_buf()),
             modified: false,
+            is_preview: false,
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
@@ -1024,8 +1028,15 @@ mod tests {
         let buf = EditorBuffer::new();
         assert!(buf.path().is_none());
         assert!(!buf.modified);
+        assert!(!buf.is_preview);
         // An empty rope has 1 line (the empty line).
         assert_eq!(buf.line_count(), 1);
+    }
+
+    #[test]
+    fn preview_flag_defaults_to_false() {
+        let buf = EditorBuffer::new();
+        assert!(!buf.is_preview);
     }
 
     #[test]
@@ -1099,6 +1110,7 @@ mod tests {
                 content: Rope::new(),
                 path: Some(PathBuf::from(filename)),
                 modified: false,
+                is_preview: false,
                 cursor: CursorState::default(),
                 scroll_row: 0,
                 scroll_col: 0,
@@ -1118,6 +1130,7 @@ mod tests {
             content: Rope::new(),
             path: Some(PathBuf::from("test.xyz")),
             modified: false,
+            is_preview: false,
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,

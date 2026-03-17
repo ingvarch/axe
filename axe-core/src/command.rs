@@ -86,6 +86,8 @@ pub enum Command {
     TerminalScrollBottom,
     /// Open a file in the editor from the given path.
     OpenFile(PathBuf),
+    /// Open a file as a preview buffer (replaced by next preview, promoted on edit or double-click).
+    PreviewFile(PathBuf),
     /// Move cursor up one line.
     EditorUp,
     /// Move cursor down one line.
@@ -228,6 +230,7 @@ mod tests {
             Command::TerminalScrollTop,
             Command::TerminalScrollBottom,
             Command::OpenFile(PathBuf::from("/tmp/test")),
+            Command::PreviewFile(PathBuf::from("/tmp/preview")),
             Command::EditorUp,
             Command::EditorDown,
             Command::EditorLeft,

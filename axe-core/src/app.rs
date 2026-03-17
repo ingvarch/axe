@@ -26,6 +26,8 @@ const MAX_PANEL_PCT: u16 = 90;
 const MOUSE_SCROLL_LINES: i32 = 3;
 /// How long a status message remains visible.
 const STATUS_MESSAGE_DURATION: Duration = Duration::from_secs(3);
+/// Maximum time between two clicks to register as a double-click.
+const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(400);
 
 /// Which panel border is being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +159,8 @@ pub struct AppState {
     editor_selecting: bool,
     /// Active search state, if the search bar is open.
     pub search: Option<SearchState>,
+    /// Last tree click time and node index, for double-click detection.
+    last_tree_click: Option<(Instant, usize)>,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -198,6 +202,7 @@ impl AppState {
             clipboard: None,
             search: None,
             editor_selecting: false,
+            last_tree_click: None,
             terminal_selecting: false,
             terminal_select_start: None,
             keymap: KeymapResolver::with_defaults(),
@@ -671,8 +676,19 @@ impl AppState {
             // Children: BufferManager adds buffer, focus switches to Editor
             // Siblings: Tree state (unchanged), terminal (unchanged)
             Command::OpenFile(path) => match self.buffer_manager.open_file(&path) {
-                Ok(()) => self.focus = FocusTarget::Editor,
+                Ok(()) => {
+                    self.buffer_manager.promote_preview();
+                    self.focus = FocusTarget::Editor;
+                }
                 Err(e) => log::warn!("Failed to open file: {e}"),
+            },
+            // IMPACT ANALYSIS — PreviewFile
+            // Parents: Single click on file in tree
+            // Children: BufferManager opens preview buffer (replaces previous preview)
+            // Siblings: Tree state (unchanged), terminal (unchanged)
+            Command::PreviewFile(path) => match self.buffer_manager.open_file_as_preview(&path) {
+                Ok(()) => self.focus = FocusTarget::Editor,
+                Err(e) => log::warn!("Failed to preview file: {e}"),
             },
             // IMPACT ANALYSIS — Editor cursor movement commands
             // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
@@ -984,6 +1000,8 @@ impl AppState {
                 self.confirm_close_buffer = false;
             }
         }
+        // Auto-promote preview buffer if user started editing it.
+        self.buffer_manager.auto_promote_if_modified();
     }
 
     /// Adjusts tree width by `direction` steps (+1 = grow, -1 = shrink).
@@ -1078,23 +1096,36 @@ impl AppState {
                     }
                 }
 
-                // IMPACT ANALYSIS — Tree item mouse click
+                // IMPACT ANALYSIS — Tree item mouse click (single/double)
                 // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
-                // Children: FileTree::select() changes selection, Command::OpenFile opens file,
-                //           FileTree::toggle() expands/collapses directory.
+                // Children: FileTree::select() changes selection,
+                //           Single click on file -> PreviewFile (preview buffer),
+                //           Double click on file -> OpenFile (permanent buffer),
+                //           Click on directory -> toggle expand/collapse.
                 // Siblings: tree_inner_area (must be set by main.rs each frame),
+                //           last_tree_click (tracks timing for double-click detection),
                 //           TreeAction (active rename/create should not be interrupted).
                 // Risk: None — select + toggle/open are safe, idempotent operations.
 
-                // Tree item click — select and open/toggle.
+                // Tree item click — select and preview/open/toggle.
                 if let Some(node_idx) = self.screen_to_tree_node_index(col, row) {
+                    // Detect double-click: same node within threshold.
+                    let is_double_click = self.last_tree_click.is_some_and(|(t, idx)| {
+                        idx == node_idx && t.elapsed() < DOUBLE_CLICK_THRESHOLD
+                    });
+                    self.last_tree_click = Some((Instant::now(), node_idx));
+
                     if let Some(ref mut tree) = self.file_tree {
                         tree.select(node_idx);
                         if let Some(node) = tree.selected_node() {
                             match node.kind {
                                 NodeKind::File { .. } => {
                                     let path = node.path.clone();
-                                    self.execute(Command::OpenFile(path));
+                                    if is_double_click {
+                                        self.execute(Command::OpenFile(path));
+                                    } else {
+                                        self.execute(Command::PreviewFile(path));
+                                    }
                                 }
                                 NodeKind::Directory { .. } => {
                                     if let Err(e) = tree.toggle() {
@@ -3050,15 +3081,61 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_file_opens_in_editor() {
+    fn mouse_single_click_on_file_opens_as_preview() {
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
         let mut app = AppState::new_with_root(tmp.path().to_path_buf());
         app.tree_inner_area = Some((0, 0, 20, 10));
-        // Click on row 1 => a.txt (file node)
+        // Single click on row 1 => a.txt (file node)
         let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
         app.handle_mouse_event(evt, 80, 30);
         assert_eq!(app.buffer_manager.buffer_count(), 1);
+        assert!(
+            app.buffer_manager.active_buffer().unwrap().is_preview,
+            "single click should open as preview"
+        );
+    }
+
+    #[test]
+    fn mouse_double_click_on_file_opens_permanently() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // First click
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        app.handle_mouse_event(evt, 80, 30);
+        // Second click (double-click)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+        assert!(
+            !app.buffer_manager.active_buffer().unwrap().is_preview,
+            "double click should promote to permanent"
+        );
+    }
+
+    #[test]
+    fn single_click_preview_replaced_by_next_preview() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "world").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click a.txt (row 1)
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(app.buffer_manager.buffer_count(), 1);
+        // Click b.txt (row 2)
+        // Need to reset last_tree_click to avoid double-click detection
+        app.last_tree_click = None;
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        app.handle_mouse_event(evt, 80, 30);
+        assert_eq!(
+            app.buffer_manager.buffer_count(),
+            1,
+            "preview should be replaced, not added"
+        );
     }
 
     #[test]
