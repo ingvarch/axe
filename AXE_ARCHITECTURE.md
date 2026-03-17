@@ -26,22 +26,22 @@ Axe is a terminal-based IDE built from scratch in Rust. Unlike tmux/zellij (gene
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      axe (binary)                      │
+│                      axe (binary)                        │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │                    axe-ui                        │  │
+│  │                    axe-ui                          │  │
 │  │  Layout Manager · Theme Engine · Overlay Stack     │  │
 │  │  Status Bar · Tab Bar · Command Palette            │  │
 │  └────────────────────┬───────────────────────────────┘  │
 │                       │ renders                          │
 │  ┌────────────────────▼───────────────────────────────┐  │
-│  │                  axe-core                        │  │
+│  │                  axe-core                          │  │
 │  │  AppState · Event Bus · Command Dispatcher         │  │
 │  │  Focus Manager · Keymap Resolver · Plugin Host     │  │
 │  └──┬──────────┬──────────┬──────────┬──────────┬─────┘  │
-│     │          │          │          │          │         │
-│  ┌──▼──┐  ┌───▼───┐  ┌──▼───┐  ┌──▼──┐  ┌───▼──────┐  │
-│  │tree │  │editor │  │term  │  │ lsp │  │  config  │  │
-│  └─────┘  └───────┘  └──────┘  └─────┘  └──────────┘  │
+│     │          │          │          │          │        │
+│  ┌──▼──┐  ┌───▼───┐  ┌──▼───┐  ┌──▼──┐  ┌───▼──────┐     │
+│  │tree │  │editor │  │term  │  │ lsp │  │  config  │     │
+│  └─────┘  └───────┘  └──────┘  └─────┘  └──────────┘     │
 └──────────────────────────────────────────────────────────┘
 ```
 

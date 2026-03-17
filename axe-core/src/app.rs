@@ -1715,9 +1715,9 @@ impl AppState {
     /// Returns `None` if the coordinates are outside the tree inner area,
     /// no tree is loaded, or the click is below the last visible node.
     fn screen_to_tree_node_index(&self, col: u16, row: u16) -> Option<usize> {
-        let (tx, ty, _tw, th) = self.tree_inner_area?;
+        let (tx, ty, tw, th) = self.tree_inner_area?;
         let tree = self.file_tree.as_ref()?;
-        if col < tx || row < ty || row >= ty + th {
+        if col < tx || col >= tx + tw || row < ty || row >= ty + th {
             return None;
         }
         let relative_row = (row - ty) as usize;
@@ -3100,6 +3100,55 @@ mod tests {
         assert!(app.screen_to_tree_node_index(10, 3).is_none());
         // Click outside — left of the area
         assert!(app.screen_to_tree_node_index(2, 7).is_none());
+    }
+
+    #[test]
+    fn screen_to_tree_returns_none_outside_right_boundary() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        // Tree area: x=0, y=0, width=20, height=10
+        app.tree_inner_area = Some((0, 0, 20, 10));
+        // Click at column 25, which is outside the tree width (0-19)
+        assert!(
+            app.screen_to_tree_node_index(25, 1).is_none(),
+            "click right of tree panel should return None"
+        );
+        // Click at column 20 (exactly at the right boundary, should be rejected)
+        assert!(
+            app.screen_to_tree_node_index(20, 1).is_none(),
+            "click at exact right boundary should return None"
+        );
+        // Click at column 19 (last valid column) should work
+        assert!(
+            app.screen_to_tree_node_index(19, 1).is_some(),
+            "click at last valid column should return Some"
+        );
+    }
+
+    #[test]
+    fn screen_to_tree_respects_x_offset_and_width() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
+        // Tree area: x=10, y=5, width=15, height=10
+        // Valid columns: 10-24 (inclusive), valid rows: 5-14 (inclusive)
+        app.tree_inner_area = Some((10, 5, 15, 10));
+        // Right of tree (col 25+)
+        assert!(
+            app.screen_to_tree_node_index(30, 7).is_none(),
+            "click right of offset tree should return None"
+        );
+        // At right boundary (col 25 = 10 + 15)
+        assert!(
+            app.screen_to_tree_node_index(25, 7).is_none(),
+            "click at right boundary of offset tree should return None"
+        );
+        // Inside tree (col 15, row 5 — first valid position)
+        assert!(
+            app.screen_to_tree_node_index(15, 5).is_some(),
+            "click inside offset tree should return Some"
+        );
     }
 
     #[test]
