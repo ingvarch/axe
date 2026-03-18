@@ -8,7 +8,7 @@ pub mod history;
 pub mod languages;
 pub mod selection;
 
-pub use buffer::EditorBuffer;
+pub use buffer::{EditorBuffer, LineEnding};
 pub use buffer_manager::BufferManager;
 pub use cursor::CursorState;
 pub use diagnostic::{BufferDiagnostic, DiagnosticSeverity};

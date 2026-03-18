@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -14,6 +12,40 @@ use crate::selection::Selection;
 
 /// Default number of spaces inserted for a tab.
 const DEFAULT_TAB_SIZE: usize = 4;
+
+/// Maximum number of bytes to scan when detecting line endings.
+const LINE_ENDING_SCAN_LIMIT: usize = 8192;
+
+/// Represents the line ending style of a buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEnding {
+    /// Unix-style line feed (`\n`).
+    Lf,
+    /// Windows-style carriage return + line feed (`\r\n`).
+    CrLf,
+}
+
+impl LineEnding {
+    /// Returns the display string for this line ending.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lf => "LF",
+            Self::CrLf => "CRLF",
+        }
+    }
+}
+
+/// Detects the line ending style from raw bytes.
+///
+/// Scans up to `LINE_ENDING_SCAN_LIMIT` bytes for `\r\n`. Defaults to `Lf`.
+fn detect_line_ending(bytes: &[u8]) -> LineEnding {
+    let limit = bytes.len().min(LINE_ENDING_SCAN_LIMIT);
+    if bytes[..limit].windows(2).any(|w| w == b"\r\n") {
+        LineEnding::CrLf
+    } else {
+        LineEnding::Lf
+    }
+}
 
 /// A single editor buffer holding file content as a rope.
 ///
@@ -48,6 +80,8 @@ pub struct EditorBuffer {
     tab_size: usize,
     /// Whether Tab key inserts spaces (`true`) or a literal tab character (`false`).
     insert_spaces: bool,
+    /// Detected line ending style for this buffer.
+    line_ending: LineEnding,
 }
 
 impl Default for EditorBuffer {
@@ -77,6 +111,7 @@ impl EditorBuffer {
             diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
+            line_ending: LineEnding::Lf,
         }
     }
 
@@ -97,6 +132,11 @@ impl EditorBuffer {
     /// Returns whether the buffer inserts spaces for tabs.
     pub fn insert_spaces(&self) -> bool {
         self.insert_spaces
+    }
+
+    /// Returns the detected line ending style for this buffer.
+    pub fn line_ending(&self) -> LineEnding {
+        self.line_ending
     }
 
     /// Sets the tab configuration for this buffer.
@@ -134,10 +174,11 @@ impl EditorBuffer {
     ///
     /// Returns an error if the file cannot be read.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let file =
-            File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
-        let content = Rope::from_reader(BufReader::new(file))
+        let raw_bytes = std::fs::read(path)
             .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        let line_ending = detect_line_ending(&raw_bytes);
+        let content = Rope::from_reader(raw_bytes.as_slice())
+            .with_context(|| format!("Failed to parse file: {}", path.display()))?;
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let mut highlight = HighlightState::new(ext);
@@ -161,6 +202,7 @@ impl EditorBuffer {
             diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
+            line_ending,
         })
     }
 
@@ -1277,7 +1319,38 @@ impl EditorBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
+
+    #[test]
+    fn new_buffer_has_lf_line_ending() {
+        let buf = EditorBuffer::new();
+        assert_eq!(buf.line_ending(), LineEnding::Lf);
+    }
+
+    #[test]
+    fn from_file_detects_lf() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"line1\nline2\nline3").unwrap();
+        tmp.flush().unwrap();
+        let buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        assert_eq!(buf.line_ending(), LineEnding::Lf);
+    }
+
+    #[test]
+    fn from_file_detects_crlf() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"line1\r\nline2\r\nline3").unwrap();
+        tmp.flush().unwrap();
+        let buf = EditorBuffer::from_file(tmp.path()).unwrap();
+        assert_eq!(buf.line_ending(), LineEnding::CrLf);
+    }
+
+    #[test]
+    fn line_ending_display() {
+        assert_eq!(LineEnding::Lf.as_str(), "LF");
+        assert_eq!(LineEnding::CrLf.as_str(), "CRLF");
+    }
 
     #[test]
     fn new_empty_buffer() {
@@ -1393,6 +1466,7 @@ mod tests {
                 diff_hunks: Vec::new(),
                 tab_size: DEFAULT_TAB_SIZE,
                 insert_spaces: true,
+                line_ending: LineEnding::Lf,
             };
             assert_eq!(buf.file_type(), expected_type, "wrong type for {filename}");
         }
@@ -1416,6 +1490,7 @@ mod tests {
             diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
+            line_ending: LineEnding::Lf,
         };
         assert_eq!(buf.file_type(), "Plain Text");
     }

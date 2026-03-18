@@ -91,125 +91,163 @@ fn panel_block<'a>(
         .style(panel_style)
 }
 
-/// Builds the status bar line with hotkey hints.
-fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
-    let version = &app.build_version;
-    let focus_label = app.focus.label();
-    let key_style = Style::default().fg(theme.status_bar_key);
+/// Builds the left section of the status bar: mode badge, filename, modified indicator.
+fn build_status_left<'a>(app: &AppState, theme: &Theme) -> Vec<Span<'a>> {
     let text_style = Style::default().fg(theme.status_bar_fg);
-    let resize_style = Style::default()
-        .fg(theme.resize_border)
+    let mode_style = Style::default()
+        .bg(theme.status_bar_mode_bg)
+        .fg(theme.status_bar_mode_fg)
         .add_modifier(Modifier::BOLD);
 
-    let version_label = if version.is_empty() {
-        format!(" Axe v{}", env!("CARGO_PKG_VERSION"))
-    } else {
-        format!(" Axe {version}")
-    };
-    let mut spans = vec![Span::styled(version_label, text_style)];
+    let mut spans: Vec<Span<'a>> = Vec::new();
 
+    // Mode badge (RESIZE or ZOOM).
+    if app.resize_mode.active {
+        spans.push(Span::styled(" RESIZE ", mode_style));
+        spans.push(Span::styled(" ", text_style));
+    } else if app.zoomed_panel.is_some() {
+        spans.push(Span::styled(" ZOOM ", mode_style));
+        spans.push(Span::styled(" ", text_style));
+    }
+
+    // Filename or app name when no buffer is open.
     if let Some(buffer) = app.buffer_manager.active_buffer() {
         let name = buffer.file_name().unwrap_or("[untitled]");
-        let lines = buffer.line_count();
-        let ftype = buffer.file_type();
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(name.to_string(), text_style));
+        spans.push(Span::styled(format!(" {name}"), text_style));
         if buffer.modified {
-            spans.push(Span::styled(" [+]", key_style));
-        }
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(format!("{lines} lines"), text_style));
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(ftype.to_string(), text_style));
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(
-            format!(
-                "Ln {}, Col {}",
-                buffer.cursor.row + 1,
-                buffer.cursor.col + 1
-            ),
-            text_style,
-        ));
-
-        // Diagnostic counts (only show non-zero).
-        let (errors, warnings, _infos, _hints) = diagnostic_counts(buffer.diagnostics());
-        if errors > 0 {
-            spans.push(Span::styled(" ", key_style));
             spans.push(Span::styled(
-                format!("E:{errors}"),
-                Style::default().fg(theme.diagnostic_error),
+                " [+]",
+                Style::default().fg(theme.status_bar_key),
             ));
         }
-        if warnings > 0 {
-            spans.push(Span::styled(" ", key_style));
-            spans.push(Span::styled(
-                format!("W:{warnings}"),
-                Style::default().fg(theme.diagnostic_warning),
-            ));
-        }
+    } else {
+        let version = &app.build_version;
+        let label = if version.is_empty() {
+            format!(" Axe v{}", env!("CARGO_PKG_VERSION"))
+        } else {
+            format!(" Axe {version}")
+        };
+        spans.push(Span::styled(label, text_style));
     }
 
-    if let Some(ref branch) = app.git_branch {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(format!("\u{2387} {branch}"), text_style));
-    }
+    spans
+}
 
+/// Builds the center section of the status bar: notification or cursor-line diagnostic.
+fn build_status_center<'a>(app: &AppState, theme: &Theme) -> Vec<Span<'a>> {
     if let Some((ref msg, _)) = app.status_message {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled(
+        return vec![Span::styled(
             msg.clone(),
             Style::default()
                 .fg(theme.panel_border_active)
                 .add_modifier(Modifier::BOLD),
-        ));
-    } else if let Some(buffer) = app.buffer_manager.active_buffer() {
-        // Show first diagnostic message on the cursor line.
+        )];
+    }
+
+    if let Some(buffer) = app.buffer_manager.active_buffer() {
         if let Some(diag) = diagnostics_for_line(buffer.diagnostics(), buffer.cursor.row).next() {
             let color = diagnostic_color(diag.severity, theme);
-            spans.push(Span::styled(" | ", key_style));
-            spans.push(Span::styled(
+            return vec![Span::styled(
                 diag.message.clone(),
                 Style::default().fg(color),
-            ));
+            )];
         }
     }
 
-    if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled("[SHOW IGNORED]", text_style));
+    Vec::new()
+}
+
+/// Builds the right section of the status bar: file type, encoding, line ending, cursor,
+/// git branch, and diagnostic counts.
+fn build_status_right<'a>(app: &AppState, theme: &Theme) -> Vec<Span<'a>> {
+    let text_style = Style::default().fg(theme.status_bar_fg);
+    let sep_style = Style::default().fg(theme.status_bar_key);
+    let sep = || Span::styled(" | ", sep_style);
+
+    let Some(buffer) = app.buffer_manager.active_buffer() else {
+        return Vec::new();
+    };
+
+    let mut spans: Vec<Span<'a>> = Vec::new();
+
+    // File type.
+    spans.push(Span::styled(buffer.file_type().to_string(), text_style));
+
+    // Encoding (always UTF-8 — Rope only supports UTF-8).
+    spans.push(sep());
+    spans.push(Span::styled("UTF-8", text_style));
+
+    // Line ending.
+    spans.push(sep());
+    spans.push(Span::styled(
+        buffer.line_ending().as_str().to_string(),
+        text_style,
+    ));
+
+    // Cursor position.
+    spans.push(sep());
+    spans.push(Span::styled(
+        format!(
+            "Ln {}, Col {}",
+            buffer.cursor.row + 1,
+            buffer.cursor.col + 1
+        ),
+        text_style,
+    ));
+
+    // Git branch.
+    if let Some(ref branch) = app.git_branch {
+        spans.push(sep());
+        spans.push(Span::styled(format!("\u{2387} {branch}"), text_style));
     }
 
-    if app.file_tree.as_ref().is_some_and(|t| t.show_icons()) {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled("[ICONS]", text_style));
+    // Diagnostic counts (only show non-zero).
+    let (errors, warnings, _infos, _hints) = diagnostic_counts(buffer.diagnostics());
+    if errors > 0 {
+        spans.push(sep());
+        spans.push(Span::styled(
+            format!("E:{errors}"),
+            Style::default().fg(theme.diagnostic_error),
+        ));
+    }
+    if warnings > 0 {
+        spans.push(sep());
+        spans.push(Span::styled(
+            format!("W:{warnings}"),
+            Style::default().fg(theme.diagnostic_warning),
+        ));
     }
 
-    if app.zoomed_panel.is_some() {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled("[ZOOM]", resize_style));
+    spans.push(Span::styled(" ", text_style));
+    spans
+}
+
+/// Builds the status bar line with left/center/right layout.
+fn build_status_bar<'a>(app: &AppState, theme: &Theme, width: u16) -> Line<'a> {
+    let left = build_status_left(app, theme);
+    let center = build_status_center(app, theme);
+    let right = build_status_right(app, theme);
+
+    let left_w: usize = left.iter().map(|s| s.width()).sum();
+    let center_w: usize = center.iter().map(|s| s.width()).sum();
+    let right_w: usize = right.iter().map(|s| s.width()).sum();
+    let total = width as usize;
+
+    let bg_style = Style::default().bg(theme.status_bar_bg);
+    let mut spans = left;
+
+    let gap = total.saturating_sub(left_w + right_w);
+    if center_w > 0 && gap > center_w {
+        let left_pad = (gap - center_w) / 2;
+        let right_pad = gap - center_w - left_pad;
+        spans.push(Span::styled(" ".repeat(left_pad), bg_style));
+        spans.extend(center);
+        spans.push(Span::styled(" ".repeat(right_pad), bg_style));
+    } else {
+        spans.push(Span::styled(" ".repeat(gap), bg_style));
     }
 
-    if app.resize_mode.active {
-        spans.push(Span::styled(" | ", key_style));
-        spans.push(Span::styled("-- RESIZE --", resize_style));
-    }
-
-    spans.extend([
-        Span::styled(" | ", key_style),
-        Span::styled(format!("Focus: {focus_label}"), text_style),
-        Span::styled(" | ", key_style),
-        Span::styled("^Q", text_style.add_modifier(Modifier::BOLD)),
-        Span::styled(" Quit ", key_style),
-        Span::styled("^B", text_style.add_modifier(Modifier::BOLD)),
-        Span::styled(" Tree ", key_style),
-        Span::styled("^T", text_style.add_modifier(Modifier::BOLD)),
-        Span::styled(" Term ", key_style),
-        Span::styled("Tab", text_style.add_modifier(Modifier::BOLD)),
-        Span::styled(" Focus ", key_style),
-        Span::styled("^H", text_style.add_modifier(Modifier::BOLD)),
-        Span::styled(" Help", key_style),
-    ]);
-
+    spans.extend(right);
     Line::from(spans)
 }
 
@@ -3190,7 +3228,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     }
 
     // Status bar with hotkey hints
-    let status_line = build_status_bar(app, theme);
+    let status_line = build_status_bar(app, theme, status_area.width);
     let status_bar = Paragraph::new(status_line).style(
         Style::default()
             .bg(theme.status_bar_bg)
@@ -3926,55 +3964,9 @@ mod tests {
     }
 
     #[test]
-    fn render_status_bar_shows_hotkeys() {
-        let content = render_to_string(100, 24);
-        assert!(content.contains("Quit"), "expected 'Quit' hotkey hint");
-        assert!(content.contains("Tree"), "expected 'Tree' hotkey hint");
-        assert!(content.contains("Term"), "expected 'Term' hotkey hint");
-        assert!(content.contains("Help"), "expected 'Help' hotkey hint");
-    }
-
-    #[test]
-    fn render_status_bar_shows_ctrl_q() {
-        let content = render_to_string(100, 24);
-        assert!(content.contains("^Q"), "expected '^Q' in status bar");
-    }
-
-    #[test]
     fn render_works_with_small_terminal() {
         let content = render_to_string(40, 10);
         assert!(!content.is_empty());
-    }
-
-    #[test]
-    fn render_tree_has_active_border_by_default() {
-        let content = render_to_string(100, 24);
-        assert!(
-            content.contains("Focus: Files"),
-            "expected 'Focus: Files' in status bar"
-        );
-    }
-
-    #[test]
-    fn render_status_bar_shows_focus_files() {
-        let mut app = AppState::new();
-        app.focus = FocusTarget::Tree;
-        let content = render_app_to_string(&app, 100, 24);
-        assert!(
-            content.contains("Focus: Files"),
-            "expected 'Focus: Files' in status bar"
-        );
-    }
-
-    #[test]
-    fn render_status_bar_shows_focus_terminal() {
-        let mut app = AppState::new();
-        app.focus = FocusTarget::Terminal(0);
-        let content = render_app_to_string(&app, 100, 24);
-        assert!(
-            content.contains("Focus: Terminal"),
-            "expected 'Focus: Terminal' in status bar"
-        );
     }
 
     #[test]
@@ -4208,8 +4200,8 @@ mod tests {
         app.resize_mode.active = true;
         let content = render_app_to_string(&app, 100, 24);
         assert!(
-            content.contains("-- RESIZE --"),
-            "expected '-- RESIZE --' in status bar"
+            content.contains("RESIZE"),
+            "expected 'RESIZE' badge in status bar"
         );
     }
 
@@ -4217,8 +4209,8 @@ mod tests {
     fn render_no_resize_indicator_by_default() {
         let content = render_to_string(100, 24);
         assert!(
-            !content.contains("-- RESIZE --"),
-            "expected no '-- RESIZE --' by default"
+            !content.contains("RESIZE"),
+            "expected no 'RESIZE' by default"
         );
     }
 
@@ -4281,18 +4273,15 @@ mod tests {
         app.zoomed_panel = Some(FocusTarget::Editor);
         let content = render_app_to_string(&app, 100, 24);
         assert!(
-            content.contains("[ZOOM]"),
-            "expected '[ZOOM]' in status bar when zoomed"
+            content.contains("ZOOM"),
+            "expected 'ZOOM' badge in status bar when zoomed"
         );
     }
 
     #[test]
     fn render_no_zoom_indicator_by_default() {
         let content = render_to_string(100, 24);
-        assert!(
-            !content.contains("[ZOOM]"),
-            "expected no '[ZOOM]' by default"
-        );
+        assert!(!content.contains("ZOOM"), "expected no 'ZOOM' by default");
     }
 
     #[test]
@@ -4434,10 +4423,23 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_line_count() {
+    fn status_bar_shows_encoding() {
         let (app, _tmp) = app_with_open_file();
         let content = render_app_to_string(&app, 120, 24);
-        assert!(content.contains("lines"), "expected 'lines' in status bar");
+        assert!(
+            content.contains("UTF-8"),
+            "expected 'UTF-8' encoding in status bar"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_line_ending() {
+        let (app, _tmp) = app_with_open_file();
+        let content = render_app_to_string(&app, 120, 24);
+        assert!(
+            content.contains("LF"),
+            "expected line ending indicator in status bar"
+        );
     }
 
     #[test]

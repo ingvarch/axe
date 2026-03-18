@@ -17,6 +17,8 @@ tab_active_bg = "#fafafa"
 tab_active_fg = "#383a42"
 tab_inactive_fg = "#696c77"
 tree_modified_fg = "#986801"
+status_bar_mode_bg = "#4078f2"
+status_bar_mode_fg = "#fafafa"
 
 [gutter]
 bg = "#f0f0f0"

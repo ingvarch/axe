@@ -46,6 +46,8 @@ pub struct UiColors {
     pub tab_active_fg: Option<String>,
     pub tab_inactive_fg: Option<String>,
     pub tree_modified_fg: Option<String>,
+    pub status_bar_mode_bg: Option<String>,
+    pub status_bar_mode_fg: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

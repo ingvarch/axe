@@ -95,6 +95,10 @@ pub struct Theme {
     pub diff_deleted: Color,
     /// Color for modified file names in the tree panel (orange).
     pub tree_modified_fg: Color,
+    /// Background color for the mode indicator badge (e.g., RESIZE, ZOOM).
+    pub status_bar_mode_bg: Color,
+    /// Foreground color for the mode indicator badge text.
+    pub status_bar_mode_fg: Color,
     // --- Diagnostic colors ---
     /// Diagnostic error color (red).
     pub diagnostic_error: Color,
@@ -185,6 +189,8 @@ impl Theme {
             diff_modified: color_or(&tf.gutter.diff_modified, defaults.diff_modified),
             diff_deleted: color_or(&tf.gutter.diff_deleted, defaults.diff_deleted),
             tree_modified_fg: color_or(&tf.ui.tree_modified_fg, defaults.tree_modified_fg),
+            status_bar_mode_bg: color_or(&tf.ui.status_bar_mode_bg, defaults.status_bar_mode_bg),
+            status_bar_mode_fg: color_or(&tf.ui.status_bar_mode_fg, defaults.status_bar_mode_fg),
             diagnostic_error: color_or(&tf.editor.diagnostic_error, defaults.diagnostic_error),
             diagnostic_warning: color_or(
                 &tf.editor.diagnostic_warning,
@@ -264,6 +270,8 @@ impl Default for Theme {
             diff_modified: Color::Rgb(97, 175, 239), // #61afef — blue
             diff_deleted: Color::Rgb(224, 108, 117), // #e06c75 — red
             tree_modified_fg: Color::Rgb(209, 154, 102), // #d19a66 — orange
+            status_bar_mode_bg: Color::Rgb(97, 175, 239), // #61afef — blue
+            status_bar_mode_fg: Color::Rgb(40, 44, 52), // #282c34 — dark
             // Diagnostic colors
             diagnostic_error: Color::Rgb(224, 108, 117), // #e06c75 — red
             diagnostic_warning: Color::Rgb(229, 192, 123), // #e5c07b — yellow
