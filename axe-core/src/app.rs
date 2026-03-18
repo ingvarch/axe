@@ -335,6 +335,10 @@ pub struct AppState {
     pending_format_save: bool,
     /// Full build version string (e.g. "v0.1.0-abc123"), set by the binary crate.
     pub build_version: String,
+    /// Current git branch name (e.g. "main") or short commit hash for detached HEAD.
+    pub git_branch: Option<String>,
+    /// Timestamp of last git branch check, for periodic refresh.
+    last_git_branch_check: Option<Instant>,
 }
 
 impl AppState {
@@ -387,6 +391,8 @@ impl AppState {
             hover_mouse_state: None,
             pending_format_save: false,
             build_version: String::new(),
+            git_branch: None,
+            last_git_branch_check: None,
         }
     }
 
@@ -437,6 +443,8 @@ impl AppState {
             Some((msg, Instant::now()))
         };
 
+        let git_branch = crate::git::current_branch(&root);
+
         Self {
             file_tree,
             project_root: Some(root),
@@ -445,6 +453,8 @@ impl AppState {
             keymap,
             status_message,
             lsp_manager,
+            git_branch,
+            last_git_branch_check: Some(Instant::now()),
             ..Self::new()
         }
     }
@@ -831,6 +841,8 @@ impl AppState {
             }
         }
         self.last_edit_time = None;
+        // Refresh git branch after save (branch may change after file operations).
+        self.force_refresh_git_branch();
     }
 
     // IMPACT ANALYSIS — request_format_for_active_buffer
@@ -2684,6 +2696,33 @@ impl AppState {
                 self.last_edit_time = None;
             }
         }
+    }
+
+    /// Interval between git branch checks.
+    const GIT_BRANCH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+    /// Refreshes the git branch name if the check interval has elapsed.
+    ///
+    /// Called from the main loop on every tick. Skips the check if the interval
+    /// has not elapsed yet. Also callable with a forced refresh after file save.
+    pub fn refresh_git_branch(&mut self) {
+        if let Some(last_check) = self.last_git_branch_check {
+            if last_check.elapsed() < Self::GIT_BRANCH_CHECK_INTERVAL {
+                return;
+            }
+        }
+        if let Some(ref root) = self.project_root {
+            self.git_branch = crate::git::current_branch(root);
+        }
+        self.last_git_branch_check = Some(Instant::now());
+    }
+
+    /// Forces an immediate git branch refresh, bypassing the interval check.
+    fn force_refresh_git_branch(&mut self) {
+        if let Some(ref root) = self.project_root {
+            self.git_branch = crate::git::current_branch(root);
+        }
+        self.last_git_branch_check = Some(Instant::now());
     }
 
     /// Checks if the mouse hover delay has elapsed and triggers a hover request.

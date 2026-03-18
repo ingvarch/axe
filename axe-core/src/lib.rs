@@ -4,6 +4,7 @@ pub mod command_palette;
 pub mod completion;
 pub mod file_finder;
 pub mod fuzzy;
+pub mod git;
 pub mod hover;
 pub mod keymap;
 pub mod location_list;

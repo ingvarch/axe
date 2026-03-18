@@ -149,6 +149,11 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         }
     }
 
+    if let Some(ref branch) = app.git_branch {
+        spans.push(Span::styled(" | ", key_style));
+        spans.push(Span::styled(format!("\u{2387} {branch}"), text_style));
+    }
+
     if let Some((ref msg, _)) = app.status_message {
         spans.push(Span::styled(" | ", key_style));
         spans.push(Span::styled(

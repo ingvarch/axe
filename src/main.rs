@@ -147,6 +147,9 @@ async fn main() -> Result<()> {
         // Check if mouse hover delay has elapsed for LSP hover request.
         app.check_hover_timer();
 
+        // Refresh git branch name periodically.
+        app.refresh_git_branch();
+
         // Clear expired status messages.
         app.expire_status_message();
 

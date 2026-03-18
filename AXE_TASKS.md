@@ -760,20 +760,25 @@ Search text across all project files.
 
 ## Phase 9: Git Integration
 
-### Task 9.1 — Git: Status Bar Branch Name
+### Task 9.1 — Git: Status Bar Branch Name ✅
 
 Show the current git branch in the status bar.
 
 **Acceptance criteria:**
-- Status bar shows current branch name with a git icon: `⎇ main`
-- Updates when branch changes (checked periodically or on file save)
-- If not in a git repo, no git info shown
-- Detached HEAD shows the short commit hash
+- [x] Status bar shows current branch name with a git icon: `⎇ main`
+- [x] Updates when branch changes (checked periodically or on file save)
+- [x] If not in a git repo, no git info shown
+- [x] Detached HEAD shows the short commit hash
 
 **Implementation details:**
 - Use `git2` crate (or `gix`)
 - `Repository::open(project_root)` → `repo.head()` → branch name
 - Check on startup and after each file save
+
+**Implementation notes:**
+- `axe-core/src/git.rs`: `current_branch()` using `git2::Repository::discover()`, returns branch name or 7-char short hash for detached HEAD
+- `AppState`: `git_branch: Option<String>` + `last_git_branch_check` fields, `refresh_git_branch()` (5s interval) + `force_refresh_git_branch()` after save
+- `axe-ui`: rendered between diagnostic counts and status message in `build_status_bar()`
 
 ---
 

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 alacritty_terminal = "0.25"
+git2 = "0.20"
 arboard = "3"
 axe-config = { path = "../axe-config" }
 axe-lsp = { path = "../axe-lsp" }
