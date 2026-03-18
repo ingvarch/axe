@@ -1,6 +1,7 @@
 pub mod app;
 pub mod command;
 pub mod command_palette;
+pub mod completion;
 pub mod file_finder;
 pub mod fuzzy;
 pub mod keymap;
@@ -14,6 +15,7 @@ pub use app::{
 pub use axe_tree::FileTree;
 pub use command::Command;
 pub use command_palette::CommandPalette;
+pub use completion::{CompletionItem, CompletionKind, CompletionState};
 pub use file_finder::FileFinder;
 pub use fuzzy::FilteredItem;
 pub use keymap::KeymapResolver;

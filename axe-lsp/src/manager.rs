@@ -7,8 +7,9 @@ use url::Url;
 
 use axe_config::LspServerConfig;
 
-use crate::client::{LspClient, LspEvent};
+use crate::client::{LspClient, LspEvent, PendingRequestKind};
 use crate::language::language_id_for_path;
+use crate::transport::RequestId;
 
 /// Manages multiple LSP server connections, one per language.
 ///
@@ -154,7 +155,8 @@ impl LspManager {
         for event in events {
             match &event {
                 LspEvent::Response {
-                    result: Ok(value), ..
+                    id: ref response_id,
+                    result: Ok(ref value),
                 } => {
                     // Check if this is an initialize response (contains capabilities).
                     if let Some(caps) = value.get("capabilities") {
@@ -186,6 +188,43 @@ impl LspManager {
                             }
                         }
                     }
+                    // Check if this response matches a pending request.
+                    let numeric_id = match response_id {
+                        RequestId::Number(n) => Some(*n),
+                        RequestId::String(_) => None,
+                    };
+                    if let Some(id) = numeric_id {
+                        let pending_kind =
+                            self.clients.values_mut().find_map(|c| c.take_pending(id));
+                        if let Some(PendingRequestKind::Completion) = pending_kind {
+                            // Re-emit as typed completion event.
+                            if let LspEvent::Response { result, .. } = event {
+                                remaining.push(LspEvent::CompletionResponse { result });
+                            }
+                            continue;
+                        }
+                    }
+                    remaining.push(event);
+                }
+                LspEvent::Response {
+                    id: ref response_id,
+                    result: Err(_),
+                } => {
+                    // Check if a failed response matches a pending completion request.
+                    let numeric_id = match response_id {
+                        RequestId::Number(n) => Some(*n),
+                        RequestId::String(_) => None,
+                    };
+                    if let Some(id) = numeric_id {
+                        let pending_kind =
+                            self.clients.values_mut().find_map(|c| c.take_pending(id));
+                        if let Some(PendingRequestKind::Completion) = pending_kind {
+                            if let LspEvent::Response { result, .. } = event {
+                                remaining.push(LspEvent::CompletionResponse { result });
+                            }
+                            continue;
+                        }
+                    }
                     remaining.push(event);
                 }
                 LspEvent::ServerCrashed { language_id, .. } => {
@@ -198,6 +237,38 @@ impl LspManager {
         }
 
         remaining
+    }
+
+    /// Sends a `textDocument/completion` request for the given file position.
+    ///
+    /// The response will arrive as `LspEvent::CompletionResponse` via `poll_events()`.
+    pub fn request_completion(&mut self, path: &Path, line: u32, character: u32) -> Result<()> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(());
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(());
+        };
+
+        if !client.is_initialized() {
+            return Ok(());
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character }
+        });
+
+        client.send_request(
+            "textDocument/completion",
+            params,
+            PendingRequestKind::Completion,
+        )?;
+        Ok(())
     }
 
     /// Shuts down all active LSP servers.

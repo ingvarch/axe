@@ -314,6 +314,8 @@ pub struct AppState {
     pub config: axe_config::AppConfig,
     /// LSP manager for language server communication, if initialized.
     pub lsp_manager: Option<axe_lsp::LspManager>,
+    /// Active completion popup state, if open.
+    pub completion: Option<crate::completion::CompletionState>,
 }
 
 impl AppState {
@@ -358,6 +360,7 @@ impl AppState {
             keymap: KeymapResolver::with_defaults(),
             config: axe_config::AppConfig::default(),
             lsp_manager: None,
+            completion: None,
         }
     }
 
@@ -492,7 +495,22 @@ impl AppState {
                     }
                 }
                 axe_lsp::LspEvent::Response { .. } => {
-                    // Non-initialize responses — handled in future tasks.
+                    // Non-initialize, non-completion responses — ignored.
+                }
+                axe_lsp::LspEvent::CompletionResponse { result: Ok(value) } => {
+                    let items = crate::completion::parse_completion_response(&value);
+                    if !items.is_empty() {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            self.completion = Some(crate::completion::CompletionState::new(
+                                items,
+                                buf.cursor.row,
+                                buf.cursor.col,
+                            ));
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::CompletionResponse { result: Err(e) } => {
+                    log::warn!("LSP completion error: {}", e.message);
                 }
             }
         }
@@ -586,6 +604,106 @@ impl AppState {
                 buf.cursor.col = 0;
                 buf.ensure_cursor_visible(h, w);
             }
+        }
+    }
+
+    // IMPACT ANALYSIS — Completion methods
+    // Parents: TriggerCompletion command, auto-trigger on '.' or ':'
+    // Children: LspManager::request_completion, CompletionState, buffer edits
+    // Siblings: Search bar (completion dismisses when search opens), overlays
+
+    /// Sends a completion request to the LSP for the current cursor position.
+    fn request_completion(&mut self) {
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_completion(&path, line, col) {
+                        log::warn!("LSP completion request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Applies the currently selected completion item, replacing the typed prefix.
+    fn apply_completion(&mut self) {
+        let Some(ref comp) = self.completion else {
+            return;
+        };
+        let Some(item) = comp.selected_item().cloned() else {
+            self.completion = None;
+            return;
+        };
+        let trigger_col = comp.trigger_col;
+        let trigger_row = comp.trigger_row;
+        self.completion = None;
+
+        let insert = item.insert_text.as_deref().unwrap_or(&item.label);
+        let (h, w) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            // Only apply if cursor is on the trigger row.
+            if buf.cursor.row != trigger_row {
+                return;
+            }
+            let current_col = buf.cursor.col;
+            // Delete the typed prefix (from trigger_col to current cursor).
+            if current_col > trigger_col {
+                buf.apply_text_edit(trigger_row, trigger_col, trigger_row, current_col, insert);
+            } else {
+                buf.apply_text_edit(trigger_row, trigger_col, trigger_row, trigger_col, insert);
+            }
+            buf.ensure_cursor_visible(h, w);
+        }
+        self.last_edit_time = Some(Instant::now());
+        self.notify_lsp_change();
+    }
+
+    /// Updates the completion filter after an edit (insert/backspace).
+    ///
+    /// Extracts the text between trigger_col and the current cursor as the prefix,
+    /// then re-filters. Dismisses if the filter is empty or cursor moved away.
+    fn update_completion_after_edit(&mut self) {
+        let Some(ref mut comp) = self.completion else {
+            return;
+        };
+        let Some(buf) = self.buffer_manager.active_buffer() else {
+            self.completion = None;
+            return;
+        };
+        // Dismiss if cursor moved to a different row.
+        if buf.cursor.row != comp.trigger_row {
+            self.completion = None;
+            return;
+        }
+        // Dismiss if cursor moved before the trigger column.
+        if buf.cursor.col < comp.trigger_col {
+            self.completion = None;
+            return;
+        }
+        // Extract prefix text from trigger_col to cursor.
+        let line_text = buf.line_text(comp.trigger_row);
+        let prefix: String = line_text
+            .chars()
+            .skip(comp.trigger_col)
+            .take(buf.cursor.col - comp.trigger_col)
+            .collect();
+        comp.update_filter(&prefix);
+        // Dismiss if nothing matches.
+        if comp.filtered.is_empty() {
+            self.completion = None;
+        }
+    }
+
+    /// Auto-triggers completion when typing certain characters (`.`, `:`).
+    fn maybe_auto_trigger_completion(&mut self, ch: char) {
+        if self.completion.is_some() {
+            return;
+        }
+        if ch == '.' || ch == ':' {
+            self.request_completion();
         }
     }
 
@@ -817,6 +935,36 @@ impl AppState {
                 }
                 _ => {
                     // Let Ctrl+F, Ctrl+Q, etc. fall through to global keymap.
+                }
+            }
+        }
+
+        // Completion popup interception (non-modal: typing falls through).
+        if self.completion.is_some() && self.focus == FocusTarget::Editor {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    self.completion = None;
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Tab) => {
+                    self.execute(Command::AcceptCompletion);
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    if let Some(ref mut comp) = self.completion {
+                        comp.move_up();
+                    }
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    if let Some(ref mut comp) = self.completion {
+                        comp.move_down();
+                    }
+                    return;
+                }
+                _ => {
+                    // All other keys fall through to editor handling.
+                    // Completion will be updated after the edit.
                 }
             }
         }
@@ -1229,6 +1377,14 @@ impl AppState {
                     }
                     buf.ensure_cursor_visible(h, w);
                 }
+                // Dismiss completion if cursor moved away from trigger position.
+                if let Some(ref comp) = self.completion {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if buf.cursor.row != comp.trigger_row || buf.cursor.col < comp.trigger_col {
+                            self.completion = None;
+                        }
+                    }
+                }
             }
             // IMPACT ANALYSIS — Editor edit commands
             // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
@@ -1242,6 +1398,8 @@ impl AppState {
                 }
                 self.last_edit_time = Some(Instant::now());
                 self.notify_lsp_change();
+                self.update_completion_after_edit();
+                self.maybe_auto_trigger_completion(ch);
             }
             Command::EditorBackspace => {
                 let (h, w) = self.editor_viewport();
@@ -1251,6 +1409,7 @@ impl AppState {
                 }
                 self.last_edit_time = Some(Instant::now());
                 self.notify_lsp_change();
+                self.update_completion_after_edit();
             }
             Command::EditorDelete => {
                 let (h, w) = self.editor_viewport();
@@ -1260,8 +1419,10 @@ impl AppState {
                 }
                 self.last_edit_time = Some(Instant::now());
                 self.notify_lsp_change();
+                self.update_completion_after_edit();
             }
             Command::EditorNewline => {
+                self.completion = None;
                 let (h, w) = self.editor_viewport();
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                     buf.insert_newline();
@@ -1527,6 +1688,15 @@ impl AppState {
             }
             Command::GoToPrevDiagnostic => {
                 self.go_to_prev_diagnostic();
+            }
+            Command::TriggerCompletion => {
+                self.request_completion();
+            }
+            Command::AcceptCompletion => {
+                self.apply_completion();
+            }
+            Command::DismissCompletion => {
+                self.completion = None;
             }
         }
         // Auto-promote preview buffer if user started editing it.

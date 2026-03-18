@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::{self, stdout};
 use std::panic;
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
+use simplelog::{CombinedLogger, Config as LogConfig, LevelFilter, WriteLogger};
 
 use axe_config::theme::load_theme;
 use axe_core::AppState;
@@ -76,6 +78,15 @@ fn install_panic_hook() {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Initialize file-based logger. Writes to /tmp/axe.log at debug level.
+    if let Ok(log_file) = File::create("/tmp/axe.log") {
+        let _ = CombinedLogger::init(vec![WriteLogger::new(
+            LevelFilter::Debug,
+            LogConfig::default(),
+            log_file,
+        )]);
+    }
 
     install_panic_hook();
 

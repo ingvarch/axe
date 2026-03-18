@@ -4,7 +4,7 @@ pub mod manager;
 pub mod transport;
 
 pub use axe_config::LspServerConfig;
-pub use client::LspEvent;
+pub use client::{LspEvent, PendingRequestKind};
 pub use manager::LspManager;
 
 #[cfg(test)]

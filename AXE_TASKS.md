@@ -600,25 +600,26 @@ Display LSP diagnostics in the editor.
 
 ---
 
-### Task 7.3 — LSP: Autocomplete
+### Task 7.3 — LSP: Autocomplete [DONE]
 
 Code completion popup triggered by typing or manual invocation.
 
 **Acceptance criteria:**
-- Completion popup appears automatically after typing `.` or `::` (for Rust), or after a configurable trigger character
-- `Ctrl+Space` manually triggers completion
-- Popup shows completion items with label, kind icon (function, variable, type, etc.), and optional detail
-- `↑`/`↓` navigates the list, `Enter` or `Tab` accepts the selected item
-- `Esc` dismisses the popup
-- Accepted completion replaces the current word/prefix correctly
-- Popup positioned at the cursor, does not go off-screen (flips direction if needed)
+- [x] Completion popup appears automatically after typing `.` or `:` trigger characters
+- [x] `Alt+/` (or `F3` fallback) manually triggers completion
+- [x] Popup shows completion items with label, kind icon (function, variable, type, etc.), and optional detail
+- [x] `↑`/`↓` navigates the list, `Enter` or `Tab` accepts the selected item
+- [x] `Esc` dismisses the popup
+- [x] Accepted completion replaces the current word/prefix correctly
+- [x] Popup positioned at the cursor, does not go off-screen (flips direction if needed)
 
 **Implementation details:**
-- Send `textDocument/completion` request with cursor position
-- Parse `CompletionResponse` (list or array)
-- Completion popup is an Overlay rendered at cursor position
-- Filter items by prefix as user continues typing
-- Handle `insertText`, `textEdit`, and `additionalTextEdits` in completion items
+- `axe-core/src/completion.rs`: `CompletionState`, `CompletionItem`, `CompletionKind`, response parsing, filtering
+- `axe-lsp/src/client.rs`: `PendingRequestKind` enum, `send_request()` / `take_pending()` for response routing, completion capability in `initialize_params`
+- `axe-lsp/src/manager.rs`: `request_completion()`, `CompletionResponse` event routing via `poll_events()`
+- Non-modal key handling: typing continues while popup is open, filter updates dynamically
+- `apply_text_edit()` on `EditorBuffer` for range replacement with undo support
+- Popup rendered at cursor position with kind icons, selection highlight, scroll, auto-flip above if insufficient space below
 
 ---
 

@@ -1093,6 +1093,106 @@ impl EditorBuffer {
         }
         len
     }
+
+    /// Returns the text content of a line as a `String`, excluding trailing newline.
+    ///
+    /// Returns an empty string if the line index is out of bounds.
+    pub fn line_text(&self, row: usize) -> String {
+        match self.line_at(row) {
+            Some(slice) => {
+                let s = slice.to_string();
+                s.trim_end_matches('\n').trim_end_matches('\r').to_string()
+            }
+            None => String::new(),
+        }
+    }
+
+    // IMPACT ANALYSIS — apply_text_edit
+    // Parents: apply_completion in AppState
+    // Children: Rope content changes, cursor moves, history records, highlight notified
+    // Siblings: Selection (cleared), diagnostics (shifted by LSP after didChange)
+
+    /// Replaces text in a range and positions the cursor at the end of the insertion.
+    ///
+    /// Converts (line, col) positions to rope char offsets, deletes the range,
+    /// inserts `new_text`, and records the edit for undo.
+    pub fn apply_text_edit(
+        &mut self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+        new_text: &str,
+    ) {
+        // Clear selection before editing.
+        self.selection = None;
+
+        let total_lines = self.content.len_lines();
+        let start_line = start_line.min(total_lines.saturating_sub(1));
+        let end_line = end_line.min(total_lines.saturating_sub(1));
+
+        let start_idx = self.content.line_to_char(start_line) + start_col;
+        let end_idx = self.content.line_to_char(end_line) + end_col;
+
+        // Clamp indices to content length.
+        let total_chars = self.content.len_chars();
+        let start_idx = start_idx.min(total_chars);
+        let end_idx = end_idx.min(total_chars).max(start_idx);
+
+        let cursor_before = self.cursor.clone();
+        let old_text: String = self.content.slice(start_idx..end_idx).into();
+        let old_len = old_text.len();
+        let old_end_pos = if end_idx > start_idx {
+            highlight::byte_to_point(&self.content, self.content.char_to_byte(end_idx))
+        } else {
+            highlight::byte_to_point(&self.content, self.content.char_to_byte(start_idx))
+        };
+
+        // Delete old range.
+        if end_idx > start_idx {
+            self.content.remove(start_idx..end_idx);
+        }
+
+        // Insert new text.
+        let new_chars = new_text.chars().count();
+        if !new_text.is_empty() {
+            self.content.insert(start_idx, new_text);
+        }
+
+        // Position cursor at end of inserted text.
+        let mut row = start_line;
+        let mut col = start_col;
+        for ch in new_text.chars() {
+            if ch == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        self.cursor.row = row;
+        self.cursor.col = col;
+        self.cursor.desired_col = col;
+        self.modified = true;
+
+        self.history.record(
+            Edit {
+                char_idx: start_idx,
+                old_text,
+                new_text: new_text.to_string(),
+            },
+            cursor_before,
+            self.cursor.clone(),
+        );
+
+        // Notify syntax highlighter about the edit.
+        if end_idx > start_idx {
+            self.notify_highlight_delete(start_idx, end_idx - start_idx, old_len, old_end_pos);
+        }
+        if new_chars > 0 {
+            self.notify_highlight_insert(start_idx, new_chars);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2609,5 +2709,64 @@ mod tests {
         assert!(!buf.diagnostics().is_empty());
         buf.clear_diagnostics();
         assert!(buf.diagnostics().is_empty());
+    }
+
+    // --- line_text ---
+
+    #[test]
+    fn line_text_returns_content() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("hello\nworld");
+        assert_eq!(buf.line_text(0), "hello");
+        assert_eq!(buf.line_text(1), "world");
+    }
+
+    #[test]
+    fn line_text_out_of_bounds_returns_empty() {
+        let buf = EditorBuffer::new();
+        assert_eq!(buf.line_text(999), "");
+    }
+
+    // --- apply_text_edit ---
+
+    #[test]
+    fn apply_text_edit_single_line() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("hello world");
+        // Replace "world" (col 6..11) with "rust"
+        buf.apply_text_edit(0, 6, 0, 11, "rust");
+        assert_eq!(buf.content_string(), "hello rust");
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 10);
+    }
+
+    #[test]
+    fn apply_text_edit_replaces_range() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("fn foo()");
+        // Replace "foo" (col 3..6) with "bar"
+        buf.apply_text_edit(0, 3, 0, 6, "bar");
+        assert_eq!(buf.content_string(), "fn bar()");
+        assert_eq!(buf.cursor.col, 6);
+    }
+
+    #[test]
+    fn apply_text_edit_insert_without_delete() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("ab");
+        // Insert at col 1 with zero-width range
+        buf.apply_text_edit(0, 1, 0, 1, "XY");
+        assert_eq!(buf.content_string(), "aXYb");
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    #[test]
+    fn apply_text_edit_records_in_history() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("hello");
+        buf.apply_text_edit(0, 0, 0, 5, "bye");
+        assert_eq!(buf.content_string(), "bye");
+        buf.undo();
+        assert_eq!(buf.content_string(), "hello");
     }
 }

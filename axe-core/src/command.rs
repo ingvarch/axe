@@ -206,6 +206,12 @@ pub enum Command {
     GoToNextDiagnostic,
     /// Jump to the previous diagnostic in the active buffer.
     GoToPrevDiagnostic,
+    /// Trigger code completion at the current cursor position (Ctrl+Space).
+    TriggerCompletion,
+    /// Accept the currently selected completion item.
+    AcceptCompletion,
+    /// Dismiss the completion popup.
+    DismissCompletion,
 }
 
 #[cfg(test)]
@@ -336,6 +342,9 @@ mod tests {
             Command::OpenProjectSearch,
             Command::GoToNextDiagnostic,
             Command::GoToPrevDiagnostic,
+            Command::TriggerCompletion,
+            Command::AcceptCompletion,
+            Command::DismissCompletion,
         ];
 
         for (i, a) in variants.iter().enumerate() {

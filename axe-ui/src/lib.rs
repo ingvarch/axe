@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use axe_core::completion::{self, CompletionState};
 use axe_core::project_search::{DisplayItem, SearchField};
 use axe_core::{AppState, CommandPalette, FileFinder, FocusTarget, ProjectSearch, SearchState};
 use axe_editor::diagnostic::{
@@ -260,6 +261,9 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Ctrl+P", "Open file finder"),
     ("F1 / Ctrl+Shift+P", "Command palette"),
     ("F2 / Ctrl+Shift+F", "Find in project"),
+    ("Alt+/ / F3", "Code completion"),
+    ("Alt+.", "Next diagnostic"),
+    ("Alt+,", "Prev diagnostic"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -757,6 +761,167 @@ const FILE_FINDER_HEIGHT_PCT: u16 = 50;
 const FILE_FINDER_MIN_WIDTH: u16 = 30;
 /// Minimum height of the file finder overlay.
 const FILE_FINDER_MIN_HEIGHT: u16 = 8;
+
+/// Maximum number of visible items in the completion popup.
+const COMPLETION_MAX_VISIBLE: usize = 10;
+/// Minimum width of the completion popup.
+const COMPLETION_MIN_WIDTH: u16 = 20;
+/// Maximum width of the completion popup.
+const COMPLETION_MAX_WIDTH: u16 = 60;
+
+/// Renders the completion popup at the cursor position in the editor.
+///
+/// The popup is non-modal and appears below the cursor line (or above
+/// if there's not enough space below). Items show [kind] label detail.
+fn render_completion_popup(
+    comp: &CompletionState,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    if comp.filtered.is_empty() {
+        return;
+    }
+
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    // Calculate line number gutter width for the current buffer.
+    let line_count = buffer.line_count();
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH;
+
+    // Screen position relative to editor inner area.
+    let cursor_screen_row = comp.trigger_row.saturating_sub(buffer.scroll_row) as u16;
+    let cursor_screen_col = (comp.trigger_col.saturating_sub(buffer.scroll_col)) as u16;
+
+    // Absolute screen position.
+    let popup_x = (editor_x + gutter_width + cursor_screen_col).min(
+        editor_x
+            .saturating_add(editor_w)
+            .saturating_sub(COMPLETION_MIN_WIDTH),
+    );
+    let below_y = editor_y + cursor_screen_row + 1; // +1 to be below cursor line
+
+    let visible_count = comp.filtered.len().min(COMPLETION_MAX_VISIBLE);
+    let popup_height = visible_count as u16 + 2; // +2 for borders
+
+    // Calculate width from items.
+    let max_label_width = comp
+        .filtered
+        .iter()
+        .filter_map(|&idx| comp.items.get(idx))
+        .map(|item| {
+            let detail_len = item.detail.as_ref().map(|d| d.len() + 2).unwrap_or(0);
+            // "kw " + label + "  " + detail
+            3 + item.label.len() + detail_len
+        })
+        .max()
+        .unwrap_or(COMPLETION_MIN_WIDTH as usize);
+    let popup_width = (max_label_width as u16 + 2) // +2 for borders
+        .clamp(COMPLETION_MIN_WIDTH, COMPLETION_MAX_WIDTH)
+        .min(editor_w);
+
+    // Place below cursor if enough room, otherwise above.
+    let space_below = (editor_y + editor_h).saturating_sub(below_y);
+    let above_y = editor_y
+        .saturating_add(cursor_screen_row)
+        .saturating_sub(popup_height);
+    let popup_y = if space_below >= popup_height {
+        below_y
+    } else {
+        above_y
+    };
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Ensure scroll_offset keeps selected item visible.
+    let scroll_offset = if comp.selected < comp.scroll_offset {
+        comp.selected
+    } else if comp.selected >= comp.scroll_offset + COMPLETION_MAX_VISIBLE {
+        comp.selected + 1 - COMPLETION_MAX_VISIBLE
+    } else {
+        comp.scroll_offset
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground))
+        .border_style(Style::default().fg(theme.overlay_border));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Render visible items.
+    let inner_width = inner.width as usize;
+    for (i, &item_idx) in comp
+        .filtered
+        .iter()
+        .skip(scroll_offset)
+        .take(COMPLETION_MAX_VISIBLE)
+        .enumerate()
+    {
+        if i as u16 >= inner.height {
+            break;
+        }
+        let Some(item) = comp.items.get(item_idx) else {
+            continue;
+        };
+
+        let is_selected = (scroll_offset + i) == comp.selected;
+        let base_style = if is_selected {
+            Style::default()
+                .bg(theme.tree_selection_bg)
+                .fg(theme.foreground)
+        } else {
+            Style::default().bg(theme.overlay_bg).fg(theme.foreground)
+        };
+
+        let icon = completion::kind_icon(item.kind);
+        let icon_style = base_style.add_modifier(Modifier::DIM);
+
+        let mut spans = vec![
+            Span::styled(icon, icon_style),
+            Span::styled(" ", base_style),
+            Span::styled(&item.label, base_style),
+        ];
+
+        // Add detail if present and there's room.
+        if let Some(ref detail) = item.detail {
+            let used = 3 + item.label.len();
+            let remaining = inner_width.saturating_sub(used + 2);
+            if remaining > 0 {
+                let truncated: String = detail.chars().take(remaining).collect();
+                spans.push(Span::styled("  ", base_style));
+                spans.push(Span::styled(
+                    truncated,
+                    base_style.add_modifier(Modifier::DIM),
+                ));
+            }
+        }
+
+        // Pad to full width.
+        let content_len: usize = spans.iter().map(|s| s.content.len()).sum();
+        if content_len < inner_width {
+            spans.push(Span::styled(
+                " ".repeat(inner_width - content_len),
+                base_style,
+            ));
+        }
+
+        let line = Line::from(spans);
+        let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), line_area);
+    }
+}
 
 /// Renders the fuzzy file finder overlay centered on the screen.
 fn render_file_finder(finder: &FileFinder, frame: &mut Frame, theme: &Theme) {
@@ -2188,6 +2353,13 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
             .fg(theme.status_bar_fg),
     );
     frame.render_widget(status_bar, status_area);
+
+    // Completion popup (non-modal, rendered below modal overlays).
+    if let Some(ref comp) = app.completion {
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_completion_popup(comp, buffer, app, frame, theme);
+        }
+    }
 
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {

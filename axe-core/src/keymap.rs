@@ -177,6 +177,9 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "open_project_search" => Some(Command::OpenProjectSearch),
         "go_to_next_diagnostic" => Some(Command::GoToNextDiagnostic),
         "go_to_prev_diagnostic" => Some(Command::GoToPrevDiagnostic),
+        "trigger_completion" => Some(Command::TriggerCompletion),
+        "accept_completion" => Some(Command::AcceptCompletion),
+        "dismiss_completion" => Some(Command::DismissCompletion),
         _ => None,
     }
 }
@@ -382,6 +385,19 @@ impl KeymapResolver {
         resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('w'), Command::CloseTab);
         resolver.bind(KeyModifiers::ALT, KeyCode::Char('t'), Command::NewTab);
         resolver.bind(KeyModifiers::ALT, KeyCode::Char('w'), Command::CloseTab);
+
+        // Code completion (Alt+/).
+        resolver.bind(
+            KeyModifiers::ALT,
+            KeyCode::Char('/'),
+            Command::TriggerCompletion,
+        );
+        // F3 as universal fallback for completion trigger.
+        resolver.bind(
+            KeyModifiers::NONE,
+            KeyCode::F(3),
+            Command::TriggerCompletion,
+        );
 
         // Diagnostic navigation.
         resolver.bind(
@@ -1019,6 +1035,46 @@ mod tests {
         assert_eq!(
             command_from_str("go_to_next_diagnostic"),
             Some(Command::GoToNextDiagnostic)
+        );
+    }
+
+    // --- Completion ---
+
+    #[test]
+    fn alt_slash_triggers_completion() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::TriggerCompletion));
+    }
+
+    #[test]
+    fn f3_triggers_completion() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::TriggerCompletion));
+    }
+
+    #[test]
+    fn command_from_str_trigger_completion() {
+        assert_eq!(
+            command_from_str("trigger_completion"),
+            Some(Command::TriggerCompletion)
+        );
+    }
+
+    #[test]
+    fn command_from_str_accept_completion() {
+        assert_eq!(
+            command_from_str("accept_completion"),
+            Some(Command::AcceptCompletion)
+        );
+    }
+
+    #[test]
+    fn command_from_str_dismiss_completion() {
+        assert_eq!(
+            command_from_str("dismiss_completion"),
+            Some(Command::DismissCompletion)
         );
     }
 

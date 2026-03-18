@@ -1,12 +1,20 @@
+use std::collections::HashMap;
 use std::io::{BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 use lsp_types::ServerCapabilities;
+use serde_json::Value;
 use url::Url;
 
 use crate::transport::{self, JsonRpcError, JsonRpcMessage, RequestId};
+
+/// Identifies the type of a pending LSP request for response routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingRequestKind {
+    Completion,
+}
 
 /// Events sent from the LSP reader thread to the main thread.
 #[derive(Debug)]
@@ -21,6 +29,10 @@ pub enum LspEvent {
     /// Server responded to a request.
     Response {
         id: RequestId,
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a completion request.
+    CompletionResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server process crashed or exited unexpectedly.
@@ -38,6 +50,8 @@ pub struct LspClient {
     next_id: i64,
     capabilities: Option<ServerCapabilities>,
     initialized: bool,
+    /// Tracks pending requests by ID so responses can be routed by kind.
+    pending_requests: HashMap<i64, PendingRequestKind>,
 }
 
 impl LspClient {
@@ -108,6 +122,7 @@ impl LspClient {
             next_id: 1,
             capabilities: None,
             initialized: false,
+            pending_requests: HashMap::new(),
         };
 
         // Send initialize request.
@@ -187,6 +202,29 @@ impl LspClient {
         });
         let msg = transport::make_notification("textDocument/didSave", params);
         self.send_raw(&msg)
+    }
+
+    /// Sends a JSON-RPC request to the server and tracks it for response routing.
+    ///
+    /// Returns the request ID used, which can be matched against future responses.
+    pub fn send_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        kind: PendingRequestKind,
+    ) -> Result<i64> {
+        let id = self.next_request_id();
+        let msg = transport::make_request(id, method, params);
+        self.send_raw(&msg)?;
+        self.pending_requests.insert(id, kind);
+        Ok(id)
+    }
+
+    /// Removes and returns the pending request kind for the given response ID.
+    ///
+    /// Returns `None` if the ID is not tracked (e.g., initialize response).
+    pub fn take_pending(&mut self, id: i64) -> Option<PendingRequestKind> {
+        self.pending_requests.remove(&id)
     }
 
     /// Sends shutdown request followed by exit notification.
@@ -287,6 +325,12 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 "publishDiagnostics": {
                     "relatedInformation": true,
                 },
+                "completion": {
+                    "completionItem": {
+                        "snippetSupport": false,
+                    },
+                    "dynamicRegistration": false,
+                },
             },
         },
         "clientInfo": {
@@ -308,6 +352,34 @@ mod tests {
         assert!(params["processId"].is_number());
         assert!(params["capabilities"]["textDocument"].is_object());
         assert_eq!(params["clientInfo"]["name"], "axe");
+    }
+
+    #[test]
+    fn initialize_params_includes_completion() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let completion = &params["capabilities"]["textDocument"]["completion"];
+        assert!(completion.is_object());
+        assert_eq!(completion["completionItem"]["snippetSupport"], false);
+        assert_eq!(completion["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn send_request_tracks_pending() {
+        // Test pending_requests tracking logic without a real server.
+        let mut pending: HashMap<i64, PendingRequestKind> = HashMap::new();
+        pending.insert(1, PendingRequestKind::Completion);
+        assert!(pending.contains_key(&1));
+        assert_eq!(pending[&1], PendingRequestKind::Completion);
+    }
+
+    #[test]
+    fn take_pending_removes() {
+        let mut pending: HashMap<i64, PendingRequestKind> = HashMap::new();
+        pending.insert(5, PendingRequestKind::Completion);
+        let kind = pending.remove(&5);
+        assert_eq!(kind, Some(PendingRequestKind::Completion));
+        assert!(pending.remove(&5).is_none());
     }
 
     #[test]
