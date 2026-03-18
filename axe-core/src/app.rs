@@ -2573,7 +2573,14 @@ impl AppState {
                 log::warn!("Failed to close terminal tab: {e}");
                 return;
             }
-            self.focus = FocusTarget::Terminal(mgr.active_index());
+            if mgr.has_tabs() {
+                self.focus = FocusTarget::Terminal(mgr.active_index());
+            } else {
+                self.show_terminal = false;
+                if matches!(self.focus, FocusTarget::Terminal(_)) {
+                    self.focus = FocusTarget::Editor;
+                }
+            }
         }
     }
 
@@ -5787,6 +5794,62 @@ mod tests {
             app.terminal_manager.as_ref().unwrap().tab_count(),
             1,
             "Tab should still exist after Esc"
+        );
+    }
+
+    #[test]
+    fn close_last_terminal_tab_hides_panel() {
+        let mut app = app_with_terminal_tab();
+        app.show_terminal = true;
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
+
+        app.execute(Command::ForceCloseTerminalTab);
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            0,
+            "Tab should be removed"
+        );
+        assert!(
+            !app.show_terminal,
+            "Terminal panel should be hidden when last tab is closed"
+        );
+        assert_eq!(
+            app.focus,
+            FocusTarget::Editor,
+            "Focus should move to editor when last terminal tab is closed"
+        );
+    }
+
+    #[test]
+    fn close_non_last_terminal_tab_keeps_panel() {
+        let mut app = app_with_terminal_tab();
+        app.show_terminal = true;
+
+        // Spawn a second terminal tab.
+        let cwd = std::env::current_dir().unwrap();
+        app.terminal_manager
+            .as_mut()
+            .unwrap()
+            .spawn_default_tab(80, 24, &cwd)
+            .unwrap();
+        assert_eq!(app.terminal_manager.as_ref().unwrap().tab_count(), 2);
+
+        // Force close without confirmation (skip alive check).
+        app.confirm_dialog = Some(ConfirmDialog::close_terminal("test"));
+        app.execute(Command::ForceCloseTerminalTab);
+
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().tab_count(),
+            1,
+            "One tab should remain"
+        );
+        assert!(
+            app.show_terminal,
+            "Terminal panel should remain visible with tabs remaining"
+        );
+        assert!(
+            matches!(app.focus, FocusTarget::Terminal(_)),
+            "Focus should stay on terminal"
         );
     }
 
