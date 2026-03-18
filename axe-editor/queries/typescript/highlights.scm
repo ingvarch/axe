@@ -1,3 +1,7 @@
+; Catch-all identifiers (lowest priority — specific patterns below override these)
+(identifier) @variable
+(property_identifier) @property
+
 ; Keywords
 [
   "abstract"
@@ -84,9 +88,7 @@
   (undefined)
 ] @constant.builtin
 
-; Variables
-(identifier) @variable
-(property_identifier) @property
+; Variables (catch-alls moved to top of file)
 
 ; Operators
 [

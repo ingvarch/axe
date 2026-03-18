@@ -1,3 +1,6 @@
+; Catch-all identifiers (lowest priority — specific patterns below override these)
+(identifier) @variable
+
 ; Keywords
 [
   "and"
@@ -64,8 +67,7 @@
   (none)
 ] @constant.builtin
 
-; Variables
-(identifier) @variable
+; Properties
 (attribute attribute: (identifier) @property)
 
 ; Parameters

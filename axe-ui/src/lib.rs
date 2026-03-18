@@ -3428,6 +3428,56 @@ fn render_tab_bar(
     frame.render_widget(paragraph, area);
 }
 
+/// Result of expanding tab characters in a line.
+///
+/// Contains the expanded string and a mapping from original char indices
+/// to display column positions, used to remap syntax highlight spans,
+/// cursor, and selection ranges.
+struct ExpandedLine {
+    /// The line with tabs replaced by spaces (aligned to tab stops).
+    text: String,
+    /// Maps original char index to the display column where that char starts.
+    /// Length is `original_char_count + 1` — the last entry is the total display width.
+    char_to_col: Vec<usize>,
+}
+
+/// Expands tab characters to spaces aligned to tab stops.
+///
+/// Each `\t` is replaced by 1..tab_size spaces so the next character lands on
+/// the next tab-stop boundary (column divisible by `tab_size`).
+fn expand_tabs(line: &str, tab_size: usize) -> ExpandedLine {
+    let tab_size = tab_size.max(1);
+    let mut text = String::with_capacity(line.len());
+    let mut char_to_col = Vec::with_capacity(line.len() + 1);
+    let mut col = 0;
+    for ch in line.chars() {
+        char_to_col.push(col);
+        if ch == '\t' {
+            let spaces = tab_size - (col % tab_size);
+            for _ in 0..spaces {
+                text.push(' ');
+            }
+            col += spaces;
+        } else {
+            text.push(ch);
+            col += 1;
+        }
+    }
+    char_to_col.push(col);
+    ExpandedLine { text, char_to_col }
+}
+
+/// Converts a rope char offset to a display column using the char-to-col mapping.
+///
+/// If `char_idx` is beyond the mapping, returns the total display width (last entry).
+fn char_to_display_col(char_to_col: &[usize], char_idx: usize) -> usize {
+    if char_idx >= char_to_col.len() {
+        *char_to_col.last().unwrap_or(&0)
+    } else {
+        char_to_col[char_idx]
+    }
+}
+
 // IMPACT ANALYSIS — render_editor_content
 // Parents: render_right_panels() calls this with the inner area of the editor block.
 // Children: reads EditorBuffer via active_buffer() — cursor, scroll_row, scroll_col.
@@ -3533,9 +3583,10 @@ fn render_editor_content(
 
     let visible_lines = area.height as usize;
     let scroll_row = buffer.scroll_row;
-    let scroll_col = buffer.scroll_col;
+    let scroll_col_char = buffer.scroll_col;
     let cursor_row = buffer.cursor.row;
-    let cursor_col = buffer.cursor.col;
+    let cursor_col_char = buffer.cursor.col;
+    let tab_size = buffer.tab_size();
 
     // Width available for line numbers (total gutter - diagnostic column - diff column - trailing space).
     let line_num_width = (gutter_w - DIAGNOSTIC_GUTTER_WIDTH - DIFF_GUTTER_WIDTH - 1) as usize;
@@ -3603,10 +3654,10 @@ fn render_editor_content(
 
     // Compute normalized selection range (if any).
     let sel_range = buffer.selection.as_ref().and_then(|sel| {
-        if sel.is_empty(cursor_row, cursor_col) {
+        if sel.is_empty(cursor_row, cursor_col_char) {
             None
         } else {
-            Some(sel.normalized(cursor_row, cursor_col))
+            Some(sel.normalized(cursor_row, cursor_col_char))
         }
     });
 
@@ -3645,8 +3696,14 @@ fn render_editor_content(
                 let text: String = rope_line.chars().collect();
                 // Trim trailing newline for display.
                 let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
+                // Expand tabs to spaces aligned to tab stops and build
+                // a char→display-column mapping for position conversions.
+                let expanded = expand_tabs(trimmed, tab_size);
+                let c2d = &expanded.char_to_col;
+                let scroll_col = char_to_display_col(c2d, scroll_col_char);
                 // Apply horizontal scroll and clip to available width.
-                let display: String = trimmed
+                let display: String = expanded
+                    .text
                     .chars()
                     .skip(scroll_col)
                     .take(content_w as usize)
@@ -3660,9 +3717,9 @@ fn render_editor_content(
                 // Syntax highlights (lowest priority — set fg, preserve base bg).
                 if let Some(line_hl) = syntax_data.get(i) {
                     for span in line_hl {
-                        let hs = span.col_start.saturating_sub(scroll_col);
-                        let he = span
-                            .col_end
+                        let hs = char_to_display_col(c2d, span.col_start)
+                            .saturating_sub(scroll_col);
+                        let he = char_to_display_col(c2d, span.col_end)
                             .saturating_sub(scroll_col)
                             .min(content_w as usize);
                         if he > hs {
@@ -3676,8 +3733,11 @@ fn render_editor_content(
                 if let Some(s) = search {
                     for (idx, m) in s.matches.iter().enumerate() {
                         if m.row == file_line {
-                            let hs = m.col_start.saturating_sub(scroll_col);
-                            let he = m.col_end.saturating_sub(scroll_col).min(content_w as usize);
+                            let hs = char_to_display_col(c2d, m.col_start)
+                                .saturating_sub(scroll_col);
+                            let he = char_to_display_col(c2d, m.col_end)
+                                .saturating_sub(scroll_col)
+                                .min(content_w as usize);
                             if he > hs {
                                 let style = if idx == s.current {
                                     search_active_style
@@ -3694,12 +3754,12 @@ fn render_editor_content(
                 if let Some((sr, sc, er, ec)) = sel_range {
                     if file_line >= sr && file_line <= er {
                         let line_sel_start = if file_line == sr {
-                            sc.saturating_sub(scroll_col)
+                            char_to_display_col(c2d, sc).saturating_sub(scroll_col)
                         } else {
                             0
                         };
                         let line_sel_end = if file_line == er {
-                            ec.saturating_sub(scroll_col)
+                            char_to_display_col(c2d, ec).saturating_sub(scroll_col)
                         } else {
                             content_w as usize
                         };
@@ -3711,8 +3771,11 @@ fn render_editor_content(
                 let diag_underlines: Vec<(usize, usize, Color)> =
                     diagnostics_for_line(buffer.diagnostics(), file_line)
                         .map(|d| {
-                            let hs = d.col_start.saturating_sub(scroll_col);
-                            let he = d.col_end.saturating_sub(scroll_col).min(content_w as usize);
+                            let hs = char_to_display_col(c2d, d.col_start)
+                                .saturating_sub(scroll_col);
+                            let he = char_to_display_col(c2d, d.col_end)
+                                .saturating_sub(scroll_col)
+                                .min(content_w as usize);
                             let color = diagnostic_color(d.severity, theme);
                             (hs, he, color)
                         })
@@ -3791,9 +3854,20 @@ fn render_editor_content(
     }
 
     // Render cursor by directly modifying the frame buffer cell at the cursor position.
+    // Convert char-based cursor and scroll positions to display columns via tab expansion.
     if editor_focused {
         let screen_row = cursor_row.saturating_sub(scroll_row);
-        let screen_col = cursor_col.saturating_sub(scroll_col);
+        let cursor_display_col = if let Some(cursor_line) = buffer.line_at(cursor_row) {
+            let line_text: String = cursor_line.chars().collect();
+            let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
+            let expanded = expand_tabs(trimmed, tab_size);
+            let scroll_col = char_to_display_col(&expanded.char_to_col, scroll_col_char);
+            char_to_display_col(&expanded.char_to_col, cursor_col_char)
+                .saturating_sub(scroll_col)
+        } else {
+            cursor_col_char.saturating_sub(scroll_col_char)
+        };
+        let screen_col = cursor_display_col;
         if screen_row < visible_lines && screen_col < content_w as usize {
             let cx = content_area.x + screen_col as u16;
             let cy = content_area.y + screen_row as u16;
@@ -4854,5 +4928,67 @@ mod tests {
             thumb_count >= 1,
             "expected at least 1 row thumb, got {thumb_count}"
         );
+    }
+
+    // --- expand_tabs tests ---
+
+    #[test]
+    fn expand_tabs_no_tabs() {
+        let result = expand_tabs("hello", 4);
+        assert_eq!(result.text, "hello");
+        assert_eq!(result.char_to_col, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn expand_tabs_single_tab_at_start() {
+        let result = expand_tabs("\thello", 4);
+        assert_eq!(result.text, "    hello");
+        // \t at char 0 -> col 0, h at char 1 -> col 4
+        assert_eq!(result.char_to_col[0], 0); // \t
+        assert_eq!(result.char_to_col[1], 4); // h
+        assert_eq!(result.char_to_col[6], 9); // sentinel
+    }
+
+    #[test]
+    fn expand_tabs_tab_after_text() {
+        // "ab\tc" with tab_size=4: "ab" takes cols 0,1; tab at col 2 expands to 2 spaces (next stop at 4)
+        let result = expand_tabs("ab\tc", 4);
+        assert_eq!(result.text, "ab  c");
+        assert_eq!(result.char_to_col[0], 0); // a
+        assert_eq!(result.char_to_col[1], 1); // b
+        assert_eq!(result.char_to_col[2], 2); // \t
+        assert_eq!(result.char_to_col[3], 4); // c
+    }
+
+    #[test]
+    fn expand_tabs_multiple_tabs() {
+        let result = expand_tabs("\t\thello", 4);
+        assert_eq!(result.text, "        hello");
+        assert_eq!(result.char_to_col[0], 0);  // first \t
+        assert_eq!(result.char_to_col[1], 4);  // second \t
+        assert_eq!(result.char_to_col[2], 8);  // h
+    }
+
+    #[test]
+    fn expand_tabs_tab_size_2() {
+        let result = expand_tabs("\thello", 2);
+        assert_eq!(result.text, "  hello");
+        assert_eq!(result.char_to_col[1], 2); // h starts at col 2
+    }
+
+    #[test]
+    fn expand_tabs_empty_string() {
+        let result = expand_tabs("", 4);
+        assert_eq!(result.text, "");
+        assert_eq!(result.char_to_col, vec![0]); // just the sentinel
+    }
+
+    #[test]
+    fn char_to_display_col_basic() {
+        let mapping = vec![0, 4, 8, 9, 10, 11]; // 5 chars + sentinel
+        assert_eq!(char_to_display_col(&mapping, 0), 0);
+        assert_eq!(char_to_display_col(&mapping, 1), 4);
+        assert_eq!(char_to_display_col(&mapping, 5), 11); // sentinel
+        assert_eq!(char_to_display_col(&mapping, 100), 11); // beyond -> sentinel
     }
 }

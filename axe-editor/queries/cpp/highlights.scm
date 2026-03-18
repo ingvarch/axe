@@ -1,3 +1,7 @@
+; Catch-all identifiers (lowest priority — specific patterns below override these)
+(identifier) @variable
+(field_identifier) @property
+
 ; Keywords
 [
   "break"
@@ -87,9 +91,7 @@
 
 (this) @variable.builtin
 
-; Variables
-(identifier) @variable
-(field_identifier) @property
+; Variables (catch-alls moved to top of file)
 
 ; Operators
 [

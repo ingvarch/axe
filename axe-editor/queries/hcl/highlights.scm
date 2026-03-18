@@ -1,3 +1,6 @@
+; Catch-all identifiers (lowest priority — specific patterns below override these)
+(identifier) @variable
+
 ; Keywords
 [
   "if"
@@ -53,8 +56,7 @@
 ((identifier) @type.builtin
   (#match? @type.builtin "^(bool|string|number|object|tuple|list|map|set|any)$"))
 
-; Variables
-(identifier) @variable
+; Variables (catch-all moved to top of file)
 
 ; Operators
 [

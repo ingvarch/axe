@@ -1,3 +1,7 @@
+; Catch-all identifiers (lowest priority — specific patterns below override these)
+(identifier) @variable
+(field_identifier) @property
+
 ; Keywords
 [
   "as"
@@ -68,8 +72,6 @@
 (boolean_literal) @constant.builtin
 
 ; Variables
-(identifier) @variable
-(field_identifier) @property
 (shorthand_field_initializer (identifier) @variable)
 
 ; Operators

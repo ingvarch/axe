@@ -191,61 +191,65 @@ impl HighlightState {
         let root = tree.root_node();
         let text = RopeTextProvider(rope);
 
-        let mut matches = cursor.matches(&self.query, root, &text);
-        while let Some(qmatch) = {
-            matches.advance();
-            matches.get()
+        // Use captures() instead of matches() so results are sorted by the
+        // captured node's start byte and pattern index. This ensures that
+        // specific patterns (e.g. function names) defined after catch-all
+        // patterns (e.g. identifier → variable) override them correctly
+        // with a last-one-wins strategy in the renderer.
+        let mut captures = cursor.captures(&self.query, root, &text);
+        while let Some((qmatch, capture_idx)) = {
+            captures.advance();
+            captures.get()
         } {
-            for capture in qmatch.captures {
-                let kind = match self.capture_map.get(capture.index as usize) {
-                    Some(Some(k)) => *k,
-                    _ => continue,
+            let capture = &qmatch.captures[*capture_idx];
+            let kind = match self.capture_map.get(capture.index as usize) {
+                Some(Some(k)) => *k,
+                _ => continue,
+            };
+
+            let node = capture.node;
+            let node_start = node.start_position();
+            let node_end = node.end_position();
+
+            // Map node rows to output line indices.
+            for row in node_start.row..=node_end.row {
+                if row < start_line || row >= clamped_end {
+                    continue;
+                }
+                let line_idx = row - start_line;
+
+                let line_start_byte = rope.line_to_byte(row);
+                let line_start_char = rope.byte_to_char(line_start_byte);
+
+                let col_start_byte = if row == node_start.row {
+                    node.start_byte().saturating_sub(line_start_byte)
+                } else {
+                    0
+                };
+                let line_end_byte = if row + 1 < total_lines {
+                    rope.line_to_byte(row + 1)
+                } else {
+                    rope.len_bytes()
+                };
+                let col_end_byte = if row == node_end.row {
+                    node.end_byte().saturating_sub(line_start_byte)
+                } else {
+                    line_end_byte.saturating_sub(line_start_byte)
                 };
 
-                let node = capture.node;
-                let node_start = node.start_position();
-                let node_end = node.end_position();
+                // Convert byte offsets within line to char offsets.
+                let col_start_char =
+                    rope.byte_to_char(line_start_byte + col_start_byte) - line_start_char;
+                let col_end_char = rope
+                    .byte_to_char((line_start_byte + col_end_byte).min(rope.len_bytes()))
+                    - line_start_char;
 
-                // Map node rows to output line indices.
-                for row in node_start.row..=node_end.row {
-                    if row < start_line || row >= clamped_end {
-                        continue;
-                    }
-                    let line_idx = row - start_line;
-
-                    let line_start_byte = rope.line_to_byte(row);
-                    let line_start_char = rope.byte_to_char(line_start_byte);
-
-                    let col_start_byte = if row == node_start.row {
-                        node.start_byte().saturating_sub(line_start_byte)
-                    } else {
-                        0
-                    };
-                    let line_end_byte = if row + 1 < total_lines {
-                        rope.line_to_byte(row + 1)
-                    } else {
-                        rope.len_bytes()
-                    };
-                    let col_end_byte = if row == node_end.row {
-                        node.end_byte().saturating_sub(line_start_byte)
-                    } else {
-                        line_end_byte.saturating_sub(line_start_byte)
-                    };
-
-                    // Convert byte offsets within line to char offsets.
-                    let col_start_char =
-                        rope.byte_to_char(line_start_byte + col_start_byte) - line_start_char;
-                    let col_end_char = rope
-                        .byte_to_char((line_start_byte + col_end_byte).min(rope.len_bytes()))
-                        - line_start_char;
-
-                    if col_start_char < col_end_char {
-                        result[line_idx].push(HighlightSpan {
-                            col_start: col_start_char,
-                            col_end: col_end_char,
-                            kind,
-                        });
-                    }
+                if col_start_char < col_end_char {
+                    result[line_idx].push(HighlightSpan {
+                        col_start: col_start_char,
+                        col_end: col_end_char,
+                        kind,
+                    });
                 }
             }
         }
@@ -570,6 +574,76 @@ mod tests {
             spans[0]
         );
         assert!(has_number, "expected number highlight, got: {:?}", spans[0]);
+    }
+
+    #[test]
+    fn highlights_go_function_name_not_variable() {
+        // Go function declarations should highlight the name as Function,
+        // not as Variable (the catch-all identifier pattern must not override).
+        let mut state = HighlightState::new("go").unwrap();
+        let rope = Rope::from_str("func main() {}\n");
+        state.parse_full(&rope);
+        let spans = state.highlights_for_range(0, 1, &rope);
+
+        // "func" at col 0..4 should be Keyword.
+        let has_keyword = spans[0]
+            .iter()
+            .any(|s| s.kind == HighlightKind::Keyword && s.col_start == 0 && s.col_end == 4);
+        assert!(
+            has_keyword,
+            "expected 'func' to be a keyword, got: {:?}",
+            spans[0]
+        );
+
+        // "main" at col 5..9 — the LAST span covering this range must be Function.
+        let last_span_for_main = spans[0]
+            .iter()
+            .filter(|s| s.col_start == 5 && s.col_end == 9)
+            .last();
+        assert_eq!(
+            last_span_for_main.map(|s| s.kind),
+            Some(HighlightKind::Function),
+            "expected 'main' final highlight to be Function, got: {:?}",
+            spans[0]
+        );
+    }
+
+    #[test]
+    fn highlights_go_type_not_variable() {
+        // Type identifiers in Go should be highlighted as Type, not Variable.
+        let mut state = HighlightState::new("go").unwrap();
+        let rope = Rope::from_str("type Foo struct {}\n");
+        state.parse_full(&rope);
+        let spans = state.highlights_for_range(0, 1, &rope);
+
+        // "Foo" at col 5..8 — the LAST span must be Type.
+        let last_span_for_foo = spans[0]
+            .iter()
+            .filter(|s| s.col_start == 5 && s.col_end == 8)
+            .last();
+        assert_eq!(
+            last_span_for_foo.map(|s| s.kind),
+            Some(HighlightKind::Type),
+            "expected 'Foo' final highlight to be Type, got: {:?}",
+            spans[0]
+        );
+    }
+
+    #[test]
+    fn highlights_go_call_expression_as_function() {
+        // Call expressions should highlight the callee as Function.
+        let mut state = HighlightState::new("go").unwrap();
+        let rope = Rope::from_str("package main\nfunc main() { println(\"hi\") }\n");
+        state.parse_full(&rope);
+        let spans = state.highlights_for_range(1, 2, &rope);
+
+        // "println" should have Function as the last span.
+        let has_function = spans[0].iter().any(|s| s.kind == HighlightKind::Function);
+        assert!(
+            has_function,
+            "expected a function highlight for call expression, got: {:?}",
+            spans[0]
+        );
     }
 
     #[test]
