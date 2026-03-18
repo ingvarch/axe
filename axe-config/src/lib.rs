@@ -238,6 +238,14 @@ pub fn default_lsp_configs() -> HashMap<String, LspServerConfig> {
         },
     );
     configs.insert(
+        "terraform".to_string(),
+        LspServerConfig {
+            command: "terraform-ls".to_string(),
+            args: vec!["serve".to_string()],
+            init_options: None,
+        },
+    );
+    configs.insert(
         "shellscript".to_string(),
         LspServerConfig {
             command: "bash-language-server".to_string(),
@@ -643,8 +651,11 @@ args = ["--stdio"]
         assert!(configs.contains_key("lua"));
         assert!(configs.contains_key("toml"));
         assert!(configs.contains_key("shellscript"));
+        assert!(configs.contains_key("terraform"));
         assert_eq!(configs["rust"].command, "rust-analyzer");
         assert_eq!(configs["go"].command, "gopls");
+        assert_eq!(configs["terraform"].command, "terraform-ls");
+        assert_eq!(configs["terraform"].args, vec!["serve"]);
     }
 
     #[test]

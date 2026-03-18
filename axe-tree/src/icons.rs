@@ -194,6 +194,11 @@ fn icon_for_extension(ext: &str) -> FileIcon {
             icon: " ",
             color: Color::Rgb(236, 145, 30),
         },
+        // Terraform / HCL
+        "tf" | "tfvars" | "hcl" => FileIcon {
+            icon: "󱁢 ",
+            color: Color::Rgb(99, 72, 188),
+        },
         // Shell
         "sh" | "bash" | "zsh" | "fish" => FileIcon {
             icon: " ",

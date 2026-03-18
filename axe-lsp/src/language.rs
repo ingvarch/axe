@@ -21,6 +21,7 @@ pub fn language_id_for_path(path: &Path) -> Option<&'static str> {
         "html" => Some("html"),
         "css" => Some("css"),
         "sh" | "bash" | "zsh" => Some("shellscript"),
+        "tf" | "tfvars" | "hcl" => Some("terraform"),
         "lua" => Some("lua"),
         "java" => Some("java"),
         "rb" => Some("ruby"),
@@ -121,6 +122,22 @@ mod tests {
         assert_eq!(language_id_for_path(Path::new("init.lua")), Some("lua"));
         assert_eq!(language_id_for_path(Path::new("Main.java")), Some("java"));
         assert_eq!(language_id_for_path(Path::new("app.rb")), Some("ruby"));
+    }
+
+    #[test]
+    fn terraform_extensions() {
+        assert_eq!(
+            language_id_for_path(Path::new("main.tf")),
+            Some("terraform")
+        );
+        assert_eq!(
+            language_id_for_path(Path::new("variables.tfvars")),
+            Some("terraform")
+        );
+        assert_eq!(
+            language_id_for_path(Path::new("terragrunt.hcl")),
+            Some("terraform")
+        );
     }
 
     #[test]

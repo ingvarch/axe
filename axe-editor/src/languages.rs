@@ -71,6 +71,10 @@ pub fn language_for_extension(ext: &str) -> Option<LanguageConfig> {
             tree_sitter_md::LANGUAGE.into(),
             include_str!("../queries/markdown/highlights.scm"),
         ),
+        "tf" | "tfvars" | "hcl" => (
+            tree_sitter_hcl::LANGUAGE.into(),
+            include_str!("../queries/hcl/highlights.scm"),
+        ),
         _ => return None,
     };
     Some(LanguageConfig {
@@ -170,6 +174,15 @@ mod tests {
     }
 
     #[test]
+    fn terraform_extensions_return_config() {
+        for ext in &["tf", "tfvars", "hcl"] {
+            let config = language_for_extension(ext);
+            assert!(config.is_some(), "{ext} should be supported");
+            assert!(!config.unwrap().highlights_query.is_empty());
+        }
+    }
+
+    #[test]
     fn unknown_extension_returns_none() {
         assert!(language_for_extension("xyz").is_none());
         assert!(language_for_extension("").is_none());
@@ -181,7 +194,7 @@ mod tests {
         // Verify that all bundled queries parse without errors.
         let extensions = [
             "rs", "py", "js", "ts", "tsx", "go", "c", "cpp", "html", "css", "json", "toml", "sh",
-            "md",
+            "md", "tf", "tfvars", "hcl",
         ];
         for ext in extensions {
             let config =

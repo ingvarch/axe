@@ -251,6 +251,8 @@ impl EditorBuffer {
             "html" => "HTML",
             "css" => "CSS",
             "sh" | "bash" | "zsh" | "fish" => "Shell",
+            "tf" | "tfvars" => "Terraform",
+            "hcl" => "HCL",
             "sql" => "SQL",
             _ => "Plain Text",
         }
