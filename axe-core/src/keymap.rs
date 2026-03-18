@@ -183,6 +183,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "go_to_definition" => Some(Command::GoToDefinition),
         "find_references" => Some(Command::FindReferences),
         "show_hover" => Some(Command::ShowHover),
+        "format_document" => Some(Command::FormatDocument),
         _ => None,
     }
 }
@@ -418,6 +419,18 @@ impl KeymapResolver {
             Command::ShowHover,
         );
         resolver.bind(KeyModifiers::NONE, KeyCode::F(4), Command::ShowHover);
+
+        // Format document.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('I'),
+            Command::FormatDocument,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('i'),
+            Command::FormatDocument,
+        );
 
         // Diagnostic navigation.
         resolver.bind(
@@ -1237,6 +1250,34 @@ mod tests {
         let resolver = KeymapResolver::with_defaults();
         // Quit (not RequestQuit) has no direct binding.
         assert_eq!(resolver.binding_for(&Command::Quit), None);
+    }
+
+    #[test]
+    fn ctrl_shift_i_format_document() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('I'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::FormatDocument));
+    }
+
+    #[test]
+    fn ctrl_shift_lowercase_i_format_document() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::FormatDocument));
+    }
+
+    #[test]
+    fn command_from_str_format_document() {
+        assert_eq!(
+            command_from_str("format_document"),
+            Some(Command::FormatDocument)
+        );
     }
 
     #[test]

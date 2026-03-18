@@ -221,6 +221,12 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::Formatting) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::FormattingResponse { result });
+                                }
+                                continue;
+                            }
                             None => {}
                         }
                     }
@@ -259,6 +265,12 @@ impl LspManager {
                             Some(PendingRequestKind::Hover) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::HoverResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::Formatting) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::FormattingResponse { result });
                                 }
                                 continue;
                             }
@@ -402,6 +414,51 @@ impl LspManager {
 
         client.send_request("textDocument/hover", params, PendingRequestKind::Hover)?;
         Ok(())
+    }
+
+    /// Sends a `textDocument/formatting` request for the given file.
+    ///
+    /// Returns `Ok(true)` if the request was sent, `Ok(false)` if formatting
+    /// is not supported or no client is available.
+    pub fn request_formatting(
+        &mut self,
+        path: &Path,
+        tab_size: u32,
+        insert_spaces: bool,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        if !client.supports_formatting() {
+            return Ok(false);
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "options": {
+                "tabSize": tab_size,
+                "insertSpaces": insert_spaces,
+            }
+        });
+
+        client.send_request(
+            "textDocument/formatting",
+            params,
+            PendingRequestKind::Formatting,
+        )?;
+        Ok(true)
     }
 
     /// Shuts down all active LSP servers.
@@ -600,6 +657,15 @@ mod tests {
         let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
         let result = manager.request_hover(Path::new("/tmp/test.rs"), 0, 0);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn request_formatting_no_client_is_noop() {
+        let dir = std::env::temp_dir();
+        let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
+        let result = manager.request_formatting(Path::new("/tmp/test.rs"), 4, true);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
     }
 
     #[test]

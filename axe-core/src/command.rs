@@ -218,6 +218,8 @@ pub enum Command {
     FindReferences,
     /// Show hover information for the symbol under the cursor.
     ShowHover,
+    /// Format the current document using the LSP formatter.
+    FormatDocument,
 }
 
 #[cfg(test)]
@@ -354,6 +356,7 @@ mod tests {
             Command::GoToDefinition,
             Command::FindReferences,
             Command::ShowHover,
+            Command::FormatDocument,
         ];
 
         for (i, a) in variants.iter().enumerate() {

@@ -666,7 +666,7 @@ Show type/documentation info when hovering over symbols.
 
 ---
 
-### Task 7.6 — LSP: Format on Save
+### Task 7.6 — LSP: Format on Save ✅
 
 Auto-format the document on save using the LSP server.
 

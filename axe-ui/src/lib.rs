@@ -267,6 +267,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("F12", "Go to definition"),
     ("Shift+F12", "Find references"),
     ("Ctrl+Shift+K / F4", "Show hover info"),
+    ("Ctrl+Shift+I", "Format document"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),

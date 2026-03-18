@@ -17,6 +17,7 @@ pub enum PendingRequestKind {
     Definition,
     References,
     Hover,
+    Formatting,
 }
 
 /// Events sent from the LSP reader thread to the main thread.
@@ -48,6 +49,10 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/hover request.
     HoverResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/formatting request.
+    FormattingResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server process crashed or exited unexpectedly.
@@ -267,6 +272,14 @@ impl LspClient {
         self.initialized
     }
 
+    /// Returns whether the server supports document formatting.
+    pub fn supports_formatting(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.document_formatting_provider.as_ref())
+            .is_some()
+    }
+
     /// Returns the language ID this client handles.
     pub fn language_id(&self) -> &str {
         &self.language_id
@@ -355,6 +368,9 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 "hover": {
                     "dynamicRegistration": false,
                     "contentFormat": ["markdown", "plaintext"],
+                },
+                "formatting": {
+                    "dynamicRegistration": false,
                 },
             },
         },
@@ -546,6 +562,22 @@ mod tests {
             }
             _ => panic!("Expected Response event"),
         }
+    }
+
+    #[test]
+    fn pending_request_kind_includes_formatting() {
+        let mut pending: HashMap<i64, PendingRequestKind> = HashMap::new();
+        pending.insert(1, PendingRequestKind::Formatting);
+        assert_eq!(pending[&1], PendingRequestKind::Formatting);
+    }
+
+    #[test]
+    fn initialize_params_includes_formatting() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let formatting = &params["capabilities"]["textDocument"]["formatting"];
+        assert!(formatting.is_object());
+        assert_eq!(formatting["dynamicRegistration"], false);
     }
 
     #[test]

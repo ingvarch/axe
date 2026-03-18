@@ -322,6 +322,8 @@ pub struct AppState {
     pub hover_info: Option<crate::hover::HoverInfo>,
     /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
     hover_mouse_state: Option<(Instant, usize, usize)>,
+    /// Whether a format-on-save operation is pending (waiting for LSP formatting response).
+    pending_format_save: bool,
 }
 
 impl AppState {
@@ -370,6 +372,7 @@ impl AppState {
             location_list: None,
             hover_info: None,
             hover_mouse_state: None,
+            pending_format_save: false,
         }
     }
 
@@ -586,6 +589,23 @@ impl AppState {
                 axe_lsp::LspEvent::HoverResponse { result: Err(e) } => {
                     log::warn!("LSP hover error: {}", e.message);
                 }
+                axe_lsp::LspEvent::FormattingResponse {
+                    result: Ok(ref value),
+                } => {
+                    self.apply_formatting_edits(value);
+                    if self.pending_format_save {
+                        self.pending_format_save = false;
+                        self.notify_lsp_change();
+                        self.save_active_buffer();
+                    }
+                }
+                axe_lsp::LspEvent::FormattingResponse { result: Err(e) } => {
+                    log::warn!("LSP formatting error: {}", e.message);
+                    if self.pending_format_save {
+                        self.pending_format_save = false;
+                        self.save_active_buffer(); // Save anyway on error.
+                    }
+                }
             }
         }
     }
@@ -774,6 +794,102 @@ impl AppState {
                         log::warn!("LSP hover request failed: {e}");
                     }
                 }
+            }
+        }
+    }
+
+    /// Saves the active buffer to disk and notifies the LSP.
+    fn save_active_buffer(&mut self) {
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            if let Err(e) = buf.save_to_file() {
+                log::warn!("Save failed: {e}");
+            }
+        }
+        // Notify LSP about save.
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    if let Err(e) = lsp.file_saved(&path) {
+                        log::warn!("LSP didSave failed: {e}");
+                    }
+                }
+            }
+        }
+        self.last_edit_time = None;
+    }
+
+    // IMPACT ANALYSIS — request_format_for_active_buffer
+    // Parents: Command::FormatDocument, Command::EditorSave (when format_on_save)
+    // Children: LspManager::request_formatting() sends textDocument/formatting
+    // Siblings: ensure_lsp_open_for_active_buffer (same pattern as request_hover)
+    // Risk: Returns false if LSP not available — callers must handle gracefully
+
+    /// Sends a formatting request to the LSP for the active buffer.
+    ///
+    /// Returns `true` if the request was sent, `false` if formatting is
+    /// unavailable (no LSP, no buffer, or server doesn't support formatting).
+    fn request_format_for_active_buffer(&mut self) -> bool {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let tab_size = self.config.editor.tab_size as u32;
+                    let insert_spaces = self.config.editor.insert_spaces;
+                    match lsp.request_formatting(&path, tab_size, insert_spaces) {
+                        Ok(sent) => return sent,
+                        Err(e) => {
+                            log::warn!("LSP formatting request failed: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // IMPACT ANALYSIS — apply_formatting_edits
+    // Parents: poll_lsp() FormattingResponse handler
+    // Children: EditorBuffer::apply_text_edit() modifies rope content
+    // Siblings: Selection (cleared by apply_text_edit), cursor (repositioned),
+    //           diagnostics (shifted by LSP after didChange)
+    // Risk: Edits must be applied in reverse order to preserve line/col offsets
+
+    /// Applies LSP formatting text edits to the active buffer.
+    ///
+    /// Parses `TextEdit[]` from the response value, sorts in reverse document
+    /// order (end position descending), and applies each edit.
+    fn apply_formatting_edits(&mut self, value: &serde_json::Value) {
+        let Some(edits) = value.as_array() else {
+            return;
+        };
+
+        // Collect and sort edits in reverse document order so earlier edits
+        // don't invalidate the positions of later ones.
+        let mut parsed_edits: Vec<(usize, usize, usize, usize, String)> = edits
+            .iter()
+            .filter_map(|edit| {
+                let range = edit.get("range")?;
+                let start = range.get("start")?;
+                let end = range.get("end")?;
+                let new_text = edit.get("newText")?.as_str()?.to_string();
+                Some((
+                    start.get("line")?.as_u64()? as usize,
+                    start.get("character")?.as_u64()? as usize,
+                    end.get("line")?.as_u64()? as usize,
+                    end.get("character")?.as_u64()? as usize,
+                    new_text,
+                ))
+            })
+            .collect();
+
+        // Sort by end position descending (reverse document order).
+        parsed_edits.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.3.cmp(&a.3)));
+
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            for (start_line, start_col, end_line, end_col, new_text) in parsed_edits {
+                buf.apply_text_edit(start_line, start_col, end_line, end_col, &new_text);
             }
         }
     }
@@ -1631,24 +1747,21 @@ impl AppState {
                 self.last_edit_time = Some(Instant::now());
                 self.notify_lsp_change();
             }
+            // IMPACT ANALYSIS — EditorSave with format-on-save
+            // Parents: KeyEvent → Ctrl+S → keymap → this command; also autosave
+            // Children: save_active_buffer() writes to disk, notifies LSP didSave
+            // Siblings: pending_format_save flag coordinates with poll_lsp FormattingResponse
+            // Risk: Must not lose data if LSP formatting fails — save anyway on error
             Command::EditorSave => {
-                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                    if let Err(e) = buf.save_to_file() {
-                        log::warn!("Save failed: {e}");
+                if self.config.editor.format_on_save {
+                    if self.request_format_for_active_buffer() {
+                        self.pending_format_save = true;
+                    } else {
+                        self.save_active_buffer();
                     }
+                } else {
+                    self.save_active_buffer();
                 }
-                // Notify LSP about save.
-                if let Some(ref mut lsp) = self.lsp_manager {
-                    if let Some(buf) = self.buffer_manager.active_buffer() {
-                        if let Some(path) = buf.path() {
-                            let path = path.to_path_buf();
-                            if let Err(e) = lsp.file_saved(&path) {
-                                log::warn!("LSP didSave failed: {e}");
-                            }
-                        }
-                    }
-                }
-                self.last_edit_time = None;
             }
             // IMPACT ANALYSIS — EditorUndo / EditorRedo
             // Parents: KeyEvent → Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z → keymap → these commands
@@ -1897,6 +2010,11 @@ impl AppState {
             }
             Command::ShowHover => {
                 self.request_hover();
+            }
+            Command::FormatDocument => {
+                if !self.request_format_for_active_buffer() {
+                    self.set_status_message("Formatting not available".to_string());
+                }
             }
         }
         // Auto-promote preview buffer if user started editing it.
@@ -4042,6 +4160,124 @@ mod tests {
         let dir = tempfile::tempdir().expect("should create temp dir");
         let app = AppState::new_with_root(dir.path().to_path_buf());
         assert!(app.lsp_manager.is_some());
+    }
+
+    // --- Format on save tests ---
+
+    #[test]
+    fn format_document_without_lsp_shows_status() {
+        let mut app = AppState::new();
+        assert!(app.status_message.is_none());
+        app.execute(Command::FormatDocument);
+        assert!(
+            app.status_message.is_some(),
+            "FormatDocument without LSP should show status message"
+        );
+        let (msg, _) = app.status_message.as_ref().unwrap();
+        assert!(
+            msg.contains("not available"),
+            "Status message should indicate formatting not available, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn editor_save_without_format_on_save_saves_directly() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, b"data").unwrap();
+        std::io::Write::flush(&mut tmp).unwrap();
+
+        let mut app = AppState::new();
+        app.config.editor.format_on_save = false;
+        app.buffer_manager.open_file(tmp.path()).expect("open file");
+        app.focus = FocusTarget::Editor;
+
+        app.execute(Command::EditorInsertChar('x'));
+        assert!(app.buffer_manager.active_buffer().unwrap().modified);
+
+        app.execute(Command::EditorSave);
+        assert!(
+            !app.buffer_manager.active_buffer().unwrap().modified,
+            "Save without format_on_save should save directly"
+        );
+        assert!(!app.pending_format_save);
+    }
+
+    #[test]
+    fn apply_formatting_edits_empty_array_noop() {
+        let mut app = AppState::new();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn main() {}").expect("write file");
+        app.buffer_manager.open_file(&file).expect("open");
+
+        let value = serde_json::json!([]);
+        app.apply_formatting_edits(&value);
+        assert_eq!(
+            app.buffer_manager.active_buffer().unwrap().content_string(),
+            "fn main() {}"
+        );
+    }
+
+    #[test]
+    fn apply_formatting_edits_single_edit() {
+        let mut app = AppState::new();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn  main() {}").expect("write file");
+        app.buffer_manager.open_file(&file).expect("open");
+
+        // Replace double space with single space.
+        let value = serde_json::json!([{
+            "range": {
+                "start": {"line": 0, "character": 2},
+                "end": {"line": 0, "character": 4}
+            },
+            "newText": " "
+        }]);
+        app.apply_formatting_edits(&value);
+        assert_eq!(
+            app.buffer_manager.active_buffer().unwrap().content_string(),
+            "fn main() {}"
+        );
+    }
+
+    #[test]
+    fn apply_formatting_edits_reverse_order() {
+        let mut app = AppState::new();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "aa  bb  cc").expect("write file");
+        app.buffer_manager.open_file(&file).expect("open");
+
+        // Two edits: replace "  " at positions 2-4 and 6-8 with " ".
+        // Should be applied in reverse order to preserve positions.
+        let value = serde_json::json!([
+            {
+                "range": {
+                    "start": {"line": 0, "character": 2},
+                    "end": {"line": 0, "character": 4}
+                },
+                "newText": " "
+            },
+            {
+                "range": {
+                    "start": {"line": 0, "character": 6},
+                    "end": {"line": 0, "character": 8}
+                },
+                "newText": " "
+            }
+        ]);
+        app.apply_formatting_edits(&value);
+        assert_eq!(
+            app.buffer_manager.active_buffer().unwrap().content_string(),
+            "aa bb cc"
+        );
+    }
+
+    #[test]
+    fn pending_format_save_default_false() {
+        let app = AppState::new();
+        assert!(!app.pending_format_save);
     }
 
     // --- Terminal key interception tests ---
