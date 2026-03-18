@@ -28,6 +28,8 @@ const MIN_PANEL_PCT: u16 = 10;
 const MAX_PANEL_PCT: u16 = 90;
 /// Number of lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: i32 = 3;
+/// Number of columns to scroll per Shift+mouse wheel tick.
+const MOUSE_SCROLL_COLS: i32 = 6;
 /// How long a status message remains visible.
 const STATUS_MESSAGE_DURATION: Duration = Duration::from_secs(3);
 /// Maximum time between two clicks to register as a double-click.
@@ -2361,27 +2363,53 @@ impl AppState {
                 self.mouse_drag.border = None;
             }
             MouseEventKind::ScrollUp => {
-                if self.show_terminal
-                    && matches!(
-                        self.panel_at(mouse.column, mouse.row, screen_width, main_height),
-                        FocusTarget::Terminal(_)
-                    )
-                {
-                    self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
-                        MOUSE_SCROLL_LINES,
-                    ));
+                let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+                match self.panel_at(mouse.column, mouse.row, screen_width, main_height) {
+                    FocusTarget::Terminal(_) if self.show_terminal => {
+                        self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
+                            MOUSE_SCROLL_LINES,
+                        ));
+                    }
+                    FocusTarget::Editor if shift => {
+                        self.editor_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Editor => {
+                        self.editor_scroll(-MOUSE_SCROLL_LINES);
+                    }
+                    _ => {}
                 }
             }
             MouseEventKind::ScrollDown => {
-                if self.show_terminal
-                    && matches!(
-                        self.panel_at(mouse.column, mouse.row, screen_width, main_height),
-                        FocusTarget::Terminal(_)
-                    )
-                {
-                    self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
-                        -MOUSE_SCROLL_LINES,
-                    ));
+                let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+                match self.panel_at(mouse.column, mouse.row, screen_width, main_height) {
+                    FocusTarget::Terminal(_) if self.show_terminal => {
+                        self.terminal_scroll(alacritty_terminal::grid::Scroll::Delta(
+                            -MOUSE_SCROLL_LINES,
+                        ));
+                    }
+                    FocusTarget::Editor if shift => {
+                        self.editor_scroll_horizontal(MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Editor => {
+                        self.editor_scroll(MOUSE_SCROLL_LINES);
+                    }
+                    _ => {}
+                }
+            }
+            MouseEventKind::ScrollLeft => {
+                if matches!(
+                    self.panel_at(mouse.column, mouse.row, screen_width, main_height),
+                    FocusTarget::Editor
+                ) {
+                    self.editor_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                }
+            }
+            MouseEventKind::ScrollRight => {
+                if matches!(
+                    self.panel_at(mouse.column, mouse.row, screen_width, main_height),
+                    FocusTarget::Editor
+                ) {
+                    self.editor_scroll_horizontal(MOUSE_SCROLL_COLS);
                 }
             }
             _ => {}
@@ -2528,6 +2556,21 @@ impl AppState {
     fn terminal_scroll(&mut self, scroll: alacritty_terminal::grid::Scroll) {
         if let Some(ref mut mgr) = self.terminal_manager {
             mgr.scroll_active(scroll);
+        }
+    }
+
+    /// Scrolls the active editor buffer vertically by the given delta lines.
+    fn editor_scroll(&mut self, delta: i32) {
+        let (viewport_height, _) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            buf.scroll_by(delta, viewport_height);
+        }
+    }
+
+    /// Scrolls the active editor buffer horizontally by the given delta columns.
+    fn editor_scroll_horizontal(&mut self, delta: i32) {
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            buf.scroll_horizontally_by(delta);
         }
     }
 

@@ -150,6 +150,33 @@ impl EditorBuffer {
         self.content.len_lines()
     }
 
+    /// Scrolls the viewport by the given number of lines without moving the cursor.
+    ///
+    /// Positive delta scrolls down (later lines become visible),
+    /// negative scrolls up (earlier lines become visible).
+    /// Clamped to valid bounds.
+    pub fn scroll_by(&mut self, delta: i32, viewport_height: usize) {
+        let max_scroll = self.line_count().saturating_sub(viewport_height);
+        if delta > 0 {
+            self.scroll_row = (self.scroll_row + delta as usize).min(max_scroll);
+        } else {
+            self.scroll_row = self.scroll_row.saturating_sub((-delta) as usize);
+        }
+    }
+
+    /// Scrolls the viewport horizontally by the given number of columns
+    /// without moving the cursor.
+    ///
+    /// Positive delta scrolls right, negative scrolls left.
+    /// Clamped to zero on the left; no upper bound (long lines may extend arbitrarily).
+    pub fn scroll_horizontally_by(&mut self, delta: i32) {
+        if delta > 0 {
+            self.scroll_col += delta as usize;
+        } else {
+            self.scroll_col = self.scroll_col.saturating_sub((-delta) as usize);
+        }
+    }
+
     /// Returns the file name (without directory) if a path is set.
     pub fn file_name(&self) -> Option<&str> {
         self.path
@@ -2768,5 +2795,103 @@ mod tests {
         assert_eq!(buf.content_string(), "bye");
         buf.undo();
         assert_eq!(buf.content_string(), "hello");
+    }
+
+    // --- scroll_by tests ---
+
+    /// Helper: creates a buffer with `n` lines of content.
+    fn buffer_with_lines(n: usize) -> EditorBuffer {
+        let mut buf = EditorBuffer::new();
+        let text: String = (0..n).map(|i| format!("line {i}\n")).collect();
+        buf.insert_text(&text);
+        buf
+    }
+
+    #[test]
+    fn scroll_by_positive_scrolls_down() {
+        let mut buf = buffer_with_lines(100);
+        buf.scroll_by(5, 20);
+        assert_eq!(buf.scroll_row, 5);
+    }
+
+    #[test]
+    fn scroll_by_negative_scrolls_up() {
+        let mut buf = buffer_with_lines(100);
+        buf.scroll_row = 10;
+        buf.scroll_by(-3, 20);
+        assert_eq!(buf.scroll_row, 7);
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_zero() {
+        let mut buf = buffer_with_lines(100);
+        buf.scroll_row = 2;
+        buf.scroll_by(-10, 20);
+        assert_eq!(buf.scroll_row, 0);
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_max() {
+        let mut buf = buffer_with_lines(50);
+        let viewport_height = 20;
+        buf.scroll_by(100, viewport_height);
+        // Max scroll = line_count - viewport_height
+        let max = buf.line_count().saturating_sub(viewport_height);
+        assert_eq!(buf.scroll_row, max);
+    }
+
+    #[test]
+    fn scroll_by_no_op_for_small_file() {
+        let mut buf = buffer_with_lines(5);
+        let viewport_height = 20;
+        buf.scroll_by(10, viewport_height);
+        assert_eq!(buf.scroll_row, 0);
+    }
+
+    #[test]
+    fn scroll_by_does_not_move_cursor() {
+        let mut buf = buffer_with_lines(100);
+        buf.cursor.row = 5;
+        buf.cursor.col = 3;
+        buf.scroll_by(10, 20);
+        assert_eq!(buf.cursor.row, 5);
+        assert_eq!(buf.cursor.col, 3);
+    }
+
+    // --- scroll_horizontally_by tests ---
+
+    #[test]
+    fn scroll_horizontally_positive_scrolls_right() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("a]".repeat(100).as_str());
+        buf.scroll_horizontally_by(5);
+        assert_eq!(buf.scroll_col, 5);
+    }
+
+    #[test]
+    fn scroll_horizontally_negative_scrolls_left() {
+        let mut buf = EditorBuffer::new();
+        buf.scroll_col = 10;
+        buf.scroll_horizontally_by(-3);
+        assert_eq!(buf.scroll_col, 7);
+    }
+
+    #[test]
+    fn scroll_horizontally_clamps_to_zero() {
+        let mut buf = EditorBuffer::new();
+        buf.scroll_col = 2;
+        buf.scroll_horizontally_by(-10);
+        assert_eq!(buf.scroll_col, 0);
+    }
+
+    #[test]
+    fn scroll_horizontally_does_not_move_cursor() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text(&"x".repeat(200));
+        buf.cursor.row = 0;
+        buf.cursor.col = 5;
+        buf.scroll_horizontally_by(10);
+        assert_eq!(buf.cursor.row, 0);
+        assert_eq!(buf.cursor.col, 5);
     }
 }
