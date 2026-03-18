@@ -16,11 +16,15 @@ tab_bar_bg = "#eaeaeb"
 tab_active_bg = "#fafafa"
 tab_active_fg = "#383a42"
 tab_inactive_fg = "#696c77"
+tree_modified_fg = "#986801"
 
 [gutter]
 bg = "#f0f0f0"
 line_number = "#d3d3d3"
 line_number_active = "#383a42"
+diff_added = "#50a14f"
+diff_modified = "#4078f2"
+diff_deleted = "#e45649"
 
 [editor]
 cursor_line_bg = "#f2f2f2"

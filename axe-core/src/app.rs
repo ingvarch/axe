@@ -339,6 +339,8 @@ pub struct AppState {
     pub git_branch: Option<String>,
     /// Timestamp of last git branch check, for periodic refresh.
     last_git_branch_check: Option<Instant>,
+    /// Set of absolute file paths with uncommitted changes (modified, new, deleted).
+    pub git_modified_files: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -393,6 +395,7 @@ impl AppState {
             build_version: String::new(),
             git_branch: None,
             last_git_branch_check: None,
+            git_modified_files: std::collections::HashSet::new(),
         }
     }
 
@@ -444,6 +447,7 @@ impl AppState {
         };
 
         let git_branch = crate::git::current_branch(&root);
+        let git_modified_files = crate::git::modified_files(&root);
 
         Self {
             file_tree,
@@ -455,6 +459,7 @@ impl AppState {
             lsp_manager,
             git_branch,
             last_git_branch_check: Some(Instant::now()),
+            git_modified_files,
             ..Self::new()
         }
     }
@@ -843,6 +848,10 @@ impl AppState {
         self.last_edit_time = None;
         // Refresh git branch after save (branch may change after file operations).
         self.force_refresh_git_branch();
+        // Recalculate git diff hunks for the saved buffer.
+        self.refresh_active_buffer_diff_hunks();
+        // Refresh the set of modified files for the tree panel.
+        self.refresh_git_modified_files();
     }
 
     // IMPACT ANALYSIS — request_format_for_active_buffer
@@ -1669,6 +1678,8 @@ impl AppState {
                             }
                         }
                     }
+                    // Compute initial git diff hunks.
+                    self.refresh_active_buffer_diff_hunks();
                 }
                 Err(e) => log::warn!("Failed to open file: {e}"),
             },
@@ -1677,7 +1688,10 @@ impl AppState {
             // Children: BufferManager opens preview buffer (replaces previous preview)
             // Siblings: Tree state (unchanged), terminal (unchanged)
             Command::PreviewFile(path) => match self.buffer_manager.open_file_as_preview(&path) {
-                Ok(()) => self.focus = FocusTarget::Editor,
+                Ok(()) => {
+                    self.focus = FocusTarget::Editor;
+                    self.refresh_active_buffer_diff_hunks();
+                }
                 Err(e) => log::warn!("Failed to preview file: {e}"),
             },
             // IMPACT ANALYSIS — Editor cursor movement commands
@@ -2715,6 +2729,25 @@ impl AppState {
             self.git_branch = crate::git::current_branch(root);
         }
         self.last_git_branch_check = Some(Instant::now());
+    }
+
+    /// Refreshes the set of modified files for the tree panel.
+    fn refresh_git_modified_files(&mut self) {
+        if let Some(ref root) = self.project_root {
+            self.git_modified_files = crate::git::modified_files(root);
+        }
+    }
+
+    /// Recalculates git diff hunks for the active buffer.
+    fn refresh_active_buffer_diff_hunks(&mut self) {
+        if let Some(ref root) = self.project_root {
+            if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                if let Some(path) = buf.path().map(|p| p.to_path_buf()) {
+                    let hunks = crate::git::compute_diff_hunks(root, &path);
+                    buf.set_diff_hunks(hunks);
+                }
+            }
+        }
     }
 
     /// Forces an immediate git branch refresh, bypassing the interval check.

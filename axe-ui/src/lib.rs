@@ -1198,7 +1198,7 @@ fn render_completion_popup(
     } else {
         (line_count as f64).log10().floor() as u16 + 1
     };
-    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH;
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH + DIFF_GUTTER_WIDTH;
 
     // Screen position relative to editor inner area.
     let cursor_screen_row = comp.trigger_row.saturating_sub(buffer.scroll_row) as u16;
@@ -1356,7 +1356,7 @@ fn render_hover_tooltip(
     } else {
         (line_count as f64).log10().floor() as u16 + 1
     };
-    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH;
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH + DIFF_GUTTER_WIDTH;
 
     // Screen position relative to editor inner area.
     let cursor_screen_row = hover.trigger_row.saturating_sub(buffer.scroll_row) as u16;
@@ -2134,7 +2134,13 @@ fn build_plain_line(
 //           show_icons toggle changes rendering path.
 
 /// Renders file tree content into the given area, with selection highlight and scrolling.
-fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
+fn render_tree_content(
+    file_tree: &FileTree,
+    area: Rect,
+    frame: &mut Frame,
+    theme: &Theme,
+    modified_files: &std::collections::HashSet<std::path::PathBuf>,
+) {
     let nodes = file_tree.visible_nodes();
     let scroll = file_tree.scroll();
     let scroll_col = file_tree.scroll_col();
@@ -2186,6 +2192,19 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
                 }
             }
         };
+
+        // Tint files with uncommitted changes (orange).
+        if node.depth > 0 {
+            let is_modified = match &node.kind {
+                NodeKind::File { .. } | NodeKind::Symlink { .. } => {
+                    modified_files.contains(&node.path)
+                }
+                NodeKind::Directory { .. } => false,
+            };
+            if is_modified {
+                name_style = name_style.fg(theme.tree_modified_fg);
+            }
+        }
 
         if is_selected {
             name_style = name_style.bg(theme.tree_selection_bg);
@@ -3109,7 +3128,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         match zoomed {
             FocusTarget::Tree => {
                 if let Some(ref tree) = app.file_tree {
-                    render_tree_content(tree, inner, frame, theme);
+                    render_tree_content(tree, inner, frame, theme, &app.git_modified_files);
                 }
             }
             FocusTarget::Terminal(_) => {
@@ -3162,7 +3181,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         let tree_inner = tree_block.inner(tree_area);
         frame.render_widget(tree_block, tree_area);
         if let Some(ref tree) = app.file_tree {
-            render_tree_content(tree, tree_inner, frame, theme);
+            render_tree_content(tree, tree_inner, frame, theme, &app.git_modified_files);
         }
 
         render_right_panels(app, frame, right_area, &layout_mgr, theme, resize_active);
@@ -3213,6 +3232,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
 const GUTTER_PADDING: u16 = 2;
 /// Width of the diagnostic indicator column in the gutter.
 const DIAGNOSTIC_GUTTER_WIDTH: u16 = 2;
+/// Width of the git diff indicator column in the gutter.
+const DIFF_GUTTER_WIDTH: u16 = 1;
 /// Width reserved for the editor scrollbar column.
 const EDITOR_SCROLLBAR_WIDTH: u16 = 1;
 
@@ -3226,10 +3247,10 @@ fn diagnostic_color(severity: DiagnosticSeverity, theme: &Theme) -> Color {
     }
 }
 
-/// Calculates gutter width: diagnostic column + digits + padding.
+/// Calculates gutter width: diagnostic column + digits + padding + diff indicator.
 fn gutter_width(line_count: usize) -> u16 {
     let digits = line_count.max(1).ilog10() as u16 + 1;
-    DIAGNOSTIC_GUTTER_WIDTH + digits + GUTTER_PADDING
+    DIAGNOSTIC_GUTTER_WIDTH + digits + GUTTER_PADDING + DIFF_GUTTER_WIDTH
 }
 
 /// Renders the search bar in a 1-row area at the top of the editor content.
@@ -3478,10 +3499,10 @@ fn render_editor_content(
     let cursor_row = buffer.cursor.row;
     let cursor_col = buffer.cursor.col;
 
-    // Width available for line numbers (total gutter - diagnostic column - trailing space).
-    let line_num_width = (gutter_w - DIAGNOSTIC_GUTTER_WIDTH - 1) as usize;
+    // Width available for line numbers (total gutter - diagnostic column - diff column - trailing space).
+    let line_num_width = (gutter_w - DIAGNOSTIC_GUTTER_WIDTH - DIFF_GUTTER_WIDTH - 1) as usize;
 
-    // Render gutter (diagnostic icon + line numbers) with scroll offset and active line highlight.
+    // Render gutter (diagnostic icon + line numbers + diff indicator) with scroll offset.
     let gutter_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
             let file_line = scroll_row + i;
@@ -3502,12 +3523,33 @@ fn render_editor_content(
                         Span::styled("  ", style)
                     };
 
+                // Git diff indicator for this line.
+                let diff_span = if let Some(kind) =
+                    axe_editor::diff::diff_kind_for_line(buffer.diff_hunks(), file_line)
+                {
+                    let color = match kind {
+                        axe_editor::DiffHunkKind::Added => theme.diff_added,
+                        axe_editor::DiffHunkKind::Modified => theme.diff_modified,
+                        axe_editor::DiffHunkKind::Deleted => theme.diff_deleted,
+                    };
+                    let ch = match kind {
+                        axe_editor::DiffHunkKind::Added | axe_editor::DiffHunkKind::Modified => {
+                            "\u{258E}"
+                        }
+                        axe_editor::DiffHunkKind::Deleted => "\u{2581}",
+                    };
+                    Span::styled(ch, Style::default().fg(color).bg(theme.gutter_bg))
+                } else {
+                    Span::styled(" ", gutter_style)
+                };
+
                 Line::from(vec![
                     diag_span,
                     Span::styled(
                         format!("{:>width$} ", line_num, width = line_num_width),
                         style,
                     ),
+                    diff_span,
                 ])
             } else {
                 Line::from(Span::styled(
@@ -4343,14 +4385,14 @@ mod tests {
     // --- Editor content rendering tests ---
 
     #[test]
-    fn gutter_width_includes_diagnostic_column() {
-        // DIAGNOSTIC_GUTTER_WIDTH(2) + digits + GUTTER_PADDING(2)
-        assert_eq!(gutter_width(1), 5); // 2 + 1 digit + 2 padding
-        assert_eq!(gutter_width(9), 5); // 2 + 1 digit + 2 padding
-        assert_eq!(gutter_width(10), 6); // 2 + 2 digits + 2 padding
-        assert_eq!(gutter_width(99), 6);
-        assert_eq!(gutter_width(100), 7); // 2 + 3 digits + 2 padding
-        assert_eq!(gutter_width(999), 7);
+    fn gutter_width_includes_diagnostic_and_diff_columns() {
+        // DIAGNOSTIC_GUTTER_WIDTH(2) + digits + GUTTER_PADDING(2) + DIFF_GUTTER_WIDTH(1)
+        assert_eq!(gutter_width(1), 6); // 2 + 1 digit + 2 padding + 1 diff
+        assert_eq!(gutter_width(9), 6); // 2 + 1 digit + 2 padding + 1 diff
+        assert_eq!(gutter_width(10), 7); // 2 + 2 digits + 2 padding + 1 diff
+        assert_eq!(gutter_width(99), 7);
+        assert_eq!(gutter_width(100), 8); // 2 + 3 digits + 2 padding + 1 diff
+        assert_eq!(gutter_width(999), 8);
     }
 
     fn app_with_open_file() -> (AppState, tempfile::TempDir) {

@@ -45,6 +45,7 @@ pub struct UiColors {
     pub tab_active_bg: Option<String>,
     pub tab_active_fg: Option<String>,
     pub tab_inactive_fg: Option<String>,
+    pub tree_modified_fg: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -52,6 +53,9 @@ pub struct GutterColors {
     pub bg: Option<String>,
     pub line_number: Option<String>,
     pub line_number_active: Option<String>,
+    pub diff_added: Option<String>,
+    pub diff_modified: Option<String>,
+    pub diff_deleted: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

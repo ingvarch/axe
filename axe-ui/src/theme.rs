@@ -86,6 +86,15 @@ pub struct Theme {
     pub syntax_escape: Color,
     /// Builtin function/variable color (cyan).
     pub syntax_builtin: Color,
+    // --- Git diff gutter colors ---
+    /// Color for added lines in the gutter (green).
+    pub diff_added: Color,
+    /// Color for modified lines in the gutter (blue).
+    pub diff_modified: Color,
+    /// Color for deleted lines in the gutter (red).
+    pub diff_deleted: Color,
+    /// Color for modified file names in the tree panel (orange).
+    pub tree_modified_fg: Color,
     // --- Diagnostic colors ---
     /// Diagnostic error color (red).
     pub diagnostic_error: Color,
@@ -172,6 +181,10 @@ impl Theme {
             syntax_tag: syntax_fg(tf, "tag", defaults.syntax_tag),
             syntax_escape: syntax_fg(tf, "escape", defaults.syntax_escape),
             syntax_builtin: syntax_fg(tf, "builtin", defaults.syntax_builtin),
+            diff_added: color_or(&tf.gutter.diff_added, defaults.diff_added),
+            diff_modified: color_or(&tf.gutter.diff_modified, defaults.diff_modified),
+            diff_deleted: color_or(&tf.gutter.diff_deleted, defaults.diff_deleted),
+            tree_modified_fg: color_or(&tf.ui.tree_modified_fg, defaults.tree_modified_fg),
             diagnostic_error: color_or(&tf.editor.diagnostic_error, defaults.diagnostic_error),
             diagnostic_warning: color_or(
                 &tf.editor.diagnostic_warning,
@@ -246,6 +259,11 @@ impl Default for Theme {
             syntax_tag: Color::Rgb(224, 108, 117),     // #e06c75 — red
             syntax_escape: Color::Rgb(86, 182, 194),   // #56b6c2 — cyan
             syntax_builtin: Color::Rgb(86, 182, 194),  // #56b6c2 — cyan
+            // Git diff gutter colors
+            diff_added: Color::Rgb(152, 195, 121), // #98c379 — green
+            diff_modified: Color::Rgb(97, 175, 239), // #61afef — blue
+            diff_deleted: Color::Rgb(224, 108, 117), // #e06c75 — red
+            tree_modified_fg: Color::Rgb(209, 154, 102), // #d19a66 — orange
             // Diagnostic colors
             diagnostic_error: Color::Rgb(224, 108, 117), // #e06c75 — red
             diagnostic_warning: Color::Rgb(229, 192, 123), // #e5c07b — yellow

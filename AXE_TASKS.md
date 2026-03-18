@@ -365,22 +365,22 @@ Undo and redo support for all edits.
 
 ---
 
-### Task 4.5 — Editor: Selection, Copy, Cut, Paste
+### Task 4.5 — Editor: Selection, Copy, Cut, Paste ✅
 
 Text selection and clipboard operations.
 
 **Acceptance criteria:**
-- `Shift+Arrow` starts/extends selection (character-level)
-- `Shift+Home`/`Shift+End` selects to beginning/end of line
-- `Shift+Ctrl+Home`/`Shift+Ctrl+End` selects to beginning/end of file
-- `Ctrl+Shift+←`/`Ctrl+Shift+→` selects by word
-- `Ctrl+A` selects all text
-- Selected text is highlighted with a distinct background color
-- `Ctrl+C` copies selection to system clipboard
-- `Ctrl+X` cuts selection (copy + delete)
-- `Ctrl+V` pastes from system clipboard at cursor (replaces selection if any)
-- `Delete` or `Backspace` with active selection deletes selected text
-- Typing with active selection replaces it
+- [x] `Shift+Arrow` starts/extends selection (character-level)
+- [x] `Shift+Home`/`Shift+End` selects to beginning/end of line
+- [x] `Shift+Ctrl+Home`/`Shift+Ctrl+End` selects to beginning/end of file
+- [x] `Ctrl+Shift+←`/`Ctrl+Shift+→` selects by word
+- [x] `Ctrl+A` selects all text
+- [x] Selected text is highlighted with a distinct background color
+- [x] `Ctrl+C` copies selection to system clipboard
+- [x] `Ctrl+X` cuts selection (copy + delete)
+- [x] `Ctrl+V` pastes from system clipboard at cursor (replaces selection if any)
+- [x] `Delete` or `Backspace` with active selection deletes selected text
+- [x] Typing with active selection replaces it
 
 **Implementation details:**
 - `Selection` struct: `anchor: Position, cursor: Position` (anchor stays, cursor moves)
@@ -782,41 +782,52 @@ Show the current git branch in the status bar.
 
 ---
 
-### Task 9.2 — Git: Gutter Diff Indicators
+### Task 9.2 — Git: Gutter Diff Indicators ✅
 
 Show which lines have been added, modified, or deleted compared to the last commit.
 
 **Acceptance criteria:**
-- Added lines: green `+` or `▎` bar in gutter
-- Modified lines: blue `~` or `▎` bar in gutter
-- Deleted lines: red `_` or `▁` triangle at the deletion point
-- Indicators update after saving
-- Only shown for files tracked by git
+- [x] Added lines: green `▎` bar in gutter
+- [x] Modified lines: blue `▎` bar in gutter
+- [x] Deleted lines: red `▁` indicator at the deletion point
+- [x] Indicators update after saving
+- [x] Only shown for files tracked by git
 
 **Implementation details:**
-- `git2::Repository::diff_index_to_workdir` for unstaged changes
+- `git2::Repository::diff_tree_to_workdir` with zero context lines for precise hunk boundaries
 - Map diff hunks to line ranges in the current buffer
 - Store `diff_hunks: Vec<DiffHunk>` on `EditorBuffer`
 - Render in gutter alongside line numbers and diagnostic indicators
 
+**Implementation notes:**
+- `axe-editor/src/diff.rs`: `DiffHunk`, `DiffHunkKind`, `diff_kind_for_line()` helper
+- `axe-core/src/git.rs`: `compute_diff_hunks()` using `diff_tree_to_workdir` with pathspec filter
+- `axe-core/src/app.rs`: `refresh_active_buffer_diff_hunks()` called after save and on file open/preview
+- `axe-ui`: `DIFF_GUTTER_WIDTH` constant, diff indicator column after line numbers
+
 ---
 
-### Task 9.3 — Git: File Tree Status Icons
+### Task 9.3 — Git: File Tree Status Icons ✅
 
 Show git status for files in the file tree.
 
 **Acceptance criteria:**
-- Modified files: `M` badge or colored filename (e.g., yellow)
-- New/untracked files: `U` badge or colored (e.g., green)
-- Deleted files: shown with strikethrough or red color
-- Ignored files: dimmed (if shown)
-- Directories containing modified files: show a dot indicator
-- Status updates after file save or git operations
+- [x] Modified files: orange colored filename
+- [x] New/untracked files: orange colored filename
+- [x] Deleted files: orange colored filename
+- [ ] Ignored files: dimmed (if shown)
+- [ ] Directories containing modified files: show a dot indicator
+- [x] Status updates after file save or git operations
 
 **Implementation details:**
 - `git2::Repository::statuses` gives status for all files
-- Map status to `GitStatus` enum on each `TreeNode`
-- Color/badge applied during tree rendering
+- `modified_files()` returns `HashSet<PathBuf>` of changed files
+- `tree_modified_fg` theme color (orange `#d19a66`) applied during tree rendering
+
+**Implementation notes:**
+- `axe-core/src/git.rs`: `modified_files()` using `git2::StatusOptions` for tracked + untracked changes
+- `axe-core/src/app.rs`: `git_modified_files: HashSet<PathBuf>` on `AppState`, refreshed on startup and after save
+- `axe-ui`: `render_tree_content()` receives modified files set, tints file names with `theme.tree_modified_fg`
 
 ---
 

@@ -7,6 +7,7 @@ use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
 use crate::diagnostic::BufferDiagnostic;
+use crate::diff::DiffHunk;
 use crate::highlight::{self, HighlightSpan, HighlightState};
 use crate::history::{Edit, EditHistory};
 use crate::selection::Selection;
@@ -41,6 +42,8 @@ pub struct EditorBuffer {
     highlight: Option<HighlightState>,
     /// LSP diagnostics for this buffer (errors, warnings, etc.).
     diagnostics: Vec<BufferDiagnostic>,
+    /// Git diff hunks for this buffer (added/modified/deleted lines vs HEAD).
+    diff_hunks: Vec<DiffHunk>,
     /// Number of spaces (or columns) per tab stop.
     tab_size: usize,
     /// Whether Tab key inserts spaces (`true`) or a literal tab character (`false`).
@@ -71,6 +74,7 @@ impl EditorBuffer {
             selection: None,
             highlight: None,
             diagnostics: Vec::new(),
+            diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         }
@@ -111,6 +115,16 @@ impl EditorBuffer {
         self.diagnostics = diags;
     }
 
+    /// Returns the git diff hunks for this buffer.
+    pub fn diff_hunks(&self) -> &[DiffHunk] {
+        &self.diff_hunks
+    }
+
+    /// Replaces all diff hunks for this buffer.
+    pub fn set_diff_hunks(&mut self, hunks: Vec<DiffHunk>) {
+        self.diff_hunks = hunks;
+    }
+
     /// Removes all diagnostics from this buffer.
     pub fn clear_diagnostics(&mut self) {
         self.diagnostics.clear();
@@ -144,6 +158,7 @@ impl EditorBuffer {
             selection: None,
             highlight,
             diagnostics: Vec::new(),
+            diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         })
@@ -1375,6 +1390,7 @@ mod tests {
                 selection: None,
                 highlight: None,
                 diagnostics: Vec::new(),
+                diff_hunks: Vec::new(),
                 tab_size: DEFAULT_TAB_SIZE,
                 insert_spaces: true,
             };
@@ -1397,6 +1413,7 @@ mod tests {
             selection: None,
             highlight: None,
             diagnostics: Vec::new(),
+            diff_hunks: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         };
