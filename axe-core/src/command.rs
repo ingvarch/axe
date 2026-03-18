@@ -202,6 +202,10 @@ pub enum Command {
     OpenCommandPalette,
     /// Open the project-wide search overlay (Ctrl+Shift+F).
     OpenProjectSearch,
+    /// Jump to the next diagnostic in the active buffer.
+    GoToNextDiagnostic,
+    /// Jump to the previous diagnostic in the active buffer.
+    GoToPrevDiagnostic,
 }
 
 #[cfg(test)]
@@ -330,6 +334,8 @@ mod tests {
             Command::OpenFileFinder,
             Command::OpenCommandPalette,
             Command::OpenProjectSearch,
+            Command::GoToNextDiagnostic,
+            Command::GoToPrevDiagnostic,
         ];
 
         for (i, a) in variants.iter().enumerate() {

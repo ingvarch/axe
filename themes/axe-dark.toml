@@ -28,6 +28,10 @@ selection_bg = "#434c5e"
 search_match_bg = "#3c3c1e"
 search_active_match_bg = "#e5c07b"
 search_active_match_fg = "#282c34"
+diagnostic_error = "#e06c75"
+diagnostic_warning = "#e5c07b"
+diagnostic_info = "#61afef"
+diagnostic_hint = "#828997"
 
 [syntax]
 keyword = { fg = "#c678dd" }

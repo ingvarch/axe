@@ -175,6 +175,8 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "open_file_finder" => Some(Command::OpenFileFinder),
         "open_command_palette" => Some(Command::OpenCommandPalette),
         "open_project_search" => Some(Command::OpenProjectSearch),
+        "go_to_next_diagnostic" => Some(Command::GoToNextDiagnostic),
+        "go_to_prev_diagnostic" => Some(Command::GoToPrevDiagnostic),
         _ => None,
     }
 }
@@ -380,6 +382,18 @@ impl KeymapResolver {
         resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('w'), Command::CloseTab);
         resolver.bind(KeyModifiers::ALT, KeyCode::Char('t'), Command::NewTab);
         resolver.bind(KeyModifiers::ALT, KeyCode::Char('w'), Command::CloseTab);
+
+        // Diagnostic navigation.
+        resolver.bind(
+            KeyModifiers::ALT,
+            KeyCode::Char('.'),
+            Command::GoToNextDiagnostic,
+        );
+        resolver.bind(
+            KeyModifiers::ALT,
+            KeyCode::Char(','),
+            Command::GoToPrevDiagnostic,
+        );
 
         // Terminal scrollback navigation.
         resolver.bind(
@@ -981,6 +995,38 @@ mod tests {
         assert_eq!(
             command_from_str("open_project_search"),
             Some(Command::OpenProjectSearch)
+        );
+    }
+
+    // --- Diagnostic navigation ---
+
+    #[test]
+    fn default_bindings_alt_dot_next_diagnostic() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToNextDiagnostic));
+    }
+
+    #[test]
+    fn default_bindings_alt_comma_prev_diagnostic() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT);
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToPrevDiagnostic));
+    }
+
+    #[test]
+    fn command_from_str_go_to_next_diagnostic() {
+        assert_eq!(
+            command_from_str("go_to_next_diagnostic"),
+            Some(Command::GoToNextDiagnostic)
+        );
+    }
+
+    #[test]
+    fn command_from_str_go_to_prev_diagnostic() {
+        assert_eq!(
+            command_from_str("go_to_prev_diagnostic"),
+            Some(Command::GoToPrevDiagnostic)
         );
     }
 

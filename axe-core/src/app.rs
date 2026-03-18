@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 
+use axe_editor::diagnostic::{BufferDiagnostic, DiagnosticSeverity};
 use axe_tree::NodeKind;
 
 use crate::command::Command;
@@ -485,8 +486,10 @@ impl AppState {
                     log::warn!("LSP server crashed for {language_id}: {error}");
                     self.set_status_message(format!("LSP: {language_id} crashed"));
                 }
-                axe_lsp::LspEvent::ServerNotification { .. } => {
-                    // Diagnostics, etc. — handled in future tasks (7.2+).
+                axe_lsp::LspEvent::ServerNotification { method, params } => {
+                    if method == "textDocument/publishDiagnostics" {
+                        self.handle_publish_diagnostics(&params);
+                    }
                 }
                 axe_lsp::LspEvent::Response { .. } => {
                     // Non-initialize responses — handled in future tasks.
@@ -508,6 +511,80 @@ impl AppState {
                         log::warn!("LSP didChange failed: {e}");
                     }
                 }
+            }
+        }
+    }
+
+    /// Handles a `textDocument/publishDiagnostics` notification from an LSP server.
+    ///
+    /// Parses the params, converts LSP diagnostics to `BufferDiagnostic`, and stores
+    /// them on the matching buffer.
+    fn handle_publish_diagnostics(&mut self, params: &serde_json::Value) {
+        let Ok(publish) =
+            serde_json::from_value::<lsp_types::PublishDiagnosticsParams>(params.clone())
+        else {
+            log::warn!("Failed to parse publishDiagnostics params");
+            return;
+        };
+
+        let Some(path) = uri_to_path(&publish.uri) else {
+            log::warn!(
+                "publishDiagnostics URI is not a file path: {:?}",
+                publish.uri
+            );
+            return;
+        };
+
+        let diags = convert_lsp_diagnostics(&publish.diagnostics);
+
+        if let Some(buf) = self.buffer_manager.buffer_mut_by_path(&path) {
+            buf.set_diagnostics(diags);
+        }
+    }
+
+    /// Jumps to the next diagnostic line in the active buffer, wrapping around.
+    fn go_to_next_diagnostic(&mut self) {
+        let (h, w) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            let diags = buf.diagnostics();
+            if diags.is_empty() {
+                return;
+            }
+            let current_line = buf.cursor.row;
+            // Find the first diagnostic line strictly after the cursor.
+            let next = diags
+                .iter()
+                .map(|d| d.line)
+                .find(|&l| l > current_line)
+                .or_else(|| diags.iter().map(|d| d.line).min());
+            if let Some(line) = next {
+                buf.cursor.row = line;
+                buf.cursor.col = 0;
+                buf.ensure_cursor_visible(h, w);
+            }
+        }
+    }
+
+    /// Jumps to the previous diagnostic line in the active buffer, wrapping around.
+    fn go_to_prev_diagnostic(&mut self) {
+        let (h, w) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            let diags = buf.diagnostics();
+            if diags.is_empty() {
+                return;
+            }
+            let current_line = buf.cursor.row;
+            // Find the last diagnostic line strictly before the cursor.
+            let prev = diags
+                .iter()
+                .map(|d| d.line)
+                .rev()
+                .find(|&l| l < current_line)
+                .or_else(|| diags.iter().map(|d| d.line).max());
+            if let Some(line) = prev {
+                buf.cursor.row = line;
+                buf.cursor.col = 0;
+                buf.ensure_cursor_visible(h, w);
             }
         }
     }
@@ -1445,6 +1522,12 @@ impl AppState {
             Command::CancelCloseBuffer => {
                 // Dialog already dismissed by the input handler.
             }
+            Command::GoToNextDiagnostic => {
+                self.go_to_next_diagnostic();
+            }
+            Command::GoToPrevDiagnostic => {
+                self.go_to_prev_diagnostic();
+            }
         }
         // Auto-promote preview buffer if user started editing it.
         self.buffer_manager.auto_promote_if_modified();
@@ -2256,6 +2339,50 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Converts an `lsp_types::Uri` to a `PathBuf`, if it has a `file` scheme.
+fn uri_to_path(uri: &lsp_types::Uri) -> Option<std::path::PathBuf> {
+    let s = uri.as_str();
+    let url = url::Url::parse(s).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    url.to_file_path().ok()
+}
+
+/// Converts LSP diagnostics to internal `BufferDiagnostic` format.
+///
+/// Pure function — no side effects. Maps `lsp_types::DiagnosticSeverity` to
+/// `DiagnosticSeverity`, defaulting to `Warning` when severity is absent.
+fn convert_lsp_diagnostics(lsp_diags: &[lsp_types::Diagnostic]) -> Vec<BufferDiagnostic> {
+    lsp_diags
+        .iter()
+        .map(|d| {
+            let severity = match d.severity {
+                Some(lsp_types::DiagnosticSeverity::ERROR) => DiagnosticSeverity::Error,
+                Some(lsp_types::DiagnosticSeverity::WARNING) => DiagnosticSeverity::Warning,
+                Some(lsp_types::DiagnosticSeverity::INFORMATION) => DiagnosticSeverity::Info,
+                Some(lsp_types::DiagnosticSeverity::HINT) => DiagnosticSeverity::Hint,
+                _ => DiagnosticSeverity::Warning,
+            };
+
+            let code = d.code.as_ref().map(|c| match c {
+                lsp_types::NumberOrString::Number(n) => n.to_string(),
+                lsp_types::NumberOrString::String(s) => s.clone(),
+            });
+
+            BufferDiagnostic {
+                line: d.range.start.line as usize,
+                col_start: d.range.start.character as usize,
+                col_end: d.range.end.character as usize,
+                severity,
+                message: d.message.clone(),
+                source: d.source.clone(),
+                code,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -5459,5 +5586,168 @@ mod tests {
         assert!(!app.project_search.as_ref().unwrap().regex_mode);
         app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
         assert!(app.project_search.as_ref().unwrap().regex_mode);
+    }
+
+    // --- convert_lsp_diagnostics ---
+
+    fn make_lsp_diag(
+        severity: Option<lsp_types::DiagnosticSeverity>,
+        line: u32,
+    ) -> lsp_types::Diagnostic {
+        lsp_types::Diagnostic {
+            range: lsp_types::Range {
+                start: lsp_types::Position { line, character: 0 },
+                end: lsp_types::Position { line, character: 5 },
+            },
+            severity,
+            code: None,
+            code_description: None,
+            source: None,
+            message: format!("msg on line {line}"),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn convert_error() {
+        let diags = convert_lsp_diagnostics(&[make_lsp_diag(
+            Some(lsp_types::DiagnosticSeverity::ERROR),
+            0,
+        )]);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+    }
+
+    #[test]
+    fn convert_warning() {
+        let diags = convert_lsp_diagnostics(&[make_lsp_diag(
+            Some(lsp_types::DiagnosticSeverity::WARNING),
+            1,
+        )]);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn convert_no_severity_defaults_warning() {
+        let diags = convert_lsp_diagnostics(&[make_lsp_diag(None, 2)]);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn convert_with_code() {
+        let mut d = make_lsp_diag(Some(lsp_types::DiagnosticSeverity::ERROR), 0);
+        d.code = Some(lsp_types::NumberOrString::String("E0308".to_string()));
+        let diags = convert_lsp_diagnostics(&[d]);
+        assert_eq!(diags[0].code.as_deref(), Some("E0308"));
+    }
+
+    // --- Diagnostic navigation ---
+
+    #[test]
+    fn next_diagnostic_wraps() {
+        let mut app = AppState::new();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(tmp, "line0\nline1\nline2\nline3\nline4").unwrap();
+        tmp.flush().unwrap();
+        app.buffer_manager.open_file(tmp.path()).unwrap();
+
+        let diags = vec![
+            BufferDiagnostic {
+                line: 1,
+                col_start: 0,
+                col_end: 5,
+                severity: DiagnosticSeverity::Error,
+                message: "err".to_string(),
+                source: None,
+                code: None,
+            },
+            BufferDiagnostic {
+                line: 3,
+                col_start: 0,
+                col_end: 5,
+                severity: DiagnosticSeverity::Warning,
+                message: "warn".to_string(),
+                source: None,
+                code: None,
+            },
+        ];
+        app.buffer_manager
+            .active_buffer_mut()
+            .unwrap()
+            .set_diagnostics(diags);
+
+        // Cursor at line 0 → next should go to line 1.
+        app.execute(Command::GoToNextDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+
+        // Next should go to line 3.
+        app.execute(Command::GoToNextDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 3);
+
+        // Next should wrap to line 1.
+        app.execute(Command::GoToNextDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    }
+
+    #[test]
+    fn prev_diagnostic_wraps() {
+        let mut app = AppState::new();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(tmp, "line0\nline1\nline2\nline3").unwrap();
+        tmp.flush().unwrap();
+        app.buffer_manager.open_file(tmp.path()).unwrap();
+
+        let diags = vec![
+            BufferDiagnostic {
+                line: 1,
+                col_start: 0,
+                col_end: 5,
+                severity: DiagnosticSeverity::Error,
+                message: "err".to_string(),
+                source: None,
+                code: None,
+            },
+            BufferDiagnostic {
+                line: 3,
+                col_start: 0,
+                col_end: 5,
+                severity: DiagnosticSeverity::Warning,
+                message: "warn".to_string(),
+                source: None,
+                code: None,
+            },
+        ];
+        app.buffer_manager
+            .active_buffer_mut()
+            .unwrap()
+            .set_diagnostics(diags);
+
+        // Start at line 0 → prev should wrap to line 3 (last diagnostic).
+        app.execute(Command::GoToPrevDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 3);
+
+        // Prev should go to line 1.
+        app.execute(Command::GoToPrevDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    }
+
+    #[test]
+    fn no_diagnostics_noop() {
+        let mut app = AppState::new();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+        app.buffer_manager.open_file(tmp.path()).unwrap();
+
+        app.execute(Command::GoToNextDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+
+        app.execute(Command::GoToPrevDiagnostic);
+        assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
     }
 }

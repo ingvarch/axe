@@ -11,6 +11,9 @@ use ratatui::Frame;
 
 use axe_core::project_search::{DisplayItem, SearchField};
 use axe_core::{AppState, CommandPalette, FileFinder, FocusTarget, ProjectSearch, SearchState};
+use axe_editor::diagnostic::{
+    diagnostic_counts, diagnostics_for_line, most_severe_for_line, DiagnosticSeverity,
+};
 use axe_editor::EditorBuffer;
 use axe_terminal::TerminalManager;
 use axe_tree::icons::{self, FileIcon};
@@ -121,6 +124,23 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
             ),
             text_style,
         ));
+
+        // Diagnostic counts (only show non-zero).
+        let (errors, warnings, _infos, _hints) = diagnostic_counts(buffer.diagnostics());
+        if errors > 0 {
+            spans.push(Span::styled(" ", key_style));
+            spans.push(Span::styled(
+                format!("E:{errors}"),
+                Style::default().fg(theme.diagnostic_error),
+            ));
+        }
+        if warnings > 0 {
+            spans.push(Span::styled(" ", key_style));
+            spans.push(Span::styled(
+                format!("W:{warnings}"),
+                Style::default().fg(theme.diagnostic_warning),
+            ));
+        }
     }
 
     if let Some((ref msg, _)) = app.status_message {
@@ -131,6 +151,16 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
                 .fg(theme.panel_border_active)
                 .add_modifier(Modifier::BOLD),
         ));
+    } else if let Some(buffer) = app.buffer_manager.active_buffer() {
+        // Show first diagnostic message on the cursor line.
+        if let Some(diag) = diagnostics_for_line(buffer.diagnostics(), buffer.cursor.row).next() {
+            let color = diagnostic_color(diag.severity, theme);
+            spans.push(Span::styled(" | ", key_style));
+            spans.push(Span::styled(
+                diag.message.clone(),
+                Style::default().fg(color),
+            ));
+        }
     }
 
     if app.file_tree.as_ref().is_some_and(|t| t.show_ignored()) {
@@ -2175,11 +2205,23 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
 
 /// Minimum gutter padding (1 space each side of the line number).
 const GUTTER_PADDING: u16 = 2;
+/// Width of the diagnostic indicator column in the gutter.
+const DIAGNOSTIC_GUTTER_WIDTH: u16 = 2;
 
-/// Calculates gutter width: digits needed for the largest line number + padding.
+/// Returns the theme color for a diagnostic severity level.
+fn diagnostic_color(severity: DiagnosticSeverity, theme: &Theme) -> Color {
+    match severity {
+        DiagnosticSeverity::Error => theme.diagnostic_error,
+        DiagnosticSeverity::Warning => theme.diagnostic_warning,
+        DiagnosticSeverity::Info => theme.diagnostic_info,
+        DiagnosticSeverity::Hint => theme.diagnostic_hint,
+    }
+}
+
+/// Calculates gutter width: diagnostic column + digits + padding.
 fn gutter_width(line_count: usize) -> u16 {
     let digits = line_count.max(1).ilog10() as u16 + 1;
-    digits + GUTTER_PADDING
+    DIAGNOSTIC_GUTTER_WIDTH + digits + GUTTER_PADDING
 }
 
 /// Renders the search bar in a 1-row area at the top of the editor content.
@@ -2414,7 +2456,10 @@ fn render_editor_content(
     let cursor_row = buffer.cursor.row;
     let cursor_col = buffer.cursor.col;
 
-    // Render gutter (line numbers) with scroll offset and active line highlight.
+    // Width available for line numbers (total gutter - diagnostic column - trailing space).
+    let line_num_width = (gutter_w - DIAGNOSTIC_GUTTER_WIDTH - 1) as usize;
+
+    // Render gutter (diagnostic icon + line numbers) with scroll offset and active line highlight.
     let gutter_lines: Vec<Line<'_>> = (0..visible_lines)
         .map(|i| {
             let file_line = scroll_row + i;
@@ -2425,10 +2470,23 @@ fn render_editor_content(
                 } else {
                     gutter_style
                 };
-                Line::from(Span::styled(
-                    format!("{:>width$} ", line_num, width = (gutter_w - 1) as usize),
-                    style,
-                ))
+
+                // Diagnostic icon for this line.
+                let diag_span =
+                    if let Some(sev) = most_severe_for_line(buffer.diagnostics(), file_line) {
+                        let color = diagnostic_color(sev, theme);
+                        Span::styled("\u{25CF} ", Style::default().fg(color).bg(theme.gutter_bg))
+                    } else {
+                        Span::styled("  ", style)
+                    };
+
+                Line::from(vec![
+                    diag_span,
+                    Span::styled(
+                        format!("{:>width$} ", line_num, width = line_num_width),
+                        style,
+                    ),
+                ])
             } else {
                 Line::from(Span::styled(
                     format!("{:>width$}", "~", width = gutter_w as usize),
@@ -2547,8 +2605,20 @@ fn render_editor_content(
                     }
                 }
 
-                if highlights.is_empty() {
-                    // No highlights — render normally.
+                // Collect diagnostic underline ranges for this line.
+                let diag_underlines: Vec<(usize, usize, Color)> =
+                    diagnostics_for_line(buffer.diagnostics(), file_line)
+                        .map(|d| {
+                            let hs = d.col_start.saturating_sub(scroll_col);
+                            let he = d.col_end.saturating_sub(scroll_col).min(content_w as usize);
+                            let color = diagnostic_color(d.severity, theme);
+                            (hs, he, color)
+                        })
+                        .filter(|(hs, he, _)| he > hs)
+                        .collect();
+
+                if highlights.is_empty() && diag_underlines.is_empty() {
+                    // No highlights or diagnostics — render normally.
                     let padded = if is_cursor_line {
                         format!("{:<width$}", display, width = content_w as usize)
                     } else {
@@ -2569,6 +2639,17 @@ fn render_editor_content(
                     let end = (*he).min(len);
                     for cs in &mut char_styles[start..end] {
                         *cs = *style;
+                    }
+                }
+
+                // Diagnostic underlines — additive (preserve existing fg/bg, add underline).
+                for (hs, he, color) in &diag_underlines {
+                    let start = (*hs).min(len);
+                    let end = (*he).min(len);
+                    for cs in &mut char_styles[start..end] {
+                        *cs = cs
+                            .add_modifier(Modifier::UNDERLINED)
+                            .underline_color(*color);
                     }
                 }
 
@@ -3139,13 +3220,14 @@ mod tests {
     // --- Editor content rendering tests ---
 
     #[test]
-    fn gutter_width_calculation() {
-        assert_eq!(gutter_width(1), 3); // "1 " = 1 digit + 2 padding
-        assert_eq!(gutter_width(9), 3); // "9 " = 1 digit + 2 padding
-        assert_eq!(gutter_width(10), 4); // "10 " = 2 digits + 2 padding
-        assert_eq!(gutter_width(99), 4);
-        assert_eq!(gutter_width(100), 5); // "100 " = 3 digits + 2 padding
-        assert_eq!(gutter_width(999), 5);
+    fn gutter_width_includes_diagnostic_column() {
+        // DIAGNOSTIC_GUTTER_WIDTH(2) + digits + GUTTER_PADDING(2)
+        assert_eq!(gutter_width(1), 5); // 2 + 1 digit + 2 padding
+        assert_eq!(gutter_width(9), 5); // 2 + 1 digit + 2 padding
+        assert_eq!(gutter_width(10), 6); // 2 + 2 digits + 2 padding
+        assert_eq!(gutter_width(99), 6);
+        assert_eq!(gutter_width(100), 7); // 2 + 3 digits + 2 padding
+        assert_eq!(gutter_width(999), 7);
     }
 
     fn app_with_open_file() -> (AppState, tempfile::TempDir) {

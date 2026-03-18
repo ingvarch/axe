@@ -86,6 +86,15 @@ pub struct Theme {
     pub syntax_escape: Color,
     /// Builtin function/variable color (cyan).
     pub syntax_builtin: Color,
+    // --- Diagnostic colors ---
+    /// Diagnostic error color (red).
+    pub diagnostic_error: Color,
+    /// Diagnostic warning color (yellow).
+    pub diagnostic_warning: Color,
+    /// Diagnostic info color (blue).
+    pub diagnostic_info: Color,
+    /// Diagnostic hint color (grey).
+    pub diagnostic_hint: Color,
 }
 
 impl Theme {
@@ -163,6 +172,13 @@ impl Theme {
             syntax_tag: syntax_fg(tf, "tag", defaults.syntax_tag),
             syntax_escape: syntax_fg(tf, "escape", defaults.syntax_escape),
             syntax_builtin: syntax_fg(tf, "builtin", defaults.syntax_builtin),
+            diagnostic_error: color_or(&tf.editor.diagnostic_error, defaults.diagnostic_error),
+            diagnostic_warning: color_or(
+                &tf.editor.diagnostic_warning,
+                defaults.diagnostic_warning,
+            ),
+            diagnostic_info: color_or(&tf.editor.diagnostic_info, defaults.diagnostic_info),
+            diagnostic_hint: color_or(&tf.editor.diagnostic_hint, defaults.diagnostic_hint),
         }
     }
 
@@ -230,6 +246,11 @@ impl Default for Theme {
             syntax_tag: Color::Rgb(224, 108, 117),     // #e06c75 — red
             syntax_escape: Color::Rgb(86, 182, 194),   // #56b6c2 — cyan
             syntax_builtin: Color::Rgb(86, 182, 194),  // #56b6c2 — cyan
+            // Diagnostic colors
+            diagnostic_error: Color::Rgb(224, 108, 117), // #e06c75 — red
+            diagnostic_warning: Color::Rgb(229, 192, 123), // #e5c07b — yellow
+            diagnostic_info: Color::Rgb(97, 175, 239),   // #61afef — blue
+            diagnostic_hint: Color::Rgb(130, 137, 151),  // #828997 — grey
         }
     }
 }
@@ -434,6 +455,23 @@ mod tests {
         assert_eq!(theme.foreground, defaults.foreground);
         assert_eq!(theme.syntax_keyword, defaults.syntax_keyword);
         assert_eq!(theme.syntax_string, defaults.syntax_string);
+    }
+
+    #[test]
+    fn default_theme_has_diagnostic_colors() {
+        let theme = Theme::default();
+        assert_ne!(theme.diagnostic_error, Color::Black);
+        assert_ne!(theme.diagnostic_warning, Color::Black);
+        assert_ne!(theme.diagnostic_info, Color::Black);
+        assert_ne!(theme.diagnostic_hint, Color::Black);
+    }
+
+    #[test]
+    fn diagnostic_colors_differ() {
+        let theme = Theme::default();
+        assert_ne!(theme.diagnostic_error, theme.diagnostic_warning);
+        assert_ne!(theme.diagnostic_warning, theme.diagnostic_info);
+        assert_ne!(theme.diagnostic_info, theme.diagnostic_hint);
     }
 
     #[test]

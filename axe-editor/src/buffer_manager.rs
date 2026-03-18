@@ -208,6 +208,18 @@ impl BufferManager {
         self.buffers.iter().position(|b| b.is_preview)
     }
 
+    /// Returns a mutable reference to the buffer with the given file path, if any.
+    ///
+    /// Uses `std::fs::canonicalize` for path comparison.
+    pub fn buffer_mut_by_path(&mut self, path: &Path) -> Option<&mut EditorBuffer> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        self.buffers.iter_mut().find(|buf| {
+            buf.path()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .is_some_and(|c| c == canonical)
+        })
+    }
+
     /// Closes the buffer at the given index and adjusts the active index.
     ///
     /// Does nothing if the index is out of bounds. After removal, if the
@@ -505,6 +517,25 @@ mod tests {
         mgr.open_file_as_preview(tmp.path()).unwrap(); // should just switch
         assert_eq!(mgr.buffer_count(), 1);
         assert!(!mgr.active_buffer().unwrap().is_preview); // stays permanent
+    }
+
+    #[test]
+    fn buffer_mut_by_path_no_match() {
+        let mut mgr = BufferManager::new();
+        assert!(mgr.buffer_mut_by_path(Path::new("/nonexistent")).is_none());
+    }
+
+    #[test]
+    fn buffer_mut_by_path_finds_buffer() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "hello").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+
+        let buf = mgr.buffer_mut_by_path(tmp.path());
+        assert!(buf.is_some());
     }
 
     #[test]

@@ -61,6 +61,10 @@ pub struct EditorColors {
     pub search_match_bg: Option<String>,
     pub search_active_match_bg: Option<String>,
     pub search_active_match_fg: Option<String>,
+    pub diagnostic_error: Option<String>,
+    pub diagnostic_warning: Option<String>,
+    pub diagnostic_info: Option<String>,
+    pub diagnostic_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

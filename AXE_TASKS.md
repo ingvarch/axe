@@ -580,18 +580,18 @@ Set up the LSP client that can start, communicate with, and stop language server
 
 ---
 
-### Task 7.2 — LSP: Diagnostics (Errors & Warnings)
+### Task 7.2 — LSP: Diagnostics (Errors & Warnings) [DONE]
 
 Display LSP diagnostics in the editor.
 
 **Acceptance criteria:**
-- Errors shown as red indicators in the gutter (e.g., `✖` or `●`)
-- Warnings shown as yellow indicators (e.g., `▲` or `●`)
-- Hints and info shown as blue indicators
-- Error/warning text shown in the status bar when cursor is on a diagnostic line
-- Diagnostic underlines in the editor text (wavy underline if terminal supports it, or colored underline)
-- Total error/warning count in status bar: `⚠ 3 ✖ 1`
-- Diagnostics update after each save or edit (depending on server capability)
+- [x] Errors shown as red indicators in the gutter (e.g., `✖` or `●`)
+- [x] Warnings shown as yellow indicators (e.g., `▲` or `●`)
+- [x] Hints and info shown as blue indicators
+- [x] Error/warning text shown in the status bar when cursor is on a diagnostic line
+- [x] Diagnostic underlines in the editor text (wavy underline if terminal supports it, or colored underline)
+- [x] Total error/warning count in status bar: `E:N W:M`
+- [x] Diagnostics update after each save or edit (depending on server capability)
 
 **Implementation details:**
 - `publishDiagnostics` notification → store `Vec<Diagnostic>` on the buffer

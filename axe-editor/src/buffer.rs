@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
+use crate::diagnostic::BufferDiagnostic;
 use crate::highlight::{self, HighlightSpan, HighlightState};
 use crate::history::{Edit, EditHistory};
 use crate::selection::Selection;
@@ -36,6 +37,8 @@ pub struct EditorBuffer {
     pub selection: Option<Selection>,
     /// Syntax highlighting state, if the file type is supported.
     highlight: Option<HighlightState>,
+    /// LSP diagnostics for this buffer (errors, warnings, etc.).
+    diagnostics: Vec<BufferDiagnostic>,
     /// Number of spaces (or columns) per tab stop.
     tab_size: usize,
     /// Whether Tab key inserts spaces (`true`) or a literal tab character (`false`).
@@ -64,6 +67,7 @@ impl EditorBuffer {
             history: EditHistory::new(),
             selection: None,
             highlight: None,
+            diagnostics: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         }
@@ -94,6 +98,21 @@ impl EditorBuffer {
         self.insert_spaces = insert_spaces;
     }
 
+    /// Returns the current diagnostics for this buffer.
+    pub fn diagnostics(&self) -> &[BufferDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Replaces all diagnostics for this buffer.
+    pub fn set_diagnostics(&mut self, diags: Vec<BufferDiagnostic>) {
+        self.diagnostics = diags;
+    }
+
+    /// Removes all diagnostics from this buffer.
+    pub fn clear_diagnostics(&mut self) {
+        self.diagnostics.clear();
+    }
+
     /// Loads a buffer from a file on disk.
     ///
     /// Returns an error if the file cannot be read.
@@ -120,6 +139,7 @@ impl EditorBuffer {
             history: EditHistory::new(),
             selection: None,
             highlight,
+            diagnostics: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         })
@@ -1189,6 +1209,7 @@ mod tests {
                 history: EditHistory::new(),
                 selection: None,
                 highlight: None,
+                diagnostics: Vec::new(),
                 tab_size: DEFAULT_TAB_SIZE,
                 insert_spaces: true,
             };
@@ -1209,6 +1230,7 @@ mod tests {
             history: EditHistory::new(),
             selection: None,
             highlight: None,
+            diagnostics: Vec::new(),
             tab_size: DEFAULT_TAB_SIZE,
             insert_spaces: true,
         };
@@ -2545,5 +2567,47 @@ mod tests {
         buf.select_line_at_cursor();
         assert!(buf.selection.is_some());
         assert_eq!(buf.cursor.col, 0);
+    }
+
+    // --- Diagnostics ---
+
+    #[test]
+    fn new_buffer_has_no_diagnostics() {
+        let buf = EditorBuffer::new();
+        assert!(buf.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn set_and_get_diagnostics() {
+        let mut buf = EditorBuffer::new();
+        let diags = vec![BufferDiagnostic {
+            line: 0,
+            col_start: 0,
+            col_end: 5,
+            severity: crate::diagnostic::DiagnosticSeverity::Error,
+            message: "test error".to_string(),
+            source: None,
+            code: None,
+        }];
+        buf.set_diagnostics(diags.clone());
+        assert_eq!(buf.diagnostics().len(), 1);
+        assert_eq!(buf.diagnostics()[0].message, "test error");
+    }
+
+    #[test]
+    fn clear_diagnostics() {
+        let mut buf = EditorBuffer::new();
+        buf.set_diagnostics(vec![BufferDiagnostic {
+            line: 0,
+            col_start: 0,
+            col_end: 5,
+            severity: crate::diagnostic::DiagnosticSeverity::Warning,
+            message: "warning".to_string(),
+            source: None,
+            code: None,
+        }]);
+        assert!(!buf.diagnostics().is_empty());
+        buf.clear_diagnostics();
+        assert!(buf.diagnostics().is_empty());
     }
 }

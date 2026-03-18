@@ -12,6 +12,9 @@ axe-terminal = { path = "../axe-terminal" }
 axe-editor = { path = "../axe-editor" }
 axe-tree = { path = "../axe-tree" }
 crossterm = "0.29"
+lsp-types = "0.97"
+serde_json = "1"
+url = "2"
 ignore = "0.4"
 nucleo-matcher = "0.3"
 regex = "1"

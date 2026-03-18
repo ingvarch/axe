@@ -186,11 +186,14 @@ dependencies = [
  "crossterm",
  "ignore",
  "log",
+ "lsp-types",
  "nucleo-matcher",
  "regex",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
