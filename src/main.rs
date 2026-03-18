@@ -121,11 +121,15 @@ async fn main() -> Result<()> {
     while !app.should_quit {
         let size = terminal.size()?;
 
-        // Update tree viewport height for scroll calculations.
+        // Update tree viewport dimensions for scroll calculations.
         if let Some(ref mut tree) = app.file_tree {
             // Inner height: total height minus status bar (1) minus top/bottom borders (2).
             let inner_h = size.height.saturating_sub(3);
             tree.set_viewport_height(inner_h as usize);
+            // Inner width: tree panel width minus left/right borders (2), minus scrollbar (1).
+            let tree_cols = (u32::from(size.width) * u32::from(app.tree_width_pct) / 100) as u16;
+            let inner_w = tree_cols.saturating_sub(3);
+            tree.set_viewport_width(inner_w as usize);
         }
 
         // Poll terminal PTY output before drawing.
@@ -188,6 +192,10 @@ async fn main() -> Result<()> {
                 editor_rect.width,
                 editor_rect.height,
             ));
+            // Set viewport width on active buffer for horizontal scroll clamping.
+            if let Some(buf) = app.buffer_manager.active_buffer_mut() {
+                buf.set_viewport_width(editor_rect.width as usize);
+            }
         } else {
             app.editor_inner_area = None;
         }

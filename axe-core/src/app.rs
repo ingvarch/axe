@@ -1371,6 +1371,8 @@ impl AppState {
                 (KeyModifiers::NONE, KeyCode::Up) => Some(Command::TreeUp),
                 (KeyModifiers::NONE, KeyCode::Down) => Some(Command::TreeDown),
                 (KeyModifiers::NONE, KeyCode::Enter) => Some(Command::TreeToggle),
+                (KeyModifiers::SHIFT, KeyCode::Left) => Some(Command::TreeScrollLeft),
+                (KeyModifiers::SHIFT, KeyCode::Right) => Some(Command::TreeScrollRight),
                 (KeyModifiers::NONE, KeyCode::Right) => Some(Command::TreeExpand),
                 (KeyModifiers::NONE, KeyCode::Left) => Some(Command::TreeCollapseOrParent),
                 (KeyModifiers::NONE, KeyCode::Home) => Some(Command::TreeHome),
@@ -1507,6 +1509,12 @@ impl AppState {
                 if let Some(ref mut tree) = self.file_tree {
                     tree.move_end();
                 }
+            }
+            Command::TreeScrollLeft => {
+                self.tree_scroll_horizontal(-MOUSE_SCROLL_COLS);
+            }
+            Command::TreeScrollRight => {
+                self.tree_scroll_horizontal(MOUSE_SCROLL_COLS);
             }
             Command::ToggleIgnored => {
                 if let Some(ref mut tree) = self.file_tree {
@@ -2404,6 +2412,12 @@ impl AppState {
                     FocusTarget::Editor => {
                         self.editor_scroll(-MOUSE_SCROLL_LINES);
                     }
+                    FocusTarget::Tree if shift => {
+                        self.tree_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Tree => {
+                        self.tree_scroll(-MOUSE_SCROLL_LINES);
+                    }
                     _ => {}
                 }
             }
@@ -2421,23 +2435,35 @@ impl AppState {
                     FocusTarget::Editor => {
                         self.editor_scroll(MOUSE_SCROLL_LINES);
                     }
+                    FocusTarget::Tree if shift => {
+                        self.tree_scroll_horizontal(MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Tree => {
+                        self.tree_scroll(MOUSE_SCROLL_LINES);
+                    }
                     _ => {}
                 }
             }
             MouseEventKind::ScrollLeft => {
-                if matches!(
-                    self.panel_at(mouse.column, mouse.row, screen_width, main_height),
-                    FocusTarget::Editor
-                ) {
-                    self.editor_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                match self.panel_at(mouse.column, mouse.row, screen_width, main_height) {
+                    FocusTarget::Editor => {
+                        self.editor_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Tree => {
+                        self.tree_scroll_horizontal(-MOUSE_SCROLL_COLS);
+                    }
+                    _ => {}
                 }
             }
             MouseEventKind::ScrollRight => {
-                if matches!(
-                    self.panel_at(mouse.column, mouse.row, screen_width, main_height),
-                    FocusTarget::Editor
-                ) {
-                    self.editor_scroll_horizontal(MOUSE_SCROLL_COLS);
+                match self.panel_at(mouse.column, mouse.row, screen_width, main_height) {
+                    FocusTarget::Editor => {
+                        self.editor_scroll_horizontal(MOUSE_SCROLL_COLS);
+                    }
+                    FocusTarget::Tree => {
+                        self.tree_scroll_horizontal(MOUSE_SCROLL_COLS);
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -2595,6 +2621,27 @@ impl AppState {
     }
 
     /// Scrolls the active editor buffer vertically by the given delta lines.
+    /// Scrolls the file tree vertically by the given delta lines.
+    fn tree_scroll(&mut self, delta: i32) {
+        if let Some(ref mut tree) = self.file_tree {
+            tree.scroll_by(delta);
+        }
+    }
+
+    /// Scrolls the file tree horizontally by the given delta columns.
+    ///
+    /// Clamped to max content width so the view can't scroll into empty space.
+    fn tree_scroll_horizontal(&mut self, delta: i32) {
+        /// Indent chars per depth level (must match `TREE_INDENT` in axe-ui).
+        const TREE_INDENT: usize = 2;
+        /// Extra chars for icon/prefix per node (icon + space).
+        const ICON_OVERHEAD: usize = 2;
+
+        if let Some(ref mut tree) = self.file_tree {
+            tree.scroll_horizontally_by(delta, TREE_INDENT, ICON_OVERHEAD);
+        }
+    }
+
     fn editor_scroll(&mut self, delta: i32) {
         let (viewport_height, _) = self.editor_viewport();
         if let Some(buf) = self.buffer_manager.active_buffer_mut() {

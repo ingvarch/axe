@@ -52,9 +52,11 @@ pub struct FileTree {
     selected: usize,
     scroll: usize,
     viewport_height: usize,
+    viewport_width: usize,
     filter: TreeFilter,
     action: TreeAction,
     show_icons: bool,
+    scroll_col: usize,
 }
 
 impl FileTree {
@@ -100,9 +102,11 @@ impl FileTree {
             selected: 0,
             scroll: 0,
             viewport_height: usize::MAX,
+            viewport_width: usize::MAX,
             filter,
             action: TreeAction::Idle,
             show_icons: true,
+            scroll_col: 0,
         })
     }
 
@@ -140,6 +144,12 @@ impl FileTree {
     pub fn set_viewport_height(&mut self, h: usize) {
         self.viewport_height = h;
         self.adjust_scroll();
+    }
+
+    /// Sets the viewport width for horizontal scroll clamping.
+    pub fn set_viewport_width(&mut self, w: usize) {
+        self.viewport_width = w;
+        self.clamp_scroll_col();
     }
 
     /// Returns a reference to the currently selected node, if any.
@@ -326,6 +336,80 @@ impl FileTree {
     /// Sets whether ignored/hidden files are shown in the tree.
     pub fn set_show_ignored(&mut self, show: bool) {
         self.filter.set_show_ignored(show);
+    }
+
+    /// Returns the current horizontal scroll offset.
+    pub fn scroll_col(&self) -> usize {
+        self.scroll_col
+    }
+
+    // IMPACT ANALYSIS — scroll_by
+    // Parents: Mouse wheel events and keyboard shortcuts in app.rs.
+    // Children: None — only modifies scroll offset.
+    // Siblings: adjust_scroll (selection-driven), move_up/move_down (selection-driven).
+    // Risk: None — scroll is purely visual, clamped to valid range.
+
+    /// Scrolls the tree vertically by `delta` lines (positive = down, negative = up).
+    ///
+    /// Clamped to `0..=max_scroll` where `max_scroll = nodes.len() - viewport_height`.
+    pub fn scroll_by(&mut self, delta: i32) {
+        let max_scroll = self.nodes.len().saturating_sub(self.viewport_height);
+        if delta >= 0 {
+            self.scroll = self.scroll.saturating_add(delta as usize).min(max_scroll);
+        } else {
+            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs() as usize);
+        }
+    }
+
+    // IMPACT ANALYSIS — scroll_horizontally_by
+    // Parents: Mouse wheel + Shift, Shift+Arrow keys in app.rs.
+    // Children: render_tree_content reads scroll_col to offset line text.
+    // Siblings: scroll_by (vertical) — independent axis.
+    // Risk: None — clamped at 0, rendering handles overflow.
+
+    /// Computes the maximum content width across all nodes.
+    ///
+    /// `indent_per_level` is the number of chars per depth level (e.g. 2).
+    /// `icon_overhead` is the extra chars for icon/prefix per node (e.g. 2).
+    pub fn max_content_width(&self, indent_per_level: usize, icon_overhead: usize) -> usize {
+        self.nodes
+            .iter()
+            .map(|n| n.depth * indent_per_level + icon_overhead + n.name.chars().count())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Scrolls the tree horizontally by `delta` columns (positive = right, negative = left).
+    ///
+    /// Clamped so the view never scrolls past the longest line:
+    /// `max_scroll = max_content_width - viewport_width`.
+    pub fn scroll_horizontally_by(
+        &mut self,
+        delta: i32,
+        indent_per_level: usize,
+        icon_overhead: usize,
+    ) {
+        if delta >= 0 {
+            self.scroll_col = self.scroll_col.saturating_add(delta as usize);
+        } else {
+            self.scroll_col = self
+                .scroll_col
+                .saturating_sub(delta.unsigned_abs() as usize);
+        }
+        self.clamp_scroll_col_with(indent_per_level, icon_overhead);
+    }
+
+    /// Clamps horizontal scroll so content remains visible.
+    fn clamp_scroll_col_with(&mut self, indent_per_level: usize, icon_overhead: usize) {
+        let max_width = self.max_content_width(indent_per_level, icon_overhead);
+        let max_scroll = max_width.saturating_sub(self.viewport_width);
+        self.scroll_col = self.scroll_col.min(max_scroll);
+    }
+
+    /// Clamps horizontal scroll using default indent/icon values.
+    fn clamp_scroll_col(&mut self) {
+        // Default values matching TREE_INDENT (2) and icon overhead (2).
+        self.clamp_scroll_col_with(2, 2);
     }
 
     /// Returns the current tree action state.
@@ -1591,5 +1675,119 @@ mod tests {
         assert!(!tree.show_ignored());
         tree.set_show_ignored(true);
         assert!(tree.show_ignored());
+    }
+
+    #[test]
+    fn scroll_col_defaults_to_zero() {
+        let tmp = create_test_dir();
+        let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(tree.scroll_col(), 0);
+    }
+
+    #[test]
+    fn scroll_by_positive_scrolls_down() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.scroll_by(2);
+        assert_eq!(tree.scroll(), 2);
+    }
+
+    #[test]
+    fn scroll_by_negative_scrolls_up() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.scroll_by(4);
+        let scrolled = tree.scroll();
+        tree.scroll_by(-2);
+        assert_eq!(tree.scroll(), scrolled - 2);
+    }
+
+    #[test]
+    fn scroll_by_clamps_at_bounds() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let node_count = tree.nodes().len();
+        tree.set_viewport_height(3);
+        // Scroll way past the end.
+        tree.scroll_by(1000);
+        assert_eq!(tree.scroll(), node_count.saturating_sub(3));
+        // Scroll way past the start.
+        tree.scroll_by(-1000);
+        assert_eq!(tree.scroll(), 0);
+    }
+
+    #[test]
+    fn scroll_horizontally_by_positive() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Narrow viewport so there is room to scroll.
+        tree.set_viewport_width(5);
+        tree.scroll_horizontally_by(3, 2, 2);
+        assert_eq!(tree.scroll_col(), 3);
+    }
+
+    #[test]
+    fn scroll_horizontally_by_negative() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_width(3);
+        let max_w = tree.max_content_width(2, 2);
+        // Scroll to max, then back by 2.
+        tree.scroll_horizontally_by(max_w as i32, 2, 2);
+        let at_max = tree.scroll_col();
+        tree.scroll_horizontally_by(-2, 2, 2);
+        assert_eq!(tree.scroll_col(), at_max - 2);
+    }
+
+    #[test]
+    fn scroll_horizontally_clamps_at_zero() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_width(5);
+        tree.scroll_horizontally_by(2, 2, 2);
+        tree.scroll_horizontally_by(-100, 2, 2);
+        assert_eq!(tree.scroll_col(), 0);
+    }
+
+    #[test]
+    fn max_content_width_accounts_for_depth_and_name() {
+        let tmp = create_test_dir();
+        let tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let max_w = tree.max_content_width(2, 2);
+        // Depth-1 nodes: 2 + 2 + name.len() — longest depth-1 name is "alpha.txt" (9)
+        // So at least 2 + 2 + 9 = 13
+        assert!(
+            max_w >= 13,
+            "max_content_width should be >= 13, got {max_w}"
+        );
+    }
+
+    #[test]
+    fn scroll_horizontally_clamps_at_panel_width() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(10);
+        // Panel width 10 — max_scroll = max_content_width - 10.
+        tree.set_viewport_width(10);
+        tree.scroll_horizontally_by(1000, 2, 2);
+        let max_w = tree.max_content_width(2, 2);
+        let expected_max = max_w.saturating_sub(10);
+        assert_eq!(
+            tree.scroll_col(),
+            expected_max,
+            "scroll_col should be clamped to max_content_width - viewport_width"
+        );
+    }
+
+    #[test]
+    fn scroll_horizontally_no_scroll_when_content_fits() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Panel wider than content — no scroll possible.
+        tree.set_viewport_width(200);
+        tree.scroll_horizontally_by(100, 2, 2);
+        assert_eq!(tree.scroll_col(), 0, "should not scroll when content fits");
     }
 }

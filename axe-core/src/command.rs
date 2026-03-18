@@ -58,6 +58,10 @@ pub enum Command {
     TreeHome,
     /// Jump to last item in tree.
     TreeEnd,
+    /// Scroll tree panel left (horizontal).
+    TreeScrollLeft,
+    /// Scroll tree panel right (horizontal).
+    TreeScrollRight,
     /// Toggle visibility of gitignored files in the file tree.
     ToggleIgnored,
     /// Start creating a new file in the tree.
@@ -273,6 +277,8 @@ mod tests {
             Command::TreeCollapseOrParent,
             Command::TreeHome,
             Command::TreeEnd,
+            Command::TreeScrollLeft,
+            Command::TreeScrollRight,
             Command::ToggleIgnored,
             Command::TreeCreateFile,
             Command::TreeCreateDir,

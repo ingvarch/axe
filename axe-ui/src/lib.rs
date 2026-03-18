@@ -348,6 +348,11 @@ const HELP_TREE: HelpSection = HelpSection {
             primary_key: "d",
             description: "Delete",
         },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+\u{2190}/\u{2192}",
+            description: "Scroll horizontally",
+        },
     ],
 };
 
@@ -2030,6 +2035,7 @@ fn icon_for_node(node: &axe_tree::TreeNode) -> FileIcon {
 }
 
 /// Builds a multi-span tree line with icon when icons are enabled.
+#[allow(clippy::too_many_arguments)]
 fn build_icon_line(
     node: &axe_tree::TreeNode,
     indent: &str,
@@ -2037,6 +2043,7 @@ fn build_icon_line(
     name_style: Style,
     is_selected: bool,
     area_width: usize,
+    scroll_col: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let icon = if node.depth == 0 {
@@ -2045,19 +2052,44 @@ fn build_icon_line(
         icon_for_node(node)
     };
 
-    let indent_span = Span::styled(indent.to_owned(), name_style);
+    // Build the full logical line, then apply horizontal scroll.
+    let full_text = format!("{}{}{}", indent, icon.icon, display_name);
+    let visible: String = full_text.chars().skip(scroll_col).collect();
+    let padded = format!("{:<width$}", visible, width = area_width);
+
+    // Reconstruct styled spans from the scrolled view.
+    let indent_chars = indent.chars().count();
+    let icon_chars = icon.icon.chars().count();
+
+    // How many chars of each section remain after scroll.
+    let indent_visible = indent_chars.saturating_sub(scroll_col);
+    let icon_start = indent_chars.saturating_sub(scroll_col).min(area_width);
+    let icon_visible = if scroll_col > indent_chars {
+        icon_chars.saturating_sub(scroll_col - indent_chars)
+    } else {
+        icon_chars
+    }
+    .min(area_width.saturating_sub(icon_start));
+    let name_start = icon_start + icon_visible;
+
     let mut icon_style = Style::default().fg(icon.color);
     if is_selected {
         icon_style = icon_style.bg(theme.tree_selection_bg);
     }
-    let icon_span = Span::styled(icon.icon, icon_style);
 
-    let used = indent.len() + icon.icon.chars().count();
-    let remaining = area_width.saturating_sub(used);
-    let name_padded = format!("{:<width$}", display_name, width = remaining);
-    let name_span = Span::styled(name_padded, name_style);
+    // Split padded string into three styled spans.
+    let chars: Vec<char> = padded.chars().collect();
+    let indent_str: String = chars[..indent_visible.min(chars.len())].iter().collect();
+    let icon_str: String = chars[icon_start..name_start.min(chars.len())]
+        .iter()
+        .collect();
+    let name_str: String = chars[name_start.min(chars.len())..].iter().collect();
 
-    Line::from(vec![indent_span, icon_span, name_span])
+    Line::from(vec![
+        Span::styled(indent_str, name_style),
+        Span::styled(icon_str, icon_style),
+        Span::styled(name_str, name_style),
+    ])
 }
 
 /// Builds a plain-text tree line without icons.
@@ -2067,6 +2099,7 @@ fn build_plain_line(
     display_name: &str,
     name_style: Style,
     area_width: usize,
+    scroll_col: usize,
 ) -> Line<'static> {
     let text = if node.depth == 0 {
         format!("{indent}{display_name}")
@@ -2083,7 +2116,8 @@ fn build_plain_line(
         };
         format!("{indent}{prefix}{display_name}")
     };
-    let padded = format!("{:<width$}", text, width = area_width);
+    let visible: String = text.chars().skip(scroll_col).collect();
+    let padded = format!("{:<width$}", visible, width = area_width);
     Line::from(Span::styled(padded, name_style))
 }
 
@@ -2098,11 +2132,23 @@ fn build_plain_line(
 fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, theme: &Theme) {
     let nodes = file_tree.visible_nodes();
     let scroll = file_tree.scroll();
+    let scroll_col = file_tree.scroll_col();
     let selected = file_tree.selected();
     let visible_count = area.height as usize;
     let action = file_tree.action();
-    let area_width = area.width as usize;
     let use_icons = file_tree.show_icons();
+
+    // Reserve 1 column for scrollbar when content overflows.
+    let needs_scrollbar = nodes.len() > visible_count;
+    let (content_area, scrollbar_area) = if needs_scrollbar && area.width > 1 {
+        let content = Rect::new(area.x, area.y, area.width - 1, area.height);
+        let scrollbar = Rect::new(area.x + area.width - 1, area.y, 1, area.height);
+        (content, Some(scrollbar))
+    } else {
+        (area, None)
+    };
+
+    let area_width = content_area.width as usize;
     let mut lines: Vec<Line> = Vec::with_capacity(visible_count);
 
     for (i, node) in nodes.iter().enumerate().skip(scroll) {
@@ -2156,10 +2202,18 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
                 name_style,
                 is_selected,
                 area_width,
+                scroll_col,
                 theme,
             )
         } else {
-            build_plain_line(node, &indent, &display_name, name_style, area_width)
+            build_plain_line(
+                node,
+                &indent,
+                &display_name,
+                name_style,
+                area_width,
+                scroll_col,
+            )
         };
 
         lines.push(line);
@@ -2172,7 +2226,19 @@ fn render_tree_content(file_tree: &FileTree, area: Rect, frame: &mut Frame, them
     }
 
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, content_area);
+
+    // Render scrollbar when content overflows.
+    if let Some(sb_area) = scrollbar_area {
+        render_scrollbar(
+            nodes.len(),
+            visible_count,
+            scroll,
+            sb_area,
+            frame.buffer_mut(),
+            theme,
+        );
+    }
 }
 
 // IMPACT ANALYSIS — convert_ansi_color

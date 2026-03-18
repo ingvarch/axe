@@ -33,6 +33,8 @@ pub struct EditorBuffer {
     pub scroll_col: usize,
     /// Edit history for undo/redo.
     history: EditHistory,
+    /// Viewport width in columns for horizontal scroll clamping.
+    viewport_width: usize,
     /// Current text selection, if any.
     pub selection: Option<Selection>,
     /// Syntax highlighting state, if the file type is supported.
@@ -64,6 +66,7 @@ impl EditorBuffer {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            viewport_width: usize::MAX,
             history: EditHistory::new(),
             selection: None,
             highlight: None,
@@ -136,6 +139,7 @@ impl EditorBuffer {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            viewport_width: usize::MAX,
             history: EditHistory::new(),
             selection: None,
             highlight,
@@ -164,17 +168,48 @@ impl EditorBuffer {
         }
     }
 
+    /// Sets the viewport width for horizontal scroll clamping.
+    pub fn set_viewport_width(&mut self, w: usize) {
+        self.viewport_width = w;
+        self.clamp_scroll_col();
+    }
+
+    /// Returns the width (in chars) of the longest line in the buffer.
+    pub fn max_line_width(&self) -> usize {
+        let line_count = self.content.len_lines();
+        (0..line_count)
+            .map(|i| {
+                let line = self.content.line(i);
+                let len = line.len_chars();
+                // Strip trailing newline from the count.
+                if len > 0 && line.char(len - 1) == '\n' {
+                    len - 1
+                } else {
+                    len
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Scrolls the viewport horizontally by the given number of columns
     /// without moving the cursor.
     ///
     /// Positive delta scrolls right, negative scrolls left.
-    /// Clamped to zero on the left; no upper bound (long lines may extend arbitrarily).
+    /// Clamped so the view never scrolls past the longest line.
     pub fn scroll_horizontally_by(&mut self, delta: i32) {
         if delta > 0 {
             self.scroll_col += delta as usize;
         } else {
             self.scroll_col = self.scroll_col.saturating_sub((-delta) as usize);
         }
+        self.clamp_scroll_col();
+    }
+
+    /// Clamps horizontal scroll so the view can't scroll past the longest line.
+    fn clamp_scroll_col(&mut self) {
+        let max_scroll = self.max_line_width().saturating_sub(self.viewport_width);
+        self.scroll_col = self.scroll_col.min(max_scroll);
     }
 
     /// Returns the file name (without directory) if a path is set.
@@ -1333,6 +1368,7 @@ mod tests {
                 cursor: CursorState::default(),
                 scroll_row: 0,
                 scroll_col: 0,
+                viewport_width: usize::MAX,
                 history: EditHistory::new(),
                 selection: None,
                 highlight: None,
@@ -1354,6 +1390,7 @@ mod tests {
             cursor: CursorState::default(),
             scroll_row: 0,
             scroll_col: 0,
+            viewport_width: usize::MAX,
             history: EditHistory::new(),
             selection: None,
             highlight: None,
@@ -2864,6 +2901,7 @@ mod tests {
     fn scroll_horizontally_positive_scrolls_right() {
         let mut buf = EditorBuffer::new();
         buf.insert_text("a]".repeat(100).as_str());
+        buf.set_viewport_width(20);
         buf.scroll_horizontally_by(5);
         assert_eq!(buf.scroll_col, 5);
     }
@@ -2871,6 +2909,8 @@ mod tests {
     #[test]
     fn scroll_horizontally_negative_scrolls_left() {
         let mut buf = EditorBuffer::new();
+        buf.insert_text(&"x".repeat(100));
+        buf.set_viewport_width(20);
         buf.scroll_col = 10;
         buf.scroll_horizontally_by(-3);
         assert_eq!(buf.scroll_col, 7);
@@ -2879,6 +2919,8 @@ mod tests {
     #[test]
     fn scroll_horizontally_clamps_to_zero() {
         let mut buf = EditorBuffer::new();
+        buf.insert_text(&"x".repeat(100));
+        buf.set_viewport_width(20);
         buf.scroll_col = 2;
         buf.scroll_horizontally_by(-10);
         assert_eq!(buf.scroll_col, 0);
@@ -2888,10 +2930,37 @@ mod tests {
     fn scroll_horizontally_does_not_move_cursor() {
         let mut buf = EditorBuffer::new();
         buf.insert_text(&"x".repeat(200));
+        buf.set_viewport_width(20);
         buf.cursor.row = 0;
         buf.cursor.col = 5;
         buf.scroll_horizontally_by(10);
         assert_eq!(buf.cursor.row, 0);
         assert_eq!(buf.cursor.col, 5);
+    }
+
+    #[test]
+    fn scroll_horizontally_clamps_at_max_line_width() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text(&"x".repeat(50));
+        buf.set_viewport_width(20);
+        // max_scroll = 50 - 20 = 30
+        buf.scroll_horizontally_by(1000);
+        assert_eq!(buf.scroll_col, 30);
+    }
+
+    #[test]
+    fn scroll_horizontally_no_scroll_when_content_fits() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text(&"x".repeat(10));
+        buf.set_viewport_width(50);
+        buf.scroll_horizontally_by(100);
+        assert_eq!(buf.scroll_col, 0);
+    }
+
+    #[test]
+    fn max_line_width_returns_longest_line() {
+        let mut buf = EditorBuffer::new();
+        buf.insert_text("short\nthis is a longer line\nmed");
+        assert_eq!(buf.max_line_width(), 21); // "this is a longer line"
     }
 }
