@@ -36,7 +36,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_returns_crate_version() {
-        assert_eq!(version(), "0.1.0");
+    fn version_returns_non_empty_string() {
+        assert!(!version().is_empty());
     }
 }

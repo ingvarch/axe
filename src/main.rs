@@ -23,13 +23,16 @@ use axe_config::theme::load_theme;
 use axe_core::AppState;
 use axe_ui::theme::Theme;
 
+/// Full build version string injected by `build.rs` (e.g. "v0.1.0-abc123").
+const BUILD_VERSION: &str = env!("AXE_BUILD_VERSION");
+
 /// Initial terminal size used before the first frame is rendered.
 const INITIAL_TERM_COLS: u16 = 80;
 /// Initial terminal rows for the PTY.
 const INITIAL_TERM_ROWS: u16 = 24;
 
 #[derive(Parser)]
-#[command(name = "axe", version = axe_core::version(), about = "Axe IDE")]
+#[command(name = "axe", version = BUILD_VERSION, about = "Axe IDE")]
 struct Cli {
     /// Directory to open (defaults to current directory)
     #[arg(default_value = ".")]
@@ -94,6 +97,7 @@ async fn main() -> Result<()> {
     let root = cli.path.canonicalize().unwrap_or(cli.path);
 
     let mut app = AppState::new_with_root(root.clone());
+    app.build_version = BUILD_VERSION.to_string();
 
     // Build theme from config — resolved once at startup.
     let theme = load_theme(&app.config.ui.theme)

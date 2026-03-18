@@ -333,6 +333,8 @@ pub struct AppState {
     hover_mouse_state: Option<(Instant, usize, usize)>,
     /// Whether a format-on-save operation is pending (waiting for LSP formatting response).
     pending_format_save: bool,
+    /// Full build version string (e.g. "v0.1.0-abc123"), set by the binary crate.
+    pub build_version: String,
 }
 
 impl AppState {
@@ -384,6 +386,7 @@ impl AppState {
             hover_info: None,
             hover_mouse_state: None,
             pending_format_save: false,
+            build_version: String::new(),
         }
     }
 

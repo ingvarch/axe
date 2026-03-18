@@ -93,7 +93,7 @@ fn panel_block<'a>(
 
 /// Builds the status bar line with hotkey hints.
 fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
-    let version = axe_core::version();
+    let version = &app.build_version;
     let focus_label = app.focus.label();
     let key_style = Style::default().fg(theme.status_bar_key);
     let text_style = Style::default().fg(theme.status_bar_fg);
@@ -101,7 +101,12 @@ fn build_status_bar<'a>(app: &AppState, theme: &Theme) -> Line<'a> {
         .fg(theme.resize_border)
         .add_modifier(Modifier::BOLD);
 
-    let mut spans = vec![Span::styled(format!(" Axe v{version}"), text_style)];
+    let version_label = if version.is_empty() {
+        format!(" Axe v{}", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!(" Axe {version}")
+    };
+    let mut spans = vec![Span::styled(version_label, text_style)];
 
     if let Some(buffer) = app.buffer_manager.active_buffer() {
         let name = buffer.file_name().unwrap_or("[untitled]");

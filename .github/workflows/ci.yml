@@ -52,22 +52,46 @@ jobs:
       - run: cargo test --workspace
 
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.artifact }})
     needs: [clippy, test]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            artifact: axe-macos-arm64
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            artifact: axe-macos-amd64
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: axe-linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: axe-linux-arm64
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.os }}-release
-      - run: cargo build --workspace --release
+          key: ${{ matrix.target }}-release
+      - name: Install cross-compile tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      - name: Package
+        run: tar -czf ${{ matrix.artifact }}.tar.gz -C target/${{ matrix.target }}/release axe
       - uses: actions/upload-artifact@v7
         with:
-          name: axe-${{ matrix.os }}
-          path: target/release/axe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
           if-no-files-found: error

@@ -9,8 +9,8 @@ fn version_flag_prints_version_and_exits() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("axe 0.1.0"),
-        "expected 'axe 0.1.0' in output, got: {stdout}"
+        stdout.contains("axe v0.1.0"),
+        "expected 'axe v0.1.0' in output, got: {stdout}"
     );
     assert!(output.status.success());
 }
@@ -24,8 +24,8 @@ fn short_version_flag_prints_version_and_exits() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("axe 0.1.0"),
-        "expected 'axe 0.1.0' in output, got: {stdout}"
+        stdout.contains("axe v0.1.0"),
+        "expected 'axe v0.1.0' in output, got: {stdout}"
     );
     assert!(output.status.success());
 }
