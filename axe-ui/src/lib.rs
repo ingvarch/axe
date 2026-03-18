@@ -3717,8 +3717,8 @@ fn render_editor_content(
                 // Syntax highlights (lowest priority — set fg, preserve base bg).
                 if let Some(line_hl) = syntax_data.get(i) {
                     for span in line_hl {
-                        let hs = char_to_display_col(c2d, span.col_start)
-                            .saturating_sub(scroll_col);
+                        let hs =
+                            char_to_display_col(c2d, span.col_start).saturating_sub(scroll_col);
                         let he = char_to_display_col(c2d, span.col_end)
                             .saturating_sub(scroll_col)
                             .min(content_w as usize);
@@ -3733,8 +3733,8 @@ fn render_editor_content(
                 if let Some(s) = search {
                     for (idx, m) in s.matches.iter().enumerate() {
                         if m.row == file_line {
-                            let hs = char_to_display_col(c2d, m.col_start)
-                                .saturating_sub(scroll_col);
+                            let hs =
+                                char_to_display_col(c2d, m.col_start).saturating_sub(scroll_col);
                             let he = char_to_display_col(c2d, m.col_end)
                                 .saturating_sub(scroll_col)
                                 .min(content_w as usize);
@@ -3771,8 +3771,8 @@ fn render_editor_content(
                 let diag_underlines: Vec<(usize, usize, Color)> =
                     diagnostics_for_line(buffer.diagnostics(), file_line)
                         .map(|d| {
-                            let hs = char_to_display_col(c2d, d.col_start)
-                                .saturating_sub(scroll_col);
+                            let hs =
+                                char_to_display_col(c2d, d.col_start).saturating_sub(scroll_col);
                             let he = char_to_display_col(c2d, d.col_end)
                                 .saturating_sub(scroll_col)
                                 .min(content_w as usize);
@@ -3862,8 +3862,7 @@ fn render_editor_content(
             let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
             let expanded = expand_tabs(trimmed, tab_size);
             let scroll_col = char_to_display_col(&expanded.char_to_col, scroll_col_char);
-            char_to_display_col(&expanded.char_to_col, cursor_col_char)
-                .saturating_sub(scroll_col)
+            char_to_display_col(&expanded.char_to_col, cursor_col_char).saturating_sub(scroll_col)
         } else {
             cursor_col_char.saturating_sub(scroll_col_char)
         };
@@ -4964,9 +4963,9 @@ mod tests {
     fn expand_tabs_multiple_tabs() {
         let result = expand_tabs("\t\thello", 4);
         assert_eq!(result.text, "        hello");
-        assert_eq!(result.char_to_col[0], 0);  // first \t
-        assert_eq!(result.char_to_col[1], 4);  // second \t
-        assert_eq!(result.char_to_col[2], 8);  // h
+        assert_eq!(result.char_to_col[0], 0); // first \t
+        assert_eq!(result.char_to_col[1], 4); // second \t
+        assert_eq!(result.char_to_col[2], 8); // h
     }
 
     #[test]

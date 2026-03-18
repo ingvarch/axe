@@ -1,0 +1,237 @@
+use std::path::PathBuf;
+
+use alacritty_terminal::index::{Column, Line, Point};
+use crossterm::event::KeyEvent;
+
+use super::{AppState, FocusTarget};
+
+impl AppState {
+    /// Polls terminal output from the PTY background thread and feeds it to the terminal.
+    ///
+    /// Automatically closes tabs whose child processes have exited (e.g. user typed `exit`
+    /// or pressed Ctrl+D in the shell). Updates focus accordingly.
+    pub fn poll_terminal(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let exited = mgr.poll_output();
+            if !exited.is_empty() {
+                // Close exited tabs back-to-front (indices are sorted descending).
+                for idx in exited {
+                    if let Err(e) = mgr.close_tab(idx) {
+                        log::warn!("Failed to close exited terminal tab {idx}: {e}");
+                    }
+                }
+
+                if mgr.has_tabs() {
+                    // Still have tabs — sync focus to the new active tab.
+                    if matches!(self.focus, FocusTarget::Terminal(_)) {
+                        self.focus = FocusTarget::Terminal(mgr.active_index());
+                    }
+                } else {
+                    // Last tab closed — hide terminal panel, move focus to editor.
+                    self.show_terminal = false;
+                    if matches!(self.focus, FocusTarget::Terminal(_)) {
+                        self.focus = FocusTarget::Editor;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drains results from the background project search thread.
+    ///
+    /// Call this each frame from the main loop to progressively populate results.
+    pub fn drain_project_search_results(&mut self) {
+        if let Some(ref mut ps) = self.project_search {
+            ps.drain_results();
+        }
+    }
+
+    /// Converts a key event to bytes and writes them to the active terminal PTY.
+    ///
+    /// Reads the application cursor mode from the terminal state to produce the
+    /// correct escape sequences for arrow keys.
+    pub(super) fn write_terminal_input(&mut self, key: &KeyEvent) {
+        let app_cursor = self
+            .terminal_manager
+            .as_ref()
+            .and_then(|mgr| mgr.active_tab())
+            .map(|tab| {
+                tab.term()
+                    .mode()
+                    .contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+            })
+            .unwrap_or(false);
+
+        if let Some(bytes) = axe_terminal::input::key_to_bytes(key, app_cursor) {
+            if let Some(ref mut mgr) = self.terminal_manager {
+                if let Err(e) = mgr.write_to_active(&bytes) {
+                    log::warn!("Failed to write to terminal: {e}");
+                }
+            }
+        }
+    }
+
+    /// Creates a new terminal tab and focuses it.
+    ///
+    /// No-op if the terminal panel is hidden — the user should toggle the panel first.
+    pub(super) fn new_terminal_tab(&mut self) {
+        if !self.show_terminal {
+            return;
+        }
+
+        let cwd = self
+            .project_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        let shell = if self.config.terminal.shell.is_empty() {
+            None
+        } else {
+            Some(self.config.terminal.shell.as_str())
+        };
+
+        if let Some(ref mut mgr) = self.terminal_manager {
+            match mgr.spawn_tab_with_shell(
+                self.last_terminal_cols,
+                self.last_terminal_rows,
+                &cwd,
+                shell,
+            ) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create terminal tab: {e}");
+                }
+            }
+        } else {
+            // No manager yet — create one with a first tab.
+            let mut mgr = axe_terminal::TerminalManager::new();
+            match mgr.spawn_tab_with_shell(
+                self.last_terminal_cols,
+                self.last_terminal_rows,
+                &cwd,
+                shell,
+            ) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                    self.terminal_manager = Some(mgr);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create terminal tab: {e}");
+                }
+            }
+        }
+    }
+
+    /// Closes the active terminal tab.
+    pub(super) fn close_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let active = mgr.active_index();
+            if let Err(e) = mgr.close_tab(active) {
+                log::warn!("Failed to close terminal tab: {e}");
+                return;
+            }
+            if mgr.has_tabs() {
+                self.focus = FocusTarget::Terminal(mgr.active_index());
+            } else {
+                self.show_terminal = false;
+                if matches!(self.focus, FocusTarget::Terminal(_)) {
+                    self.focus = FocusTarget::Editor;
+                }
+            }
+        }
+    }
+
+    /// Scrolls the active terminal tab by the given amount.
+    pub(super) fn terminal_scroll(&mut self, scroll: alacritty_terminal::grid::Scroll) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            mgr.scroll_active(scroll);
+        }
+    }
+
+    /// Switches to the next terminal tab, wrapping from last to first.
+    pub(super) fn next_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let count = mgr.tab_count();
+            if count > 0 {
+                let next = (mgr.active_index() + 1) % count;
+                mgr.activate_tab(next);
+                self.focus = FocusTarget::Terminal(next);
+            }
+        }
+    }
+
+    /// Switches to the previous terminal tab, wrapping from first to last.
+    pub(super) fn prev_terminal_tab(&mut self) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            let count = mgr.tab_count();
+            if count > 0 {
+                let prev = if mgr.active_index() == 0 {
+                    count - 1
+                } else {
+                    mgr.active_index() - 1
+                };
+                mgr.activate_tab(prev);
+                self.focus = FocusTarget::Terminal(prev);
+            }
+        }
+    }
+
+    /// Activates a specific terminal tab by index. No-op if the index is out of range.
+    pub(super) fn activate_terminal_tab(&mut self, idx: usize) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            if idx < mgr.tab_count() {
+                mgr.activate_tab(idx);
+                self.focus = FocusTarget::Terminal(idx);
+            }
+        }
+    }
+
+    /// Checks if a click landed on the terminal tab bar and returns the tab index.
+    ///
+    /// The tab bar is the first row inside the terminal panel border.
+    /// Returns `None` if the click is outside the tab bar or if there's no terminal manager.
+    pub(super) fn tab_bar_hit(&self, col: u16, row: u16) -> Option<usize> {
+        let mgr = self.terminal_manager.as_ref()?;
+        if !mgr.has_tabs() {
+            return None;
+        }
+        let (tx, ty, tw, _th) = self.terminal_tab_bar_area?;
+        if row != ty || col < tx || col >= tx + tw {
+            return None;
+        }
+        mgr.tab_at_x_offset((col - tx) as usize)
+    }
+
+    // IMPACT ANALYSIS — screen_to_terminal_point
+    // Parents: handle_mouse_event() calls this for Down and Drag events in the terminal grid.
+    // Children: None — pure conversion function returning Option<Point>.
+    // Siblings: terminal_grid_area (must be set by main.rs each frame),
+    //           terminal_manager.active_display_offset() (must reflect current scroll state).
+    // Risk: None — stateless helper, cannot corrupt state.
+
+    /// Converts screen coordinates to a terminal grid Point.
+    ///
+    /// Returns `None` if the coordinates are outside the terminal grid area
+    /// or if no grid area has been set.
+    pub(super) fn screen_to_terminal_point(&self, col: u16, row: u16) -> Option<Point> {
+        let (gx, gy, gw, gh) = self.terminal_grid_area?;
+        if col < gx || col >= gx + gw || row < gy || row >= gy + gh {
+            return None;
+        }
+        let grid_col = (col - gx) as usize;
+        let grid_row = (row - gy) as i32;
+        let display_offset = self
+            .terminal_manager
+            .as_ref()
+            .map(|mgr| mgr.active_display_offset())
+            .unwrap_or(0) as i32;
+        Some(Point::new(
+            Line(grid_row - display_offset),
+            Column(grid_col),
+        ))
+    }
+}

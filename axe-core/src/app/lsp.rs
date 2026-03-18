@@ -1,0 +1,447 @@
+use std::path::PathBuf;
+
+use axe_editor::diagnostic::{BufferDiagnostic, DiagnosticSeverity};
+
+use crate::command::Command;
+
+use super::AppState;
+
+impl AppState {
+    /// Polls LSP events from all active language servers.
+    ///
+    /// Handles initialization events (logs status), crash events (shows status
+    /// message). Call this each frame from the main loop.
+    pub fn poll_lsp(&mut self) {
+        let Some(ref mut lsp) = self.lsp_manager else {
+            return;
+        };
+
+        let events = lsp.poll_events();
+        for event in events {
+            match event {
+                axe_lsp::LspEvent::Initialized { language_id } => {
+                    log::info!("LSP server initialized for {language_id}");
+                    self.set_status_message(format!("LSP: {language_id} ready"));
+                }
+                axe_lsp::LspEvent::ServerCrashed { language_id, error } => {
+                    log::warn!("LSP server crashed for {language_id}: {error}");
+                    self.set_status_message(format!("LSP: {language_id} crashed"));
+                }
+                axe_lsp::LspEvent::ServerNotification { method, params } => {
+                    if method == "textDocument/publishDiagnostics" {
+                        self.handle_publish_diagnostics(&params);
+                    }
+                }
+                axe_lsp::LspEvent::Response { .. } => {
+                    // Non-initialize, non-completion responses — ignored.
+                }
+                axe_lsp::LspEvent::CompletionResponse { result: Ok(value) } => {
+                    let items = crate::completion::parse_completion_response(&value);
+                    if !items.is_empty() {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            self.completion = Some(crate::completion::CompletionState::new(
+                                items,
+                                buf.cursor.row,
+                                buf.cursor.col,
+                            ));
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::CompletionResponse { result: Err(e) } => {
+                    log::warn!("LSP completion error: {}", e.message);
+                }
+                axe_lsp::LspEvent::DefinitionResponse { result: Ok(value) } => {
+                    let project_root = self
+                        .project_root
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let items =
+                        crate::location_list::parse_definition_response(&value, &project_root);
+                    match items.len() {
+                        0 => {
+                            self.set_status_message("No definition found".to_string());
+                        }
+                        1 => {
+                            // Single result: jump directly without overlay.
+                            let path = items[0].path.clone();
+                            let line = items[0].line;
+                            let col = items[0].col;
+                            self.execute(Command::OpenFile(path));
+                            let (h, w) = self.editor_viewport();
+                            if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                                buf.cursor.row = line;
+                                buf.cursor.col = col;
+                                buf.ensure_cursor_visible(h, w);
+                            }
+                        }
+                        _ => {
+                            self.location_list =
+                                Some(crate::location_list::LocationList::new("Definition", items));
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::DefinitionResponse { result: Err(e) } => {
+                    log::warn!("LSP definition error: {}", e.message);
+                }
+                axe_lsp::LspEvent::ReferencesResponse { result: Ok(value) } => {
+                    let project_root = self
+                        .project_root
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let items =
+                        crate::location_list::parse_references_response(&value, &project_root);
+                    if items.is_empty() {
+                        self.set_status_message("No references found".to_string());
+                    } else {
+                        self.location_list =
+                            Some(crate::location_list::LocationList::new("References", items));
+                    }
+                }
+                axe_lsp::LspEvent::ReferencesResponse { result: Err(e) } => {
+                    log::warn!("LSP references error: {}", e.message);
+                }
+                axe_lsp::LspEvent::HoverResponse { result: Ok(value) } => {
+                    if let Some(mut info) = crate::hover::parse_hover_response(&value) {
+                        // Attach current cursor position for rendering near cursor.
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            info.trigger_row = buf.cursor.row;
+                            info.trigger_col = buf.cursor.col;
+                        }
+                        self.hover_info = Some(info);
+                    } else {
+                        self.set_status_message("No hover info available".to_string());
+                    }
+                }
+                axe_lsp::LspEvent::HoverResponse { result: Err(e) } => {
+                    log::warn!("LSP hover error: {}", e.message);
+                }
+                axe_lsp::LspEvent::FormattingResponse {
+                    result: Ok(ref value),
+                } => {
+                    self.apply_formatting_edits(value);
+                    if self.pending_format_save {
+                        self.pending_format_save = false;
+                        self.notify_lsp_change();
+                        self.save_active_buffer();
+                    }
+                }
+                axe_lsp::LspEvent::FormattingResponse { result: Err(e) } => {
+                    log::warn!("LSP formatting error: {}", e.message);
+                    if self.pending_format_save {
+                        self.pending_format_save = false;
+                        self.save_active_buffer(); // Save anyway on error.
+                    }
+                }
+            }
+        }
+    }
+
+    /// Notifies the LSP manager that the active buffer content changed.
+    ///
+    /// Called after every edit command (insert, delete, paste, undo, redo, etc.).
+    pub(super) fn notify_lsp_change(&mut self) {
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let text = buf.content_string();
+                    let path = path.to_path_buf();
+                    if let Err(e) = lsp.file_changed(&path, &text) {
+                        log::warn!("LSP didChange failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handles a `textDocument/publishDiagnostics` notification from an LSP server.
+    ///
+    /// Parses the params, converts LSP diagnostics to `BufferDiagnostic`, and stores
+    /// them on the matching buffer.
+    fn handle_publish_diagnostics(&mut self, params: &serde_json::Value) {
+        let Ok(publish) =
+            serde_json::from_value::<lsp_types::PublishDiagnosticsParams>(params.clone())
+        else {
+            log::warn!("Failed to parse publishDiagnostics params");
+            return;
+        };
+
+        let Some(path) = uri_to_path(&publish.uri) else {
+            log::warn!(
+                "publishDiagnostics URI is not a file path: {:?}",
+                publish.uri
+            );
+            return;
+        };
+
+        let diags = convert_lsp_diagnostics(&publish.diagnostics);
+
+        if let Some(buf) = self.buffer_manager.buffer_mut_by_path(&path) {
+            buf.set_diagnostics(diags);
+        }
+    }
+
+    /// Jumps to the next diagnostic line in the active buffer, wrapping around.
+    pub(super) fn go_to_next_diagnostic(&mut self) {
+        let (h, w) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            let diags = buf.diagnostics();
+            if diags.is_empty() {
+                return;
+            }
+            let current_line = buf.cursor.row;
+            // Find the first diagnostic line strictly after the cursor.
+            let next = diags
+                .iter()
+                .map(|d| d.line)
+                .find(|&l| l > current_line)
+                .or_else(|| diags.iter().map(|d| d.line).min());
+            if let Some(line) = next {
+                buf.cursor.row = line;
+                buf.cursor.col = 0;
+                buf.ensure_cursor_visible(h, w);
+            }
+        }
+    }
+
+    /// Jumps to the previous diagnostic line in the active buffer, wrapping around.
+    pub(super) fn go_to_prev_diagnostic(&mut self) {
+        let (h, w) = self.editor_viewport();
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            let diags = buf.diagnostics();
+            if diags.is_empty() {
+                return;
+            }
+            let current_line = buf.cursor.row;
+            // Find the last diagnostic line strictly before the cursor.
+            let prev = diags
+                .iter()
+                .map(|d| d.line)
+                .rev()
+                .find(|&l| l < current_line)
+                .or_else(|| diags.iter().map(|d| d.line).max());
+            if let Some(line) = prev {
+                buf.cursor.row = line;
+                buf.cursor.col = 0;
+                buf.ensure_cursor_visible(h, w);
+            }
+        }
+    }
+
+    // IMPACT ANALYSIS — Completion methods
+    // Parents: TriggerCompletion command, auto-trigger on '.' or ':'
+    // Children: LspManager::request_completion, CompletionState, buffer edits
+    // Siblings: Search bar (completion dismisses when search opens), overlays
+
+    /// Sends a completion request to the LSP for the current cursor position.
+    pub(super) fn request_completion(&mut self) {
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_completion(&path, line, col) {
+                        log::warn!("LSP completion request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ensures the active buffer is promoted from preview and known to the LSP.
+    ///
+    /// Preview buffers are not sent to the LSP via `didOpen`. This method
+    /// promotes the preview to a full buffer and notifies the LSP, so that
+    /// features like Go To Definition work even when invoked from a preview.
+    pub(super) fn ensure_lsp_open_for_active_buffer(&mut self) {
+        // Promote preview buffer if needed.
+        if let Some(buf) = self.buffer_manager.active_buffer() {
+            if buf.is_preview {
+                self.buffer_manager.promote_preview();
+                // Notify LSP about the newly promoted file.
+                if let Some(ref mut lsp) = self.lsp_manager {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(path) = buf.path() {
+                            let text = buf.content_string();
+                            if let Err(e) = lsp.file_opened(path, &text) {
+                                log::warn!("LSP didOpen (from preview promote) failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a definition request to the LSP for the current cursor position.
+    pub(super) fn request_definition(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_definition(&path, line, col) {
+                        log::warn!("LSP definition request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a references request to the LSP for the current cursor position.
+    pub(super) fn request_references(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_references(&path, line, col) {
+                        log::warn!("LSP references request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a hover request to the LSP for the current cursor position.
+    pub(super) fn request_hover(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_hover(&path, line, col) {
+                        log::warn!("LSP hover request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    // IMPACT ANALYSIS — request_format_for_active_buffer
+    // Parents: Command::FormatDocument, Command::EditorSave (when format_on_save)
+    // Children: LspManager::request_formatting() sends textDocument/formatting
+    // Siblings: ensure_lsp_open_for_active_buffer (same pattern as request_hover)
+    // Risk: Returns false if LSP not available — callers must handle gracefully
+
+    /// Sends a formatting request to the LSP for the active buffer.
+    ///
+    /// Returns `true` if the request was sent, `false` if formatting is
+    /// unavailable (no LSP, no buffer, or server doesn't support formatting).
+    pub(super) fn request_format_for_active_buffer(&mut self) -> bool {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let tab_size = self.config.editor.tab_size as u32;
+                    let insert_spaces = self.config.editor.insert_spaces;
+                    match lsp.request_formatting(&path, tab_size, insert_spaces) {
+                        Ok(sent) => return sent,
+                        Err(e) => {
+                            log::warn!("LSP formatting request failed: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // IMPACT ANALYSIS — apply_formatting_edits
+    // Parents: poll_lsp() FormattingResponse handler
+    // Children: EditorBuffer::apply_text_edit() modifies rope content
+    // Siblings: Selection (cleared by apply_text_edit), cursor (repositioned),
+    //           diagnostics (shifted by LSP after didChange)
+    // Risk: Edits must be applied in reverse order to preserve line/col offsets
+
+    /// Applies LSP formatting text edits to the active buffer.
+    ///
+    /// Parses `TextEdit[]` from the response value, sorts in reverse document
+    /// order (end position descending), and applies each edit.
+    pub(super) fn apply_formatting_edits(&mut self, value: &serde_json::Value) {
+        let Some(edits) = value.as_array() else {
+            return;
+        };
+
+        // Collect and sort edits in reverse document order so earlier edits
+        // don't invalidate the positions of later ones.
+        let mut parsed_edits: Vec<(usize, usize, usize, usize, String)> = edits
+            .iter()
+            .filter_map(|edit| {
+                let range = edit.get("range")?;
+                let start = range.get("start")?;
+                let end = range.get("end")?;
+                let new_text = edit.get("newText")?.as_str()?.to_string();
+                Some((
+                    start.get("line")?.as_u64()? as usize,
+                    start.get("character")?.as_u64()? as usize,
+                    end.get("line")?.as_u64()? as usize,
+                    end.get("character")?.as_u64()? as usize,
+                    new_text,
+                ))
+            })
+            .collect();
+
+        // Sort by end position descending (reverse document order).
+        parsed_edits.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.3.cmp(&a.3)));
+
+        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+            for (start_line, start_col, end_line, end_col, new_text) in parsed_edits {
+                buf.apply_text_edit(start_line, start_col, end_line, end_col, &new_text);
+            }
+        }
+    }
+}
+
+/// Converts an `lsp_types::Uri` to a `PathBuf`, if it has a `file` scheme.
+pub(crate) fn uri_to_path(uri: &lsp_types::Uri) -> Option<std::path::PathBuf> {
+    let s = uri.as_str();
+    let url = url::Url::parse(s).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    url.to_file_path().ok()
+}
+
+/// Converts LSP diagnostics to internal `BufferDiagnostic` format.
+///
+/// Pure function — no side effects. Maps `lsp_types::DiagnosticSeverity` to
+/// `DiagnosticSeverity`, defaulting to `Warning` when severity is absent.
+pub(crate) fn convert_lsp_diagnostics(
+    lsp_diags: &[lsp_types::Diagnostic],
+) -> Vec<BufferDiagnostic> {
+    lsp_diags
+        .iter()
+        .map(|d| {
+            let severity = match d.severity {
+                Some(lsp_types::DiagnosticSeverity::ERROR) => DiagnosticSeverity::Error,
+                Some(lsp_types::DiagnosticSeverity::WARNING) => DiagnosticSeverity::Warning,
+                Some(lsp_types::DiagnosticSeverity::INFORMATION) => DiagnosticSeverity::Info,
+                Some(lsp_types::DiagnosticSeverity::HINT) => DiagnosticSeverity::Hint,
+                _ => DiagnosticSeverity::Warning,
+            };
+
+            let code = d.code.as_ref().map(|c| match c {
+                lsp_types::NumberOrString::Number(n) => n.to_string(),
+                lsp_types::NumberOrString::String(s) => s.clone(),
+            });
+
+            BufferDiagnostic {
+                line: d.range.start.line as usize,
+                col_start: d.range.start.character as usize,
+                col_end: d.range.end.character as usize,
+                severity,
+                message: d.message.clone(),
+                source: d.source.clone(),
+                code,
+            }
+        })
+        .collect()
+}
