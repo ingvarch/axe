@@ -11,6 +11,6 @@ pub use manager::LspManager;
 mod tests {
     #[test]
     fn crate_compiles() {
-        assert!(true);
+        // Smoke test: if this runs, the crate compiled successfully
     }
 }

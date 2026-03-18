@@ -1272,7 +1272,7 @@ mod tests {
     #[test]
     fn line_length_empty_line() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        writeln!(tmp, "").unwrap();
+        writeln!(tmp).unwrap();
         write!(tmp, "x").unwrap();
         tmp.flush().unwrap();
         let buf = EditorBuffer::from_file(tmp.path()).unwrap();
@@ -2312,7 +2312,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.rs");
         let mut file = File::create(&path).unwrap();
-        write!(file, "fn main() {{}}\n").unwrap();
+        writeln!(file, "fn main() {{}}").unwrap();
 
         let buf = EditorBuffer::from_file(&path).unwrap();
         // highlight should be Some for .rs files.
@@ -2325,7 +2325,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.xyz");
         let mut file = File::create(&path).unwrap();
-        write!(file, "hello world\n").unwrap();
+        writeln!(file, "hello world").unwrap();
 
         let buf = EditorBuffer::from_file(&path).unwrap();
         assert!(buf.highlight.is_none());
@@ -2337,7 +2337,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.rs");
         let mut file = File::create(&path).unwrap();
-        write!(file, "fn main() {{}}\n").unwrap();
+        writeln!(file, "fn main() {{}}").unwrap();
 
         let buf = EditorBuffer::from_file(&path).unwrap();
         let spans = buf.highlight_range(0, 1);
@@ -2367,7 +2367,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.rs");
         let mut file = File::create(&path).unwrap();
-        write!(file, "// hello\n").unwrap();
+        writeln!(file, "// hello").unwrap();
 
         let mut buf = EditorBuffer::from_file(&path).unwrap();
         // Insert at start of file: "let x = 1;\n"
@@ -2398,7 +2398,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.rs");
         let mut file = File::create(&path).unwrap();
-        write!(file, "fn main() {{}}\n").unwrap();
+        writeln!(file, "fn main() {{}}").unwrap();
 
         let mut buf = EditorBuffer::from_file(&path).unwrap();
         // Type a character.

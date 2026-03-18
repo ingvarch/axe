@@ -3373,8 +3373,8 @@ mod tests {
 
     #[test]
     fn new_with_root_has_file_tree() {
-        let tmp = std::env::temp_dir();
-        let app = AppState::new_with_root(tmp);
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let app = AppState::new_with_root(tmp.path().to_path_buf());
         assert!(app.file_tree.is_some());
     }
 
@@ -3386,16 +3386,19 @@ mod tests {
 
     // --- Tree navigation key routing tests ---
 
-    fn app_with_tree_focused() -> AppState {
-        let tmp = std::env::temp_dir();
-        let mut app = AppState::new_with_root(tmp);
+    fn app_with_tree_focused() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        // Create files so the tree has entries to navigate.
+        std::fs::write(tmp.path().join("a.txt"), "").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "").unwrap();
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
         app.focus = FocusTarget::Tree;
-        app
+        (app, tmp)
     }
 
     #[test]
     fn tree_down_when_focused() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         let initial = app.file_tree.as_ref().unwrap().selected();
         app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_ne!(app.file_tree.as_ref().unwrap().selected(), initial);
@@ -3403,7 +3406,7 @@ mod tests {
 
     #[test]
     fn tree_up_when_focused() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         // Move down first, then up
         app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let after_down = app.file_tree.as_ref().unwrap().selected();
@@ -3413,8 +3416,8 @@ mod tests {
 
     #[test]
     fn arrows_not_intercepted_when_editor_focused() {
-        let tmp = std::env::temp_dir();
-        let mut app = AppState::new_with_root(tmp);
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let mut app = AppState::new_with_root(tmp.path().to_path_buf());
         app.focus = FocusTarget::Editor;
         let initial = app.file_tree.as_ref().unwrap().selected();
         app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -3424,7 +3427,7 @@ mod tests {
 
     #[test]
     fn tree_keys_blocked_when_help_open() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         app.show_help = true;
         let initial = app.file_tree.as_ref().unwrap().selected();
         app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -3433,7 +3436,7 @@ mod tests {
 
     #[test]
     fn global_keys_work_when_tree_focused() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         // Ctrl+Q should show quit confirmation
         app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(app.confirm_dialog.is_some());
@@ -3441,7 +3444,7 @@ mod tests {
 
     #[test]
     fn tab_not_intercepted_when_tree_focused() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         // Tab is not a global binding, and not a tree-specific key.
         // It falls through to global keymap which returns None.
@@ -3452,7 +3455,7 @@ mod tests {
 
     #[test]
     fn toggle_ignored_toggles_filter() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         // Default config has show_hidden=false, so show_ignored starts as false.
         assert!(!app.file_tree.as_ref().unwrap().show_ignored());
         app.execute(Command::ToggleIgnored);
@@ -3461,7 +3464,7 @@ mod tests {
 
     #[test]
     fn ctrl_g_toggles_ignored() {
-        let mut app = app_with_tree_focused();
+        let (mut app, _tmp) = app_with_tree_focused();
         // Default config has show_hidden=false, so show_ignored starts as false.
         assert!(!app.file_tree.as_ref().unwrap().show_ignored());
         app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
