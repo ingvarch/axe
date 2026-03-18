@@ -646,21 +646,23 @@ Navigate to symbol definitions and find all references.
 
 ---
 
-### Task 7.5 — LSP: Hover Information
+### Task 7.5 — LSP: Hover Information [DONE]
 
 Show type/documentation info when hovering over symbols.
 
 **Acceptance criteria:**
-- `K` (in modal mode) or `Ctrl+Shift+K` shows hover info for the symbol under cursor
-- Hover tooltip displayed as a floating overlay near the cursor
-- Content supports Markdown rendering (basic: bold, italic, code blocks, headers)
-- `Esc` or any key dismisses the tooltip
-- Mouse hover also triggers (with a short delay, e.g., 500ms)
+- [x] `K` (in modal mode) or `Ctrl+Shift+K` shows hover info for the symbol under cursor
+- [x] Hover tooltip displayed as a floating overlay near the cursor
+- [x] Content supports Markdown rendering (basic: bold, italic, code blocks, headers)
+- [x] `Esc` or any key dismisses the tooltip
+- [x] Mouse hover also triggers (with a short delay, e.g., 500ms)
 
 **Implementation details:**
-- `textDocument/hover` request → `Hover` response with `MarkupContent`
-- Render Markdown as styled text (use a simple markdown-to-spans converter)
-- Overlay positioned above or below the cursor line
+- `axe-core/src/hover.rs`: `HoverInfo`, `HoverLine`, `HoverSpan` types; `parse_hover_response()` handling all LSP formats (MarkupContent, MarkedString, arrays); `markdown_to_hover_lines()` parser
+- `axe-lsp`: `PendingRequestKind::Hover`, `LspEvent::HoverResponse`, `request_hover()`, hover capability in `initialize_params`, response routing in `poll_events()`
+- `axe-core/src/app.rs`: `hover_info` field, key dismissal (any key clears, Esc only dismisses hover), `request_hover()` helper, mouse hover with 500ms delay via `check_hover_timer()` / `handle_mouse_moved()`
+- `axe-ui`: `render_hover_tooltip()` positioned at cursor (above/below), styled spans (bold/italic/code), overlay theme colors
+- Keybindings: `Ctrl+Shift+K` (both case variants) + `F4` fallback, `Command::ShowHover`
 
 ---
 

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
@@ -136,6 +136,9 @@ async fn main() -> Result<()> {
         // Check if autosave should trigger (debounced 2s after last edit).
         app.check_autosave();
 
+        // Check if mouse hover delay has elapsed for LSP hover request.
+        app.check_hover_timer();
+
         // Clear expired status messages.
         app.expire_status_message();
 
@@ -216,7 +219,11 @@ async fn main() -> Result<()> {
                         app.handle_key_event(key);
                     }
                     Event::Mouse(mouse) => {
-                        app.handle_mouse_event(mouse, size.width, size.height);
+                        if mouse.kind == MouseEventKind::Moved {
+                            app.handle_mouse_moved(mouse.column, mouse.row);
+                        } else {
+                            app.handle_mouse_event(mouse, size.width, size.height);
+                        }
                     }
                     _ => {}
                 }

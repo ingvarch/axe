@@ -266,6 +266,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Alt+,", "Prev diagnostic"),
     ("F12", "Go to definition"),
     ("Shift+F12", "Find references"),
+    ("Ctrl+Shift+K / F4", "Show hover info"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -920,6 +921,166 @@ fn render_completion_popup(
         }
 
         let line = Line::from(spans);
+        let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), line_area);
+    }
+}
+
+/// Maximum width for the hover tooltip.
+const HOVER_MAX_WIDTH: u16 = 80;
+/// Maximum height for the hover tooltip.
+const HOVER_MAX_HEIGHT: u16 = 20;
+/// Minimum width for the hover tooltip.
+const HOVER_MIN_WIDTH: u16 = 20;
+
+/// Renders the hover tooltip positioned near the cursor.
+fn render_hover_tooltip(
+    hover: &axe_core::hover::HoverInfo,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    if hover.lines.is_empty() {
+        return;
+    }
+
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    // Calculate gutter width (same as completion popup).
+    let line_count = buffer.line_count();
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH;
+
+    // Screen position relative to editor inner area.
+    let cursor_screen_row = hover.trigger_row.saturating_sub(buffer.scroll_row) as u16;
+    let cursor_screen_col = hover.trigger_col.saturating_sub(buffer.scroll_col) as u16;
+
+    // Calculate content dimensions.
+    let content_width: u16 = hover
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|s| s.text.len()).sum::<usize>() as u16)
+        .max()
+        .unwrap_or(0);
+
+    let popup_width = (content_width + 2) // +2 for borders
+        .clamp(HOVER_MIN_WIDTH, HOVER_MAX_WIDTH)
+        .min(editor_w);
+
+    let content_height = hover.lines.len() as u16;
+    let popup_height = (content_height + 2) // +2 for borders
+        .min(HOVER_MAX_HEIGHT)
+        .min(editor_h);
+
+    // Position: prefer above cursor line; if no space, place below.
+    let popup_x = (editor_x + gutter_width + cursor_screen_col).min(
+        editor_x
+            .saturating_add(editor_w)
+            .saturating_sub(popup_width),
+    );
+
+    let space_above = cursor_screen_row;
+    let above_y = editor_y
+        .saturating_add(cursor_screen_row)
+        .saturating_sub(popup_height);
+    let below_y = editor_y + cursor_screen_row + 1;
+
+    let popup_y = if space_above >= popup_height {
+        above_y
+    } else {
+        below_y
+    };
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground))
+        .border_style(Style::default().fg(theme.overlay_border));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Render hover lines.
+    let inner_width = inner.width as usize;
+    let visible_lines = (inner.height as usize).min(hover.lines.len());
+
+    for (i, hover_line) in hover.lines.iter().take(visible_lines).enumerate() {
+        if i as u16 >= inner.height {
+            break;
+        }
+
+        let code_block_bg = Color::Rgb(
+            theme.overlay_bg.to_string().len() as u8, // dummy — use slightly modified bg
+            0,
+            0,
+        );
+        // Use a slightly lighter background for code blocks.
+        let code_bg = match theme.overlay_bg {
+            Color::Rgb(r, g, b) => Color::Rgb(
+                r.saturating_add(15),
+                g.saturating_add(15),
+                b.saturating_add(15),
+            ),
+            _ => theme.overlay_bg,
+        };
+        let _ = code_block_bg; // avoid unused warning
+
+        let base_style = if hover_line.is_code_block {
+            Style::default().bg(code_bg).fg(theme.foreground)
+        } else {
+            Style::default().bg(theme.overlay_bg).fg(theme.foreground)
+        };
+
+        let spans: Vec<Span> = if hover_line.spans.is_empty() {
+            // Separator line.
+            vec![Span::styled(
+                "\u{2500}".repeat(inner_width.min(popup_width as usize)),
+                Style::default()
+                    .bg(theme.overlay_bg)
+                    .fg(theme.overlay_border)
+                    .add_modifier(Modifier::DIM),
+            )]
+        } else {
+            hover_line
+                .spans
+                .iter()
+                .map(|span| {
+                    let mut style = base_style;
+                    if span.bold {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if span.italic {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    if span.code {
+                        style = style.bg(code_bg);
+                    }
+                    Span::styled(&span.text, style)
+                })
+                .collect()
+        };
+
+        // Pad to full width.
+        let content_len: usize = spans.iter().map(|s| s.content.len()).sum();
+        let mut all_spans = spans;
+        if content_len < inner_width {
+            all_spans.push(Span::styled(
+                " ".repeat(inner_width - content_len),
+                base_style,
+            ));
+        }
+
+        let line = Line::from(all_spans);
         let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
         frame.render_widget(Paragraph::new(line), line_area);
     }
@@ -2494,6 +2655,13 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     if let Some(ref comp) = app.completion {
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             render_completion_popup(comp, buffer, app, frame, theme);
+        }
+    }
+
+    // Hover tooltip (non-modal, positioned near cursor).
+    if let Some(ref hover) = app.hover_info {
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_hover_tooltip(hover, buffer, app, frame, theme);
         }
     }
 

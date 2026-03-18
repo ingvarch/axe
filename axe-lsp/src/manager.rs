@@ -215,6 +215,12 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::Hover) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::HoverResponse { result });
+                                }
+                                continue;
+                            }
                             None => {}
                         }
                     }
@@ -247,6 +253,12 @@ impl LspManager {
                             Some(PendingRequestKind::References) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::ReferencesResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::Hover) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::HoverResponse { result });
                                 }
                                 continue;
                             }
@@ -361,6 +373,34 @@ impl LspManager {
             params,
             PendingRequestKind::References,
         )?;
+        Ok(())
+    }
+
+    /// Sends a `textDocument/hover` request for the given file position.
+    ///
+    /// The response will arrive as `LspEvent::HoverResponse` via `poll_events()`.
+    pub fn request_hover(&mut self, path: &Path, line: u32, character: u32) -> Result<()> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(());
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(());
+        };
+
+        if !client.is_initialized() {
+            return Ok(());
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character }
+        });
+
+        client.send_request("textDocument/hover", params, PendingRequestKind::Hover)?;
         Ok(())
     }
 
@@ -551,6 +591,14 @@ mod tests {
         let dir = std::env::temp_dir();
         let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
         let result = manager.request_references(Path::new("/tmp/test.rs"), 0, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn request_hover_no_client_is_noop() {
+        let dir = std::env::temp_dir();
+        let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
+        let result = manager.request_hover(Path::new("/tmp/test.rs"), 0, 0);
         assert!(result.is_ok());
     }
 

@@ -216,6 +216,8 @@ pub enum Command {
     GoToDefinition,
     /// Find all references to the symbol under the cursor (Shift+F12).
     FindReferences,
+    /// Show hover information for the symbol under the cursor.
+    ShowHover,
 }
 
 #[cfg(test)]
@@ -351,6 +353,7 @@ mod tests {
             Command::DismissCompletion,
             Command::GoToDefinition,
             Command::FindReferences,
+            Command::ShowHover,
         ];
 
         for (i, a) in variants.iter().enumerate() {

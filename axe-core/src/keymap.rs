@@ -182,6 +182,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "dismiss_completion" => Some(Command::DismissCompletion),
         "go_to_definition" => Some(Command::GoToDefinition),
         "find_references" => Some(Command::FindReferences),
+        "show_hover" => Some(Command::ShowHover),
         _ => None,
     }
 }
@@ -404,6 +405,19 @@ impl KeymapResolver {
         // Go to definition / Find references.
         resolver.bind(KeyModifiers::NONE, KeyCode::F(12), Command::GoToDefinition);
         resolver.bind(KeyModifiers::SHIFT, KeyCode::F(12), Command::FindReferences);
+
+        // Hover info (Ctrl+Shift+K / F4).
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('K'),
+            Command::ShowHover,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('k'),
+            Command::ShowHover,
+        );
+        resolver.bind(KeyModifiers::NONE, KeyCode::F(4), Command::ShowHover);
 
         // Diagnostic navigation.
         resolver.bind(
@@ -1112,6 +1126,38 @@ mod tests {
             command_from_str("find_references"),
             Some(Command::FindReferences)
         );
+    }
+
+    #[test]
+    fn ctrl_shift_k_show_hover() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('K'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::ShowHover));
+    }
+
+    #[test]
+    fn ctrl_shift_lowercase_k_show_hover() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::ShowHover));
+    }
+
+    #[test]
+    fn f4_show_hover() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::ShowHover));
+    }
+
+    #[test]
+    fn command_from_str_show_hover() {
+        assert_eq!(command_from_str("show_hover"), Some(Command::ShowHover));
     }
 
     #[test]

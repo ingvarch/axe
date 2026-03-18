@@ -16,6 +16,7 @@ pub enum PendingRequestKind {
     Completion,
     Definition,
     References,
+    Hover,
 }
 
 /// Events sent from the LSP reader thread to the main thread.
@@ -43,6 +44,10 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/references request.
     ReferencesResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/hover request.
+    HoverResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server process crashed or exited unexpectedly.
@@ -347,6 +352,10 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 "references": {
                     "dynamicRegistration": false,
                 },
+                "hover": {
+                    "dynamicRegistration": false,
+                    "contentFormat": ["markdown", "plaintext"],
+                },
             },
         },
         "clientInfo": {
@@ -387,6 +396,16 @@ mod tests {
         let definition = &params["capabilities"]["textDocument"]["definition"];
         assert!(definition.is_object());
         assert_eq!(definition["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn initialize_params_includes_hover() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let hover = &params["capabilities"]["textDocument"]["hover"];
+        assert!(hover.is_object());
+        assert_eq!(hover["dynamicRegistration"], false);
+        assert_eq!(hover["contentFormat"][0], "markdown");
     }
 
     #[test]

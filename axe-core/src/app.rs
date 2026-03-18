@@ -318,6 +318,10 @@ pub struct AppState {
     pub completion: Option<crate::completion::CompletionState>,
     /// Active location list overlay (definition/references results).
     pub location_list: Option<crate::location_list::LocationList>,
+    /// Active hover tooltip, if showing.
+    pub hover_info: Option<crate::hover::HoverInfo>,
+    /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
+    hover_mouse_state: Option<(Instant, usize, usize)>,
 }
 
 impl AppState {
@@ -364,6 +368,8 @@ impl AppState {
             lsp_manager: None,
             completion: None,
             location_list: None,
+            hover_info: None,
+            hover_mouse_state: None,
         }
     }
 
@@ -565,6 +571,21 @@ impl AppState {
                 axe_lsp::LspEvent::ReferencesResponse { result: Err(e) } => {
                     log::warn!("LSP references error: {}", e.message);
                 }
+                axe_lsp::LspEvent::HoverResponse { result: Ok(value) } => {
+                    if let Some(mut info) = crate::hover::parse_hover_response(&value) {
+                        // Attach current cursor position for rendering near cursor.
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            info.trigger_row = buf.cursor.row;
+                            info.trigger_col = buf.cursor.col;
+                        }
+                        self.hover_info = Some(info);
+                    } else {
+                        self.set_status_message("No hover info available".to_string());
+                    }
+                }
+                axe_lsp::LspEvent::HoverResponse { result: Err(e) } => {
+                    log::warn!("LSP hover error: {}", e.message);
+                }
             }
         }
     }
@@ -734,6 +755,23 @@ impl AppState {
                     let col = buf.cursor.col as u32;
                     if let Err(e) = lsp.request_references(&path, line, col) {
                         log::warn!("LSP references request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a hover request to the LSP for the current cursor position.
+    fn request_hover(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_hover(&path, line, col) {
+                        log::warn!("LSP hover request failed: {e}");
                     }
                 }
             }
@@ -962,6 +1000,15 @@ impl AppState {
                 _ => {}
             }
             return;
+        }
+
+        // Hover tooltip is dismissed by any key press.
+        if self.hover_info.is_some() {
+            self.hover_info = None;
+            // Esc only dismisses hover (don't propagate to close other overlays).
+            if key.code == KeyCode::Esc {
+                return;
+            }
         }
 
         // Location list overlay intercepts all keys when open.
@@ -1527,6 +1574,8 @@ impl AppState {
                         }
                     }
                 }
+                // Dismiss hover on any cursor movement.
+                self.hover_info = None;
             }
             // IMPACT ANALYSIS — Editor edit commands
             // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
@@ -1845,6 +1894,9 @@ impl AppState {
             }
             Command::FindReferences => {
                 self.request_references();
+            }
+            Command::ShowHover => {
+                self.request_hover();
             }
         }
         // Auto-promote preview buffer if user started editing it.
@@ -2387,6 +2439,85 @@ impl AppState {
                     }
                 }
                 self.last_edit_time = None;
+            }
+        }
+    }
+
+    /// Checks if the mouse hover delay has elapsed and triggers a hover request.
+    ///
+    /// Called each frame from the main loop. If the mouse has been stationary
+    /// over a buffer position for 500ms, sends a hover request to the LSP.
+    pub fn check_hover_timer(&mut self) {
+        const HOVER_DELAY: Duration = Duration::from_millis(500);
+
+        if let Some((time, row, col)) = self.hover_mouse_state {
+            if time.elapsed() >= HOVER_DELAY {
+                self.hover_mouse_state = None;
+                // Send hover request for the mouse position.
+                self.ensure_lsp_open_for_active_buffer();
+                if let Some(ref mut lsp) = self.lsp_manager {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(path) = buf.path() {
+                            let path = path.to_path_buf();
+                            if let Err(e) = lsp.request_hover(&path, row as u32, col as u32) {
+                                log::warn!("LSP hover request (mouse) failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handles mouse movement for hover delay tracking.
+    ///
+    /// Records mouse position in editor area for 500ms delay-triggered hover.
+    pub fn handle_mouse_moved(&mut self, column: u16, row: u16) {
+        let Some((editor_x, editor_y, editor_w, editor_h)) = self.editor_inner_area else {
+            self.hover_mouse_state = None;
+            return;
+        };
+
+        // Check if mouse is within editor content area.
+        if column < editor_x
+            || column >= editor_x + editor_w
+            || row < editor_y
+            || row >= editor_y + editor_h
+        {
+            self.hover_mouse_state = None;
+            return;
+        }
+
+        // Convert screen coordinates to buffer coordinates.
+        if let Some(buf) = self.buffer_manager.active_buffer() {
+            let line_count = buf.line_count();
+            let digits = if line_count == 0 {
+                1
+            } else {
+                (line_count as f64).log10().floor() as u16 + 1
+            };
+            // Gutter: digits + 2 padding + 2 diagnostic indicator
+            let gutter_width = digits + 4;
+
+            let rel_col = column.saturating_sub(editor_x);
+            if rel_col < gutter_width {
+                self.hover_mouse_state = None;
+                return;
+            }
+
+            let buf_col = (rel_col - gutter_width) as usize + buf.scroll_col;
+            let buf_row = (row - editor_y) as usize + buf.scroll_row;
+
+            // Only update if position changed.
+            let new_pos = (buf_row, buf_col);
+            let same = self
+                .hover_mouse_state
+                .as_ref()
+                .is_some_and(|(_, r, c)| *r == new_pos.0 && *c == new_pos.1);
+            if !same {
+                // Clear current hover when mouse moves to a different position.
+                self.hover_info = None;
+                self.hover_mouse_state = Some((Instant::now(), buf_row, buf_col));
             }
         }
     }
@@ -6167,5 +6298,89 @@ mod tests {
 
         app.execute(Command::GoToPrevDiagnostic);
         assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+    }
+
+    #[test]
+    fn show_hover_without_lsp_noop() {
+        let mut app = AppState::new();
+        app.execute(Command::ShowHover);
+        // No LSP manager, so no hover info should be set.
+        assert!(app.hover_info.is_none());
+    }
+
+    #[test]
+    fn hover_dismissed_on_any_key() {
+        let mut app = AppState::new();
+        app.hover_info = Some(crate::hover::HoverInfo {
+            lines: vec![crate::hover::HoverLine {
+                spans: vec![crate::hover::HoverSpan {
+                    text: "test".to_string(),
+                    bold: false,
+                    italic: false,
+                    code: false,
+                }],
+                is_code_block: false,
+            }],
+            trigger_row: 0,
+            trigger_col: 0,
+        });
+        assert!(app.hover_info.is_some());
+
+        // Any key (e.g., 'a') should dismiss hover and pass through.
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.handle_key_event(key);
+        assert!(app.hover_info.is_none());
+    }
+
+    #[test]
+    fn hover_dismissed_on_esc() {
+        let mut app = AppState::new();
+        app.hover_info = Some(crate::hover::HoverInfo {
+            lines: vec![crate::hover::HoverLine {
+                spans: vec![crate::hover::HoverSpan {
+                    text: "test".to_string(),
+                    bold: false,
+                    italic: false,
+                    code: false,
+                }],
+                is_code_block: false,
+            }],
+            trigger_row: 0,
+            trigger_col: 0,
+        });
+        assert!(app.hover_info.is_some());
+
+        // Esc should dismiss hover but NOT propagate (other overlays stay).
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        app.handle_key_event(key);
+        assert!(app.hover_info.is_none());
+    }
+
+    #[test]
+    fn hover_dismissed_on_cursor_movement() {
+        let mut app = AppState::new();
+        // Open a buffer first.
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world\nsecond line").expect("write");
+        app.execute(Command::OpenFile(file));
+
+        app.hover_info = Some(crate::hover::HoverInfo {
+            lines: vec![crate::hover::HoverLine {
+                spans: vec![crate::hover::HoverSpan {
+                    text: "info".to_string(),
+                    bold: false,
+                    italic: false,
+                    code: false,
+                }],
+                is_code_block: false,
+            }],
+            trigger_row: 0,
+            trigger_col: 0,
+        });
+        assert!(app.hover_info.is_some());
+
+        app.execute(Command::EditorDown);
+        assert!(app.hover_info.is_none());
     }
 }
