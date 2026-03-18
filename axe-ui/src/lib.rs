@@ -2475,10 +2475,71 @@ fn render_terminal_content(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
     }
 }
 
-/// Renders a scrollbar in the given scrollbar area.
+/// Renders a vertical scrollbar in the given 1-column-wide area.
 ///
-/// The thumb position is proportional to the scroll position within the history.
-/// When there is no scrollback history, renders nothing (empty column).
+/// - `total_lines`: total number of lines in the content
+/// - `visible_lines`: how many lines fit in the viewport
+/// - `scroll_offset`: current scroll position (0 = top of content visible)
+/// - `area`: 1-column-wide `Rect` for the scrollbar
+/// - `buf`: frame buffer
+/// - `theme`: for styling
+///
+/// When the content fits within the viewport (`total_lines <= visible_lines`),
+/// renders nothing.
+fn render_scrollbar(
+    total_lines: usize,
+    visible_lines: usize,
+    scroll_offset: usize,
+    area: Rect,
+    buf: &mut ratatui::buffer::Buffer,
+    theme: &Theme,
+) {
+    if total_lines <= visible_lines {
+        return;
+    }
+
+    let track_height = area.height as usize;
+    if track_height == 0 {
+        return;
+    }
+
+    let scroll_x = area.x;
+
+    // Thumb size: proportional to visible content vs total content, minimum 1 row.
+    let thumb_size = ((visible_lines * track_height) / total_lines).max(1);
+
+    // Thumb position: scroll_offset 0 = thumb at top, max = thumb at bottom.
+    let max_offset = total_lines.saturating_sub(visible_lines);
+    let scroll_fraction = if max_offset == 0 {
+        0.0
+    } else {
+        scroll_offset as f64 / max_offset as f64
+    };
+    let thumb_top = (scroll_fraction * (track_height.saturating_sub(thumb_size)) as f64) as usize;
+
+    let track_style = Style::default()
+        .fg(theme.foreground)
+        .add_modifier(Modifier::DIM);
+    let thumb_style = Style::default().fg(theme.panel_border_active);
+
+    for row in 0..track_height {
+        let y = area.y + row as u16;
+        if let Some(cell) = buf.cell_mut((scroll_x, y)) {
+            if row >= thumb_top && row < thumb_top + thumb_size {
+                cell.set_char('\u{2588}'); // Full block for thumb
+                cell.set_style(thumb_style);
+            } else {
+                cell.set_char('\u{2502}'); // Thin vertical line for track
+                cell.set_style(track_style);
+            }
+        }
+    }
+}
+
+/// Renders a scrollbar for the terminal panel.
+///
+/// Delegates to `render_scrollbar` with inverted offset (terminal uses
+/// display_offset 0 = bottom, but scrollbar expects 0 = top).
 fn render_terminal_scrollbar(
     term: &alacritty_terminal::Term<axe_terminal::event_listener::PtyEventListener>,
     display_offset: usize,
@@ -2497,39 +2558,18 @@ fn render_terminal_scrollbar(
         return;
     }
 
-    let track_height = scrollbar_area.height as usize;
-    if track_height == 0 {
-        return;
-    }
+    // Terminal display_offset: 0 = bottom (most recent), max = top (oldest).
+    // Invert so scrollbar thumb at top = oldest content visible.
+    let inverted_offset = max_offset.saturating_sub(display_offset);
 
-    let scroll_x = scrollbar_area.x;
-
-    // Thumb size: proportional to visible content vs total content, minimum 1 row.
-    let thumb_size = ((screen_lines * track_height) / total_lines).max(1);
-
-    // Thumb position: display_offset 0 = at bottom, max_offset = at top.
-    // Invert so top of scrollbar = top of history.
-    let scroll_fraction = display_offset as f64 / max_offset as f64;
-    let thumb_top =
-        ((1.0 - scroll_fraction) * (track_height.saturating_sub(thumb_size)) as f64) as usize;
-
-    let track_style = Style::default()
-        .fg(theme.foreground)
-        .add_modifier(Modifier::DIM);
-    let thumb_style = Style::default().fg(theme.panel_border_active);
-
-    for row in 0..track_height {
-        let y = scrollbar_area.y + row as u16;
-        if let Some(cell) = buf.cell_mut((scroll_x, y)) {
-            if row >= thumb_top && row < thumb_top + thumb_size {
-                cell.set_char('\u{2588}'); // Full block for thumb
-                cell.set_style(thumb_style);
-            } else {
-                cell.set_char('\u{2502}'); // Thin vertical line for track
-                cell.set_style(track_style);
-            }
-        }
-    }
+    render_scrollbar(
+        total_lines,
+        screen_lines,
+        inverted_offset,
+        scrollbar_area,
+        buf,
+        theme,
+    );
 }
 
 /// Returns the inner area of the file tree panel, if visible.
@@ -2863,10 +2903,15 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
             .active_buffer()
             .map(|b| gutter_width(b.line_count()))
             .unwrap_or(3);
+        // Subtract scrollbar column from content width.
+        let content_w = inner
+            .width
+            .saturating_sub(gutter_w)
+            .saturating_sub(EDITOR_SCROLLBAR_WIDTH);
         return Some(Rect {
             x: inner.x + gutter_w,
             y: inner.y,
-            width: inner.width.saturating_sub(gutter_w),
+            width: content_w,
             height: inner.height,
         });
     }
@@ -2914,11 +2959,33 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         .active_buffer()
         .map(|b| gutter_width(b.line_count()))
         .unwrap_or(3);
+    // Subtract scrollbar column from content width.
+    let content_w = inner
+        .width
+        .saturating_sub(gutter_w)
+        .saturating_sub(EDITOR_SCROLLBAR_WIDTH);
     Some(Rect {
         x: inner.x + gutter_w,
         y: inner.y,
-        width: inner.width.saturating_sub(gutter_w),
+        width: content_w,
         height: inner.height,
+    })
+}
+
+/// Returns the editor scrollbar area in screen coordinates.
+///
+/// The scrollbar is a 1-column strip on the right edge of the editor content area,
+/// spanning the content rows (below tab bar and search bar, if present).
+/// Returns `None` if the editor is not visible.
+pub fn editor_scrollbar_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    // Get the content area (which already has scrollbar subtracted from its width).
+    let content_rect = editor_inner_rect(app, area)?;
+    // Scrollbar sits immediately to the right of the content area.
+    Some(Rect {
+        x: content_rect.x + content_rect.width,
+        y: content_rect.y,
+        width: EDITOR_SCROLLBAR_WIDTH,
+        height: content_rect.height,
     })
 }
 
@@ -3070,6 +3137,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
 const GUTTER_PADDING: u16 = 2;
 /// Width of the diagnostic indicator column in the gutter.
 const DIAGNOSTIC_GUTTER_WIDTH: u16 = 2;
+/// Width reserved for the editor scrollbar column.
+const EDITOR_SCROLLBAR_WIDTH: u16 = 1;
 
 /// Returns the theme color for a diagnostic severity level.
 fn diagnostic_color(severity: DiagnosticSeverity, theme: &Theme) -> Color {
@@ -3292,20 +3361,34 @@ fn render_editor_content(
 
     let area = content_area_full;
 
-    let gutter_w = gutter_width(buffer.line_count());
-    let content_w = area.width.saturating_sub(gutter_w);
-
-    let gutter_area = Rect {
-        x: area.x,
+    // Reserve 1 column on the right for the scrollbar (rendered only when needed).
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(EDITOR_SCROLLBAR_WIDTH),
         y: area.y,
-        width: gutter_w,
+        width: EDITOR_SCROLLBAR_WIDTH,
         height: area.height,
     };
-    let content_area = Rect {
-        x: area.x + gutter_w,
+    let area_without_scrollbar = Rect {
+        x: area.x,
         y: area.y,
-        width: content_w,
+        width: area.width.saturating_sub(EDITOR_SCROLLBAR_WIDTH),
         height: area.height,
+    };
+
+    let gutter_w = gutter_width(buffer.line_count());
+    let content_w = area_without_scrollbar.width.saturating_sub(gutter_w);
+
+    let gutter_area = Rect {
+        x: area_without_scrollbar.x,
+        y: area_without_scrollbar.y,
+        width: gutter_w,
+        height: area_without_scrollbar.height,
+    };
+    let content_area = Rect {
+        x: area_without_scrollbar.x + gutter_w,
+        y: area_without_scrollbar.y,
+        width: content_w,
+        height: area_without_scrollbar.height,
     };
 
     let gutter_style = Style::default().fg(theme.line_number).bg(theme.gutter_bg);
@@ -3538,6 +3621,18 @@ fn render_editor_content(
 
     let content_paragraph = Paragraph::new(content_lines).style(content_style);
     frame.render_widget(content_paragraph, content_area);
+
+    // Render editor scrollbar when content exceeds viewport.
+    if buffer.line_count() > visible_lines {
+        render_scrollbar(
+            buffer.line_count(),
+            visible_lines,
+            scroll_row,
+            scrollbar_area,
+            frame.buffer_mut(),
+            theme,
+        );
+    }
 
     // Render cursor by directly modifying the frame buffer cell at the cursor position.
     if editor_focused {
@@ -4553,5 +4648,91 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let result = terminal_tab_bar_rect(&app, area);
         assert!(result.is_none(), "expected None when terminal is hidden");
+    }
+
+    // --- Scrollbar rendering tests ---
+
+    #[test]
+    fn scrollbar_thumb_at_top_when_scroll_zero() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 1, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        render_scrollbar(100, 20, 0, area, &mut buf, &theme);
+        // Thumb should start at row 0
+        let cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(cell.symbol(), "\u{2588}", "expected thumb at top row");
+    }
+
+    #[test]
+    fn scrollbar_thumb_at_bottom_when_scroll_max() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 1, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let total = 100;
+        let visible = 20;
+        let max_offset = total - visible;
+        render_scrollbar(total, visible, max_offset, area, &mut buf, &theme);
+        // Thumb should end at the bottom row
+        let cell = buf.cell((0, 19)).unwrap();
+        assert_eq!(cell.symbol(), "\u{2588}", "expected thumb at bottom row");
+    }
+
+    #[test]
+    fn scrollbar_hidden_when_content_fits() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 1, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        render_scrollbar(15, 20, 0, area, &mut buf, &theme);
+        // No rendering — all cells should remain default (space)
+        for y in 0..20 {
+            let cell = buf.cell((0, y)).unwrap();
+            assert_eq!(
+                cell.symbol(),
+                " ",
+                "expected no scrollbar at row {y} when content fits"
+            );
+        }
+    }
+
+    #[test]
+    fn scrollbar_thumb_size_proportional() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 1, 20);
+
+        // Small file (40 lines, 20 visible) — thumb should be large (10 rows)
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        render_scrollbar(40, 20, 0, area, &mut buf, &theme);
+        let thumb_count_small: u16 = (0..20)
+            .filter(|&y| buf.cell((0, y)).unwrap().symbol() == "\u{2588}")
+            .count() as u16;
+
+        // Large file (1000 lines, 20 visible) — thumb should be small
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        render_scrollbar(1000, 20, 0, area, &mut buf, &theme);
+        let thumb_count_large: u16 = (0..20)
+            .filter(|&y| buf.cell((0, y)).unwrap().symbol() == "\u{2588}")
+            .count() as u16;
+
+        assert!(
+            thumb_count_small > thumb_count_large,
+            "expected larger thumb for smaller file ({thumb_count_small}) \
+             vs larger file ({thumb_count_large})"
+        );
+    }
+
+    #[test]
+    fn scrollbar_minimum_thumb_size() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 1, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        // Very large file — thumb should be at least 1 row
+        render_scrollbar(100_000, 20, 0, area, &mut buf, &theme);
+        let thumb_count: u16 = (0..20)
+            .filter(|&y| buf.cell((0, y)).unwrap().symbol() == "\u{2588}")
+            .count() as u16;
+        assert!(
+            thumb_count >= 1,
+            "expected at least 1 row thumb, got {thumb_count}"
+        );
     }
 }

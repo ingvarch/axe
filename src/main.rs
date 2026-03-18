@@ -188,6 +188,13 @@ async fn main() -> Result<()> {
             app.editor_inner_area = None;
         }
 
+        // Update editor scrollbar area for mouse click/drag detection.
+        if let Some(sb_rect) = axe_ui::editor_scrollbar_rect(&app, full_area) {
+            app.editor_scrollbar_area = Some((sb_rect.x, sb_rect.y, sb_rect.width, sb_rect.height));
+        } else {
+            app.editor_scrollbar_area = None;
+        }
+
         // Sync terminal PTY size with actual panel dimensions after draw.
         if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
             // Store grid area for mouse coordinate conversion (selection, etc.).

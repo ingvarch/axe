@@ -302,6 +302,13 @@ pub struct AppState {
     pub project_search: Option<ProjectSearch>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
+    /// Whether an editor scrollbar drag is currently in progress.
+    scrollbar_dragging: bool,
+    /// Editor scrollbar area in screen coordinates (x, y, width, height).
+    ///
+    /// Updated each frame from `editor_scrollbar_rect()` in main.rs.
+    /// Used for detecting mouse clicks on the editor scrollbar.
+    pub editor_scrollbar_area: Option<(u16, u16, u16, u16)>,
     /// Whether a terminal text selection drag is currently in progress.
     terminal_selecting: bool,
     /// Screen position where the last mouse-down occurred in the terminal grid.
@@ -362,6 +369,8 @@ impl AppState {
             command_palette: None,
             project_search: None,
             editor_selecting: false,
+            scrollbar_dragging: false,
+            editor_scrollbar_area: None,
             last_tree_click: None,
             terminal_selecting: false,
             terminal_select_start: None,
@@ -2159,6 +2168,14 @@ impl AppState {
                     return;
                 }
 
+                // Editor scrollbar click — scroll to clicked position.
+                if self.scrollbar_hit(col, row) {
+                    self.scrollbar_jump_to(row);
+                    self.scrollbar_dragging = true;
+                    self.focus = FocusTarget::Editor;
+                    return;
+                }
+
                 // IMPACT ANALYSIS — Editor mouse text selection (Down/Drag/Up)
                 // Parents: MouseEvent from crossterm, routed through handle_mouse_event.
                 // Children: EditorBuffer cursor/selection state.
@@ -2244,6 +2261,12 @@ impl AppState {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Editor scrollbar drag — update scroll position.
+                if self.scrollbar_dragging {
+                    self.scrollbar_jump_to(mouse.row);
+                    return;
+                }
+
                 // Editor text selection drag.
                 if self.editor_selecting {
                     // Clamp mouse to editor content area.
@@ -2309,6 +2332,8 @@ impl AppState {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.scrollbar_dragging = false;
+
                 if self.editor_selecting {
                     self.editor_selecting = false;
                     // Clean up empty selection (click without drag).
@@ -2777,6 +2802,40 @@ impl AppState {
     // Siblings: editor_inner_area (must be set by main.rs each frame),
     //           buffer scroll_row/scroll_col (used to convert screen to file position).
     // Risk: None — stateless helper, cannot corrupt state.
+
+    /// Returns `true` if the screen coordinates fall within the editor scrollbar area.
+    fn scrollbar_hit(&self, screen_col: u16, screen_row: u16) -> bool {
+        if let Some((sx, sy, sw, sh)) = self.editor_scrollbar_area {
+            screen_col >= sx && screen_col < sx + sw && screen_row >= sy && screen_row < sy + sh
+        } else {
+            false
+        }
+    }
+
+    /// Sets the editor `scroll_row` proportional to the mouse Y within the scrollbar area.
+    fn scrollbar_jump_to(&mut self, screen_row: u16) {
+        let (_, sy, _, sh) = match self.editor_scrollbar_area {
+            Some(area) => area,
+            None => return,
+        };
+        let buf = match self.buffer_manager.active_buffer_mut() {
+            Some(b) => b,
+            None => return,
+        };
+        let (viewport_height, _) = self
+            .editor_inner_area
+            .map(|(_x, _y, w, h)| (h as usize, w as usize))
+            .unwrap_or((20, 80));
+        let max_scroll = buf.line_count().saturating_sub(viewport_height);
+        if max_scroll == 0 || sh == 0 {
+            return;
+        }
+        // Clamp mouse row to scrollbar bounds.
+        let clamped_row = screen_row.clamp(sy, sy + sh.saturating_sub(1));
+        let relative = (clamped_row - sy) as f64;
+        let fraction = relative / (sh.saturating_sub(1)).max(1) as f64;
+        buf.scroll_row = (fraction * max_scroll as f64).round() as usize;
+    }
 
     /// Converts screen coordinates to editor buffer (row, col) position.
     ///
@@ -6661,5 +6720,101 @@ mod tests {
 
         app.execute(Command::EditorDown);
         assert!(app.hover_info.is_none());
+    }
+
+    // --- Editor scrollbar drag tests ---
+
+    /// Creates an AppState with a 100-line file open and scrollbar area set.
+    fn app_with_scrollbar() -> AppState {
+        let mut app = AppState::new();
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let file = dir.path().join("big.txt");
+        let content: String = (0..100).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&file, &content).expect("write");
+        app.execute(Command::OpenFile(file));
+        // Simulate editor area: content 80 cols x 20 rows starting at (10, 2).
+        app.editor_inner_area = Some((10, 2, 80, 20));
+        // Scrollbar is the 1 column to the right of content.
+        app.editor_scrollbar_area = Some((90, 2, 1, 20));
+        // Leak tempdir so file remains valid.
+        std::mem::forget(dir);
+        app
+    }
+
+    #[test]
+    fn scrollbar_hit_detects_click_in_scrollbar_area() {
+        let app = app_with_scrollbar();
+        assert!(app.scrollbar_hit(90, 5), "expected hit in scrollbar column");
+        assert!(
+            !app.scrollbar_hit(89, 5),
+            "expected no hit outside scrollbar"
+        );
+        assert!(
+            !app.scrollbar_hit(90, 1),
+            "expected no hit above scrollbar area"
+        );
+    }
+
+    #[test]
+    fn scrollbar_click_sets_scroll_position() {
+        let mut app = app_with_scrollbar();
+        let max_scroll = {
+            let buf = app.buffer_manager.active_buffer().unwrap();
+            buf.line_count().saturating_sub(20) // viewport_height = 20
+        };
+        // Click at the bottom of the scrollbar.
+        app.scrollbar_jump_to(21); // sy + sh - 1 = 2 + 20 - 1 = 21
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.scroll_row, max_scroll);
+    }
+
+    #[test]
+    fn scrollbar_click_top_scrolls_to_beginning() {
+        let mut app = app_with_scrollbar();
+        // First scroll somewhere.
+        if let Some(buf) = app.buffer_manager.active_buffer_mut() {
+            buf.scroll_row = 50;
+        }
+        // Click at top of scrollbar.
+        app.scrollbar_jump_to(2); // sy = 2
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        assert_eq!(buf.scroll_row, 0);
+    }
+
+    #[test]
+    fn scrollbar_mouse_down_starts_drag() {
+        let mut app = app_with_scrollbar();
+        // Click on the scrollbar column.
+        let evt = mouse_event(MouseEventKind::Down(MouseButton::Left), 90, 10);
+        app.handle_mouse_event(evt, 100, 30);
+        assert!(app.scrollbar_dragging, "expected scrollbar_dragging = true");
+    }
+
+    #[test]
+    fn scrollbar_mouse_up_stops_drag() {
+        let mut app = app_with_scrollbar();
+        app.scrollbar_dragging = true;
+        let evt = mouse_event(MouseEventKind::Up(MouseButton::Left), 90, 10);
+        app.handle_mouse_event(evt, 100, 30);
+        assert!(
+            !app.scrollbar_dragging,
+            "expected scrollbar_dragging = false after mouse up"
+        );
+    }
+
+    #[test]
+    fn scrollbar_drag_updates_scroll_position() {
+        let mut app = app_with_scrollbar();
+        app.scrollbar_dragging = true;
+        // Drag to middle of scrollbar (sy=2, sh=20 → middle = row 12).
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 90, 12);
+        app.handle_mouse_event(evt, 100, 30);
+        let buf = app.buffer_manager.active_buffer().unwrap();
+        // fraction = (12 - 2) / 19 ≈ 0.526, scroll = round(0.526 * 80) = 42
+        assert!(
+            buf.scroll_row > 0 && buf.scroll_row < 80,
+            "expected scroll_row in middle range, got {}",
+            buf.scroll_row
+        );
     }
 }
