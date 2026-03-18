@@ -264,6 +264,8 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Alt+/ / F3", "Code completion"),
     ("Alt+.", "Next diagnostic"),
     ("Alt+,", "Prev diagnostic"),
+    ("F12", "Go to definition"),
+    ("Shift+F12", "Find references"),
     ("", ""),
     ("--- Terminal ---", ""),
     ("Shift+PgUp", "Scroll up"),
@@ -918,6 +920,140 @@ fn render_completion_popup(
         }
 
         let line = Line::from(spans);
+        let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), line_area);
+    }
+}
+
+/// Width percentage for the location list overlay.
+const LOCATION_LIST_WIDTH_PCT: u16 = 60;
+/// Height percentage for the location list overlay.
+const LOCATION_LIST_HEIGHT_PCT: u16 = 50;
+/// Minimum width for the location list overlay.
+const LOCATION_LIST_MIN_WIDTH: u16 = 40;
+/// Minimum height for the location list overlay.
+const LOCATION_LIST_MIN_HEIGHT: u16 = 8;
+
+/// Renders the location list overlay (definition/references results).
+fn render_location_list(
+    loc_list: &axe_core::location_list::LocationList,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    let area = frame.area();
+
+    let overlay_width = (area.width * LOCATION_LIST_WIDTH_PCT / 100)
+        .max(LOCATION_LIST_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * LOCATION_LIST_HEIGHT_PCT / 100)
+        .max(LOCATION_LIST_MIN_HEIGHT)
+        .min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let title = format!(" {} ({}) ", loc_list.title, loc_list.items.len());
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let visible_count = inner.height as usize;
+
+    // Adjust scroll_offset to keep selected item visible.
+    // We use a mutable reference pattern here — but LocationList is passed as &,
+    // so we compute the effective scroll offset locally.
+    let scroll_offset = if loc_list.selected < loc_list.scroll_offset {
+        loc_list.selected
+    } else if loc_list.selected >= loc_list.scroll_offset + visible_count {
+        loc_list
+            .selected
+            .saturating_sub(visible_count.saturating_sub(1))
+    } else {
+        loc_list.scroll_offset
+    };
+
+    for (i, item) in loc_list
+        .items
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_count)
+        .enumerate()
+    {
+        let idx = scroll_offset + i;
+        let is_selected = idx == loc_list.selected;
+
+        let location = format!("{}:{}", item.display_path, item.line + 1);
+        let text_preview = if item.line_text.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", item.line_text)
+        };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.overlay_bg)
+                .bg(theme.panel_border_active)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        let path_style = if is_selected {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD)
+        };
+
+        // Truncate to fit width.
+        let max_width = inner.width as usize;
+        let combined = format!("{location}{text_preview}");
+        let display = if combined.len() > max_width {
+            combined[..max_width].to_string()
+        } else {
+            combined.clone()
+        };
+
+        let line = if is_selected {
+            // Pad to full width for selection highlight.
+            let padded = format!("{display:<width$}", width = max_width);
+            Line::from(Span::styled(padded, style))
+        } else {
+            let loc_len = location.len().min(max_width);
+            let remaining = max_width.saturating_sub(loc_len);
+            let preview = if text_preview.len() > remaining {
+                &text_preview[..remaining]
+            } else {
+                &text_preview
+            };
+            Line::from(vec![
+                Span::styled(&location[..loc_len], path_style),
+                Span::styled(preview.to_string(), style),
+            ])
+        };
+
         let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
         frame.render_widget(Paragraph::new(line), line_area);
     }
@@ -2368,6 +2504,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         render_command_palette(palette, frame, theme);
     } else if let Some(ref search) = app.project_search {
         render_project_search(search, frame, theme);
+    } else if let Some(ref loc_list) = app.location_list {
+        render_location_list(loc_list, frame, theme);
     } else if let Some(ref finder) = app.file_finder {
         render_file_finder(finder, frame, theme);
     } else if app.show_help {
@@ -3151,7 +3289,7 @@ mod tests {
     fn render_help_overlay_shows_keybindings() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 60);
+        let content = render_app_to_string(&app, 80, 70);
         assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");

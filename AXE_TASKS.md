@@ -623,23 +623,26 @@ Code completion popup triggered by typing or manual invocation.
 
 ---
 
-### Task 7.4 — LSP: Go To Definition & References
+### Task 7.4 — LSP: Go To Definition & References [DONE]
 
 Navigate to symbol definitions and find all references.
 
 **Acceptance criteria:**
-- `F12` (or `gd` in modal mode) goes to the definition of the symbol under cursor
-- If definition is in another file, that file is opened in a new buffer and cursor jumps to the position
-- If definition is in the same file, cursor just jumps
-- If there are multiple definitions, show a selection overlay
-- `Shift+F12` shows all references in an overlay list
-- Each reference shows: file path, line number, and the line content
-- `Enter` on a reference opens/jumps to that location
+- [x] `F12` (or `gd` in modal mode) goes to the definition of the symbol under cursor
+- [x] If definition is in another file, that file is opened in a new buffer and cursor jumps to the position
+- [x] If definition is in the same file, cursor just jumps
+- [x] If there are multiple definitions, show a selection overlay
+- [x] `Shift+F12` shows all references in an overlay list
+- [x] Each reference shows: file path, line number, and the line content
+- [x] `Enter` on a reference opens/jumps to that location
 
 **Implementation details:**
 - `textDocument/definition` request → `Location` or `LocationLink` response
 - `textDocument/references` request → `Vec<Location>` response
-- Create a "locations list" overlay widget reusable for definitions, references, etc.
+- `axe-core/src/location_list.rs`: `LocationItem`, `LocationList`, LSP response parsing (Location, LocationLink, arrays, null)
+- `axe-lsp`: `PendingRequestKind::Definition/References`, `LspEvent::DefinitionResponse/ReferencesResponse`, request methods + response routing
+- `axe-core/src/app.rs`: overlay key handling (Esc/Enter/Up/Down), single-result direct jump, multi-result overlay, preview buffer auto-promotion with LSP didOpen
+- `axe-ui`: `render_location_list()` overlay (60% width, 50% height, selection highlight, scroll)
 
 ---
 

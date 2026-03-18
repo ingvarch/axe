@@ -196,12 +196,26 @@ impl LspManager {
                     if let Some(id) = numeric_id {
                         let pending_kind =
                             self.clients.values_mut().find_map(|c| c.take_pending(id));
-                        if let Some(PendingRequestKind::Completion) = pending_kind {
-                            // Re-emit as typed completion event.
-                            if let LspEvent::Response { result, .. } = event {
-                                remaining.push(LspEvent::CompletionResponse { result });
+                        match pending_kind {
+                            Some(PendingRequestKind::Completion) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::CompletionResponse { result });
+                                }
+                                continue;
                             }
-                            continue;
+                            Some(PendingRequestKind::Definition) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::DefinitionResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::References) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::ReferencesResponse { result });
+                                }
+                                continue;
+                            }
+                            None => {}
                         }
                     }
                     remaining.push(event);
@@ -210,7 +224,6 @@ impl LspManager {
                     id: ref response_id,
                     result: Err(_),
                 } => {
-                    // Check if a failed response matches a pending completion request.
                     let numeric_id = match response_id {
                         RequestId::Number(n) => Some(*n),
                         RequestId::String(_) => None,
@@ -218,11 +231,26 @@ impl LspManager {
                     if let Some(id) = numeric_id {
                         let pending_kind =
                             self.clients.values_mut().find_map(|c| c.take_pending(id));
-                        if let Some(PendingRequestKind::Completion) = pending_kind {
-                            if let LspEvent::Response { result, .. } = event {
-                                remaining.push(LspEvent::CompletionResponse { result });
+                        match pending_kind {
+                            Some(PendingRequestKind::Completion) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::CompletionResponse { result });
+                                }
+                                continue;
                             }
-                            continue;
+                            Some(PendingRequestKind::Definition) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::DefinitionResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::References) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::ReferencesResponse { result });
+                                }
+                                continue;
+                            }
+                            None => {}
                         }
                     }
                     remaining.push(event);
@@ -267,6 +295,71 @@ impl LspManager {
             "textDocument/completion",
             params,
             PendingRequestKind::Completion,
+        )?;
+        Ok(())
+    }
+
+    /// Sends a `textDocument/definition` request for the given file position.
+    ///
+    /// The response will arrive as `LspEvent::DefinitionResponse` via `poll_events()`.
+    pub fn request_definition(&mut self, path: &Path, line: u32, character: u32) -> Result<()> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(());
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(());
+        };
+
+        if !client.is_initialized() {
+            return Ok(());
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character }
+        });
+
+        client.send_request(
+            "textDocument/definition",
+            params,
+            PendingRequestKind::Definition,
+        )?;
+        Ok(())
+    }
+
+    /// Sends a `textDocument/references` request for the given file position.
+    ///
+    /// The response will arrive as `LspEvent::ReferencesResponse` via `poll_events()`.
+    pub fn request_references(&mut self, path: &Path, line: u32, character: u32) -> Result<()> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(());
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(());
+        };
+
+        if !client.is_initialized() {
+            return Ok(());
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character },
+            "context": { "includeDeclaration": true }
+        });
+
+        client.send_request(
+            "textDocument/references",
+            params,
+            PendingRequestKind::References,
         )?;
         Ok(())
     }
@@ -443,6 +536,22 @@ mod tests {
         let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
         let events = manager.poll_events();
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn request_definition_no_client_is_noop() {
+        let dir = std::env::temp_dir();
+        let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
+        let result = manager.request_definition(Path::new("/tmp/test.rs"), 0, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn request_references_no_client_is_noop() {
+        let dir = std::env::temp_dir();
+        let mut manager = LspManager::new(HashMap::new(), &dir).expect("should create manager");
+        let result = manager.request_references(Path::new("/tmp/test.rs"), 0, 0);
+        assert!(result.is_ok());
     }
 
     #[test]

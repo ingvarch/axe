@@ -180,6 +180,8 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "trigger_completion" => Some(Command::TriggerCompletion),
         "accept_completion" => Some(Command::AcceptCompletion),
         "dismiss_completion" => Some(Command::DismissCompletion),
+        "go_to_definition" => Some(Command::GoToDefinition),
+        "find_references" => Some(Command::FindReferences),
         _ => None,
     }
 }
@@ -398,6 +400,10 @@ impl KeymapResolver {
             KeyCode::F(3),
             Command::TriggerCompletion,
         );
+
+        // Go to definition / Find references.
+        resolver.bind(KeyModifiers::NONE, KeyCode::F(12), Command::GoToDefinition);
+        resolver.bind(KeyModifiers::SHIFT, KeyCode::F(12), Command::FindReferences);
 
         // Diagnostic navigation.
         resolver.bind(
@@ -1075,6 +1081,36 @@ mod tests {
         assert_eq!(
             command_from_str("dismiss_completion"),
             Some(Command::DismissCompletion)
+        );
+    }
+
+    #[test]
+    fn f12_go_to_definition() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToDefinition));
+    }
+
+    #[test]
+    fn shift_f12_find_references() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::F(12), KeyModifiers::SHIFT);
+        assert_eq!(resolver.resolve(&key), Some(Command::FindReferences));
+    }
+
+    #[test]
+    fn command_from_str_go_to_definition() {
+        assert_eq!(
+            command_from_str("go_to_definition"),
+            Some(Command::GoToDefinition)
+        );
+    }
+
+    #[test]
+    fn command_from_str_find_references() {
+        assert_eq!(
+            command_from_str("find_references"),
+            Some(Command::FindReferences)
         );
     }
 

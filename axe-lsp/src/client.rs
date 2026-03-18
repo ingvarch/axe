@@ -14,6 +14,8 @@ use crate::transport::{self, JsonRpcError, JsonRpcMessage, RequestId};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingRequestKind {
     Completion,
+    Definition,
+    References,
 }
 
 /// Events sent from the LSP reader thread to the main thread.
@@ -33,6 +35,14 @@ pub enum LspEvent {
     },
     /// Server responded to a completion request.
     CompletionResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/definition request.
+    DefinitionResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/references request.
+    ReferencesResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server process crashed or exited unexpectedly.
@@ -331,6 +341,12 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                     },
                     "dynamicRegistration": false,
                 },
+                "definition": {
+                    "dynamicRegistration": false,
+                },
+                "references": {
+                    "dynamicRegistration": false,
+                },
             },
         },
         "clientInfo": {
@@ -362,6 +378,24 @@ mod tests {
         assert!(completion.is_object());
         assert_eq!(completion["completionItem"]["snippetSupport"], false);
         assert_eq!(completion["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn initialize_params_includes_definition() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let definition = &params["capabilities"]["textDocument"]["definition"];
+        assert!(definition.is_object());
+        assert_eq!(definition["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn initialize_params_includes_references() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let references = &params["capabilities"]["textDocument"]["references"];
+        assert!(references.is_object());
+        assert_eq!(references["dynamicRegistration"], false);
     }
 
     #[test]

@@ -316,6 +316,8 @@ pub struct AppState {
     pub lsp_manager: Option<axe_lsp::LspManager>,
     /// Active completion popup state, if open.
     pub completion: Option<crate::completion::CompletionState>,
+    /// Active location list overlay (definition/references results).
+    pub location_list: Option<crate::location_list::LocationList>,
 }
 
 impl AppState {
@@ -361,6 +363,7 @@ impl AppState {
             config: axe_config::AppConfig::default(),
             lsp_manager: None,
             completion: None,
+            location_list: None,
         }
     }
 
@@ -512,6 +515,56 @@ impl AppState {
                 axe_lsp::LspEvent::CompletionResponse { result: Err(e) } => {
                     log::warn!("LSP completion error: {}", e.message);
                 }
+                axe_lsp::LspEvent::DefinitionResponse { result: Ok(value) } => {
+                    let project_root = self
+                        .project_root
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let items =
+                        crate::location_list::parse_definition_response(&value, &project_root);
+                    match items.len() {
+                        0 => {
+                            self.set_status_message("No definition found".to_string());
+                        }
+                        1 => {
+                            // Single result: jump directly without overlay.
+                            let path = items[0].path.clone();
+                            let line = items[0].line;
+                            let col = items[0].col;
+                            self.execute(Command::OpenFile(path));
+                            let (h, w) = self.editor_viewport();
+                            if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                                buf.cursor.row = line;
+                                buf.cursor.col = col;
+                                buf.ensure_cursor_visible(h, w);
+                            }
+                        }
+                        _ => {
+                            self.location_list =
+                                Some(crate::location_list::LocationList::new("Definition", items));
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::DefinitionResponse { result: Err(e) } => {
+                    log::warn!("LSP definition error: {}", e.message);
+                }
+                axe_lsp::LspEvent::ReferencesResponse { result: Ok(value) } => {
+                    let project_root = self
+                        .project_root
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let items =
+                        crate::location_list::parse_references_response(&value, &project_root);
+                    if items.is_empty() {
+                        self.set_status_message("No references found".to_string());
+                    } else {
+                        self.location_list =
+                            Some(crate::location_list::LocationList::new("References", items));
+                    }
+                }
+                axe_lsp::LspEvent::ReferencesResponse { result: Err(e) } => {
+                    log::warn!("LSP references error: {}", e.message);
+                }
             }
         }
     }
@@ -622,6 +675,65 @@ impl AppState {
                     let col = buf.cursor.col as u32;
                     if let Err(e) = lsp.request_completion(&path, line, col) {
                         log::warn!("LSP completion request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ensures the active buffer is promoted from preview and known to the LSP.
+    ///
+    /// Preview buffers are not sent to the LSP via `didOpen`. This method
+    /// promotes the preview to a full buffer and notifies the LSP, so that
+    /// features like Go To Definition work even when invoked from a preview.
+    fn ensure_lsp_open_for_active_buffer(&mut self) {
+        // Promote preview buffer if needed.
+        if let Some(buf) = self.buffer_manager.active_buffer() {
+            if buf.is_preview {
+                self.buffer_manager.promote_preview();
+                // Notify LSP about the newly promoted file.
+                if let Some(ref mut lsp) = self.lsp_manager {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(path) = buf.path() {
+                            let text = buf.content_string();
+                            if let Err(e) = lsp.file_opened(path, &text) {
+                                log::warn!("LSP didOpen (from preview promote) failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a definition request to the LSP for the current cursor position.
+    fn request_definition(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_definition(&path, line, col) {
+                        log::warn!("LSP definition request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a references request to the LSP for the current cursor position.
+    fn request_references(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_references(&path, line, col) {
+                        log::warn!("LSP references request failed: {e}");
                     }
                 }
             }
@@ -847,6 +959,34 @@ impl AppState {
                         }
                     }
                 }
+                _ => {}
+            }
+            return;
+        }
+
+        // Location list overlay intercepts all keys when open.
+        if let Some(ref mut loc_list) = self.location_list {
+            match key.code {
+                KeyCode::Esc => {
+                    self.location_list = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(item) = loc_list.selected_item() {
+                        let path = item.path.clone();
+                        let line = item.line;
+                        let col = item.col;
+                        self.location_list = None;
+                        self.execute(Command::OpenFile(path));
+                        let (h, w) = self.editor_viewport();
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.cursor.row = line;
+                            buf.cursor.col = col;
+                            buf.ensure_cursor_visible(h, w);
+                        }
+                    }
+                }
+                KeyCode::Up => loc_list.move_up(),
+                KeyCode::Down => loc_list.move_down(),
                 _ => {}
             }
             return;
@@ -1127,6 +1267,8 @@ impl AppState {
                 } else if let Some(ref mut ps) = self.project_search {
                     ps.cancel_search();
                     self.project_search = None;
+                } else if self.location_list.is_some() {
+                    self.location_list = None;
                 } else if self.file_finder.is_some() {
                     self.file_finder = None;
                 } else {
@@ -1697,6 +1839,12 @@ impl AppState {
             }
             Command::DismissCompletion => {
                 self.completion = None;
+            }
+            Command::GoToDefinition => {
+                self.request_definition();
+            }
+            Command::FindReferences => {
+                self.request_references();
             }
         }
         // Auto-promote preview buffer if user started editing it.
@@ -3659,6 +3807,103 @@ mod tests {
     fn poll_lsp_noop_without_manager() {
         let mut app = AppState::new();
         app.poll_lsp(); // Should not panic.
+    }
+
+    #[test]
+    fn go_to_definition_without_lsp_noop() {
+        let mut app = AppState::new();
+        app.execute(Command::GoToDefinition); // Should not panic.
+    }
+
+    #[test]
+    fn find_references_without_lsp_noop() {
+        let mut app = AppState::new();
+        app.execute(Command::FindReferences); // Should not panic.
+    }
+
+    #[test]
+    fn go_to_definition_promotes_preview_buffer() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn main() {}").expect("write file");
+        let mut app = AppState::new();
+        app.buffer_manager
+            .open_file_as_preview(&file)
+            .expect("open preview");
+        assert!(app.buffer_manager.active_buffer().unwrap().is_preview);
+        // Calling request_definition should promote the preview.
+        app.request_definition();
+        assert!(
+            !app.buffer_manager.active_buffer().unwrap().is_preview,
+            "preview buffer should be promoted on GoToDefinition"
+        );
+    }
+
+    #[test]
+    fn find_references_promotes_preview_buffer() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn main() {}").expect("write file");
+        let mut app = AppState::new();
+        app.buffer_manager
+            .open_file_as_preview(&file)
+            .expect("open preview");
+        assert!(app.buffer_manager.active_buffer().unwrap().is_preview);
+        app.request_references();
+        assert!(
+            !app.buffer_manager.active_buffer().unwrap().is_preview,
+            "preview buffer should be promoted on FindReferences"
+        );
+    }
+
+    #[test]
+    fn location_list_esc_closes() {
+        let mut app = AppState::new();
+        app.location_list = Some(crate::location_list::LocationList::new(
+            "Test",
+            vec![crate::location_list::LocationItem {
+                path: std::path::PathBuf::from("/tmp/test.rs"),
+                display_path: "test.rs".to_string(),
+                line: 0,
+                col: 0,
+                line_text: String::new(),
+            }],
+        ));
+        assert!(app.location_list.is_some());
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        app.handle_key_event(key);
+        assert!(app.location_list.is_none());
+    }
+
+    #[test]
+    fn location_list_up_down_moves() {
+        let mut app = AppState::new();
+        let items = vec![
+            crate::location_list::LocationItem {
+                path: std::path::PathBuf::from("/a.rs"),
+                display_path: "a.rs".to_string(),
+                line: 0,
+                col: 0,
+                line_text: String::new(),
+            },
+            crate::location_list::LocationItem {
+                path: std::path::PathBuf::from("/b.rs"),
+                display_path: "b.rs".to_string(),
+                line: 1,
+                col: 0,
+                line_text: String::new(),
+            },
+        ];
+        app.location_list = Some(crate::location_list::LocationList::new("Test", items));
+        assert_eq!(app.location_list.as_ref().unwrap().selected, 0);
+
+        let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        app.handle_key_event(key_down);
+        assert_eq!(app.location_list.as_ref().unwrap().selected, 1);
+
+        let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        app.handle_key_event(key_up);
+        assert_eq!(app.location_list.as_ref().unwrap().selected, 0);
     }
 
     #[test]

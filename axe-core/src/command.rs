@@ -212,6 +212,10 @@ pub enum Command {
     AcceptCompletion,
     /// Dismiss the completion popup.
     DismissCompletion,
+    /// Go to the definition of the symbol under the cursor (F12).
+    GoToDefinition,
+    /// Find all references to the symbol under the cursor (Shift+F12).
+    FindReferences,
 }
 
 #[cfg(test)]
@@ -345,6 +349,8 @@ mod tests {
             Command::TriggerCompletion,
             Command::AcceptCompletion,
             Command::DismissCompletion,
+            Command::GoToDefinition,
+            Command::FindReferences,
         ];
 
         for (i, a) in variants.iter().enumerate() {

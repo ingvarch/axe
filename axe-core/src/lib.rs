@@ -5,6 +5,7 @@ pub mod completion;
 pub mod file_finder;
 pub mod fuzzy;
 pub mod keymap;
+pub mod location_list;
 pub mod project_search;
 pub mod search;
 
@@ -19,6 +20,7 @@ pub use completion::{CompletionItem, CompletionKind, CompletionState};
 pub use file_finder::FileFinder;
 pub use fuzzy::FilteredItem;
 pub use keymap::KeymapResolver;
+pub use location_list::LocationList;
 pub use project_search::ProjectSearch;
 pub use search::SearchState;
 
