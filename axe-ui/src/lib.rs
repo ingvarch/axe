@@ -23,18 +23,18 @@ use axe_tree::{FileTree, NodeKind, TreeAction};
 use layout::LayoutManager;
 use theme::Theme;
 
-/// Width of the help overlay in columns.
-const HELP_OVERLAY_WIDTH: u16 = 40;
-/// Vertical padding added to the help overlay height (border + title + spacing).
-const HELP_OVERLAY_PADDING: u16 = 4;
-/// Minimum horizontal margin around the help overlay.
-const HELP_OVERLAY_MARGIN: u16 = 4;
-/// Minimum vertical margin around the help overlay.
-const HELP_OVERLAY_VERTICAL_MARGIN: u16 = 2;
-/// Width of the key column in help overlay lines.
-const HELP_KEY_COLUMN_WIDTH: usize = 14;
-/// Top offset for help content within the overlay inner area.
-const HELP_CONTENT_TOP_OFFSET: u16 = 1;
+/// Number of columns in the help overlay layout.
+const HELP_COLUMNS: usize = 3;
+/// Width of the key column within each help column.
+const HELP_KEY_COL_WIDTH: usize = 20;
+/// Width of a single help column (key + description + padding).
+const HELP_SINGLE_COL_WIDTH: u16 = 38;
+/// Gap between help columns.
+const HELP_COL_GAP: u16 = 2;
+/// Horizontal padding inside overlay border.
+const HELP_INNER_PAD: u16 = 1;
+/// Extra vertical rows: 1 top padding + 1 blank before footer + 1 footer.
+const HELP_VERTICAL_EXTRA: u16 = 3;
 
 /// Returns the border style for a panel based on whether it has focus and resize mode.
 fn border_style_for(
@@ -218,75 +218,421 @@ fn editor_title(app: &AppState, zoomed: bool) -> &'static str {
 }
 
 /// Help text lines for the help overlay.
-const HELP_LINES: &[(&str, &str)] = &[
-    ("Ctrl+Q", "Quit"),
-    ("Alt+1", "Focus Files"),
-    ("Alt+2", "Focus Editor"),
-    ("Alt+3", "Focus Terminal"),
-    ("Ctrl+B", "Toggle file tree"),
-    ("Ctrl+T", "Toggle terminal"),
-    ("Ctrl+R", "Resize mode"),
-    ("Alt+Z", "Zoom panel"),
-    ("Click panel", "Focus panel"),
-    ("Drag border", "Resize panel"),
-    ("", ""),
-    ("--- Tree ---", ""),
-    ("\u{2191}/\u{2193}", "Navigate tree"),
-    ("Enter", "Expand/collapse dir"),
-    ("\u{2190}/\u{2192}", "Collapse/expand"),
-    ("Home/End", "First/last item"),
-    ("Ctrl+G", "Toggle ignored files"),
-    ("Ctrl+I", "Toggle file icons"),
-    ("n", "New file"),
-    ("N", "New directory"),
-    ("r", "Rename"),
-    ("d", "Delete"),
-    ("", ""),
-    ("--- Tabs ---", ""),
-    ("Alt+T", "New tab (terminal)"),
-    ("Alt+W / Ctrl+W", "Close tab"),
-    ("Alt+]/[", "Next/prev tab"),
-    ("", ""),
-    ("--- Editor ---", ""),
-    ("Ctrl+F", "Find in file"),
-    ("Shift+Arrows", "Select text"),
-    ("Ctrl+A", "Select all"),
-    ("Ctrl+C", "Copy"),
-    ("Ctrl+X", "Cut"),
-    ("Ctrl+V", "Paste"),
-    ("Ctrl+Z", "Undo"),
-    ("Ctrl+Shift+Z", "Redo"),
-    ("Ctrl+Y", "Redo"),
-    ("Ctrl+S", "Save"),
-    ("Ctrl+P", "Open file finder"),
-    ("F1 / Ctrl+Shift+P", "Command palette"),
-    ("F2 / Ctrl+Shift+F", "Find in project"),
-    ("Alt+/ / F3", "Code completion"),
-    ("Alt+.", "Next diagnostic"),
-    ("Alt+,", "Prev diagnostic"),
-    ("F12", "Go to definition"),
-    ("Shift+F12", "Find references"),
-    ("Ctrl+Shift+K / F4", "Show hover info"),
-    ("Ctrl+Shift+I", "Format document"),
-    ("", ""),
-    ("--- Terminal ---", ""),
-    ("Shift+PgUp", "Scroll up"),
-    ("Shift+PgDn", "Scroll down"),
-    ("Shift+Home", "Scroll to top"),
-    ("Shift+End", "Scroll to bottom"),
-    ("Mouse drag", "Select text (copy)"),
-    ("", ""),
-    ("Ctrl+H", "Toggle this help"),
-    ("Esc", "Close overlay"),
+/// A single keybinding entry in the help overlay.
+struct HelpEntry {
+    /// Fallback key (e.g. F1, F2) -- shown first when present.
+    fallback_key: Option<&'static str>,
+    /// Primary keybinding (e.g. Ctrl+Shift+P).
+    primary_key: &'static str,
+    /// Description of what the keybinding does.
+    description: &'static str,
+}
+
+/// A titled section of keybinding entries.
+struct HelpSection {
+    title: &'static str,
+    entries: &'static [HelpEntry],
+}
+
+const HELP_GENERAL: HelpSection = HelpSection {
+    title: "General",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Q",
+            description: "Quit",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+1",
+            description: "Focus Files",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+2",
+            description: "Focus Editor",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+3",
+            description: "Focus Terminal",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+B",
+            description: "Toggle file tree",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+T",
+            description: "Toggle terminal",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+R",
+            description: "Resize mode",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+Z",
+            description: "Zoom panel",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Click panel",
+            description: "Focus panel",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Drag border",
+            description: "Resize panel",
+        },
+    ],
+};
+
+const HELP_TREE: HelpSection = HelpSection {
+    title: "Tree",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "\u{2191}/\u{2193}",
+            description: "Navigate tree",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Enter",
+            description: "Expand/collapse dir",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "\u{2190}/\u{2192}",
+            description: "Collapse/expand",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Home/End",
+            description: "First/last item",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+G",
+            description: "Toggle ignored files",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+I",
+            description: "Toggle file icons",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "n",
+            description: "New file",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "N",
+            description: "New directory",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "r",
+            description: "Rename",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "d",
+            description: "Delete",
+        },
+    ],
+};
+
+const HELP_TABS: HelpSection = HelpSection {
+    title: "Tabs",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+T",
+            description: "New tab (terminal)",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+W / Ctrl+W",
+            description: "Close tab",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+]/[",
+            description: "Next/prev tab",
+        },
+    ],
+};
+
+const HELP_EDITOR: HelpSection = HelpSection {
+    title: "Editor",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+F",
+            description: "Find in file",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+Arrows",
+            description: "Select text",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+A",
+            description: "Select all",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+C",
+            description: "Copy",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+X",
+            description: "Cut",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+V",
+            description: "Paste",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Z",
+            description: "Undo",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Shift+Z",
+            description: "Redo",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Y",
+            description: "Redo",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+S",
+            description: "Save",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+P",
+            description: "Open file finder",
+        },
+        HelpEntry {
+            fallback_key: Some("F1"),
+            primary_key: "Ctrl+Shift+P",
+            description: "Command palette",
+        },
+        HelpEntry {
+            fallback_key: Some("F2"),
+            primary_key: "Ctrl+Shift+F",
+            description: "Find in project",
+        },
+        HelpEntry {
+            fallback_key: Some("F3"),
+            primary_key: "Alt+/",
+            description: "Code completion",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+.",
+            description: "Next diagnostic",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Alt+,",
+            description: "Prev diagnostic",
+        },
+        HelpEntry {
+            fallback_key: Some("F12"),
+            primary_key: "",
+            description: "Go to definition",
+        },
+        HelpEntry {
+            fallback_key: Some("Shift+F12"),
+            primary_key: "",
+            description: "Find references",
+        },
+        HelpEntry {
+            fallback_key: Some("F4"),
+            primary_key: "Ctrl+Shift+K",
+            description: "Show hover info",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Shift+I",
+            description: "Format document",
+        },
+    ],
+};
+
+const HELP_TERMINAL: HelpSection = HelpSection {
+    title: "Terminal",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+PgUp",
+            description: "Scroll up",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+PgDn",
+            description: "Scroll down",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+Home",
+            description: "Scroll to top",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Shift+End",
+            description: "Scroll to bottom",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Mouse drag",
+            description: "Select text (copy)",
+        },
+    ],
+};
+
+const HELP_CLOSE: HelpSection = HelpSection {
+    title: "",
+    entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+H",
+            description: "Toggle this help",
+        },
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Esc",
+            description: "Close overlay",
+        },
+    ],
+};
+
+const HELP_SECTIONS: &[&HelpSection] = &[
+    &HELP_GENERAL,
+    &HELP_TREE,
+    &HELP_TABS,
+    &HELP_EDITOR,
+    &HELP_TERMINAL,
+    &HELP_CLOSE,
 ];
+
+/// Formats a keybinding entry for display.
+/// Fallback key appears first, separated by " / " from the primary key.
+fn format_help_key(entry: &HelpEntry) -> String {
+    match (entry.fallback_key, entry.primary_key) {
+        (Some(fallback), primary) if !primary.is_empty() => {
+            format!("{fallback} / {primary}")
+        }
+        (Some(fallback), _) => fallback.to_string(),
+        (None, primary) => primary.to_string(),
+    }
+}
+
+/// Calculates help overlay dimensions based on content size, clamped to screen.
+/// Returns (width, height).
+fn help_overlay_dimensions(area: Rect, max_col_lines: u16) -> (u16, u16) {
+    // Width: 3 columns + gaps + inner padding + border (2)
+    let content_w =
+        HELP_SINGLE_COL_WIDTH * HELP_COLUMNS as u16 + HELP_COL_GAP * (HELP_COLUMNS as u16 - 1);
+    let width = (content_w + HELP_INNER_PAD * 2 + 2).min(area.width.saturating_sub(2));
+
+    // Height: tallest column + extra rows + border (2)
+    let height = (max_col_lines + HELP_VERTICAL_EXTRA + 2).min(area.height.saturating_sub(2));
+
+    (width, height)
+}
+
+/// A renderable line in a help column.
+enum HelpLine {
+    /// Section title.
+    Header(String),
+    /// Horizontal rule under a section title.
+    Separator,
+    /// Blank spacer between sections.
+    Spacer,
+    /// Key-description pair.
+    Entry(String, String),
+}
+
+/// Converts a section into renderable lines (header + separator + entries).
+fn section_to_lines(section: &HelpSection) -> Vec<HelpLine> {
+    let mut lines = Vec::new();
+    if !section.title.is_empty() {
+        lines.push(HelpLine::Header(section.title.to_string()));
+        lines.push(HelpLine::Separator);
+    }
+    for entry in section.entries {
+        lines.push(HelpLine::Entry(
+            format_help_key(entry),
+            entry.description.to_string(),
+        ));
+    }
+    lines
+}
+
+/// Calculates line count for a section including header and separator.
+fn section_line_count(section: &HelpSection) -> usize {
+    // header + separator = 2 lines when title is present
+    let header = if section.title.is_empty() { 0 } else { 2 };
+    header + section.entries.len()
+}
+
+/// Distributes sections into columns, keeping each section intact.
+/// Uses largest-first bin-packing: sorts sections by size descending, then
+/// assigns each to the shortest column. This produces balanced columns.
+/// A blank spacer line is added between sections in the same column.
+fn distribute_sections_into_columns() -> Vec<Vec<HelpLine>> {
+    let mut columns: Vec<Vec<HelpLine>> = (0..HELP_COLUMNS).map(|_| Vec::new()).collect();
+    let mut col_heights: Vec<usize> = vec![0; HELP_COLUMNS];
+
+    // Sort sections by size descending for better packing
+    let mut sorted: Vec<&HelpSection> = HELP_SECTIONS.to_vec();
+    sorted.sort_by_key(|s| std::cmp::Reverse(section_line_count(s)));
+
+    for section in sorted {
+        // Find the shortest column
+        let min_col = col_heights
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, h)| **h)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        // Add spacer if column already has content
+        if !columns[min_col].is_empty() {
+            columns[min_col].push(HelpLine::Spacer);
+            col_heights[min_col] += 1;
+        }
+
+        let lines = section_to_lines(section);
+        col_heights[min_col] += lines.len();
+        columns[min_col].extend(lines);
+    }
+
+    columns
+}
 
 /// Renders the help overlay centered on the screen.
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
 
-    let overlay_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(HELP_OVERLAY_MARGIN));
-    let overlay_height = (HELP_LINES.len() as u16 + HELP_OVERLAY_PADDING)
-        .min(area.height.saturating_sub(HELP_OVERLAY_VERTICAL_MARGIN));
+    let columns = distribute_sections_into_columns();
+    let max_col_lines = columns.iter().map(|c| c.len() as u16).max().unwrap_or(0);
+
+    let (overlay_width, overlay_height) = help_overlay_dimensions(area, max_col_lines);
 
     let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
         .flex(Flex::Center)
@@ -311,31 +657,69 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
 
     let inner = block.inner(overlay_area);
-
-    let lines: Vec<Line> = HELP_LINES
-        .iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                Span::styled(
-                    format!("  {key:<HELP_KEY_COLUMN_WIDTH$}"),
-                    Style::default()
-                        .fg(theme.panel_border_active)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(desc.to_string(), Style::default().fg(theme.foreground)),
-            ])
-        })
-        .collect();
-
     frame.render_widget(block, overlay_area);
 
-    let help_text = Paragraph::new(lines).alignment(Alignment::Left);
-    let content_area = Rect {
-        y: inner.y + HELP_CONTENT_TOP_OFFSET,
-        height: inner.height.saturating_sub(HELP_CONTENT_TOP_OFFSET),
-        ..inner
+    let header_style = Style::default()
+        .fg(theme.panel_border_active)
+        .add_modifier(Modifier::BOLD);
+    let separator_style = Style::default()
+        .fg(theme.panel_border)
+        .add_modifier(Modifier::DIM);
+    let key_style = Style::default()
+        .fg(theme.panel_border_active)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme.foreground);
+
+    // Render each column with proper gaps
+    for (col_idx, col_lines) in columns.iter().enumerate() {
+        let col_x =
+            inner.x + HELP_INNER_PAD + (col_idx as u16) * (HELP_SINGLE_COL_WIDTH + HELP_COL_GAP);
+        let col_w = HELP_SINGLE_COL_WIDTH.min(inner.width.saturating_sub(col_x - inner.x));
+        let col_rect = Rect {
+            x: col_x,
+            y: inner.y + 1, // 1 row top padding
+            width: col_w,
+            height: inner.height.saturating_sub(HELP_VERTICAL_EXTRA),
+        };
+
+        // Build separator: "─" repeated to fill the column width (with indent)
+        let rule_len = col_w.saturating_sub(2) as usize;
+        let rule_str: String = format!(" {}", "\u{2500}".repeat(rule_len));
+
+        let rendered: Vec<Line> = col_lines
+            .iter()
+            .map(|line| match line {
+                HelpLine::Header(title) => {
+                    Line::from(Span::styled(format!(" {title}"), header_style))
+                }
+                HelpLine::Separator => Line::from(Span::styled(rule_str.clone(), separator_style)),
+                HelpLine::Spacer => Line::from(""),
+                HelpLine::Entry(key, desc) => Line::from(vec![
+                    Span::styled(format!("  {key:<HELP_KEY_COL_WIDTH$}"), key_style),
+                    Span::styled(desc.clone(), desc_style),
+                ]),
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(rendered).alignment(Alignment::Left);
+        frame.render_widget(paragraph, col_rect);
+    }
+
+    // Footer: "Esc to close" centered at the bottom
+    let footer_area = Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(1),
+        width: inner.width,
+        height: 1,
     };
-    frame.render_widget(help_text, content_area);
+    let footer = Paragraph::new(Line::from(Span::styled(
+        "Esc to close",
+        Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::DIM),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(footer, footer_area);
 }
 
 /// Minimum width of the confirmation dialog in columns.
@@ -3438,7 +3822,7 @@ mod tests {
     fn render_help_overlay_when_show_help_true() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 24);
+        let content = render_app_to_string(&app, 130, 40);
         assert!(content.contains("Help"), "expected 'Help' title in overlay");
         assert!(content.contains("Quit"), "expected 'Quit' in help content");
     }
@@ -3458,13 +3842,102 @@ mod tests {
     fn render_help_overlay_shows_keybindings() {
         let mut app = AppState::new();
         app.show_help = true;
-        let content = render_app_to_string(&app, 80, 70);
+        let content = render_app_to_string(&app, 130, 50);
         assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
         assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
         assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");
         assert!(content.contains("Ctrl+H"), "expected 'Ctrl+H' in help");
         assert!(content.contains("Ctrl+R"), "expected 'Ctrl+R' in help");
         assert!(content.contains("Esc"), "expected 'Esc' in help");
+    }
+
+    #[test]
+    fn format_help_key_with_fallback_and_primary() {
+        let entry = HelpEntry {
+            fallback_key: Some("F3"),
+            primary_key: "Alt+/",
+            description: "Code completion",
+        };
+        assert_eq!(format_help_key(&entry), "F3 / Alt+/");
+    }
+
+    #[test]
+    fn format_help_key_fallback_only() {
+        let entry = HelpEntry {
+            fallback_key: Some("F12"),
+            primary_key: "",
+            description: "Go to definition",
+        };
+        assert_eq!(format_help_key(&entry), "F12");
+    }
+
+    #[test]
+    fn format_help_key_primary_only() {
+        let entry = HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+Q",
+            description: "Quit",
+        };
+        assert_eq!(format_help_key(&entry), "Ctrl+Q");
+    }
+
+    #[test]
+    fn help_overlay_dimensions_clamps_to_small_screen() {
+        let area = Rect::new(0, 0, 60, 15);
+        let (w, h) = help_overlay_dimensions(area, 20);
+        // Content width is ~122 but screen is only 60, so clamped to 58
+        assert_eq!(w, 58);
+        // Height: 20 + 3 + 2 = 25, clamped to 15-2=13
+        assert_eq!(h, 13);
+    }
+
+    #[test]
+    fn help_overlay_dimensions_fits_content_on_large_screen() {
+        let area = Rect::new(0, 0, 200, 80);
+        let (w, h) = help_overlay_dimensions(area, 20);
+        // Content width: 38*3 + 2*2 + 1*2 + 2 = 122
+        let expected_w = HELP_SINGLE_COL_WIDTH * HELP_COLUMNS as u16
+            + HELP_COL_GAP * (HELP_COLUMNS as u16 - 1)
+            + HELP_INNER_PAD * 2
+            + 2;
+        assert_eq!(w, expected_w);
+        // Height: 20 + 3 + 2 = 25
+        assert_eq!(h, 25);
+    }
+
+    #[test]
+    fn help_overlay_wider_than_tall() {
+        let area = Rect::new(0, 0, 160, 50);
+        let (w, h) = help_overlay_dimensions(area, 20);
+        assert!(w > h, "expected overlay to be wider ({w}) than tall ({h})");
+    }
+
+    #[test]
+    fn all_help_sections_have_entries() {
+        for section in HELP_SECTIONS {
+            assert!(
+                !section.entries.is_empty(),
+                "section '{}' has no entries",
+                section.title,
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_keys_appear_first() {
+        // Verify that when both fallback and primary keys exist,
+        // the formatted string starts with the fallback key.
+        for section in HELP_SECTIONS {
+            for entry in section.entries {
+                if let Some(fallback) = entry.fallback_key {
+                    let formatted = format_help_key(entry);
+                    assert!(
+                        formatted.starts_with(fallback),
+                        "expected fallback key '{fallback}' to appear first in '{formatted}'"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -3917,11 +4390,14 @@ mod tests {
     }
 
     #[test]
-    fn help_lines_contain_tab_keybindings() {
-        let has_next_tab = HELP_LINES.iter().any(|(k, _)| *k == "Alt+]/[");
-        let has_close_tab = HELP_LINES.iter().any(|(k, _)| *k == "Alt+W / Ctrl+W");
-        assert!(has_next_tab, "expected 'Alt+]/[' in HELP_LINES");
-        assert!(has_close_tab, "expected 'Alt+W / Ctrl+W' in HELP_LINES");
+    fn help_sections_contain_tab_keybindings() {
+        let has_next_tab = HELP_TABS.entries.iter().any(|e| e.primary_key == "Alt+]/[");
+        let has_close_tab = HELP_TABS
+            .entries
+            .iter()
+            .any(|e| e.primary_key == "Alt+W / Ctrl+W");
+        assert!(has_next_tab, "expected 'Alt+]/[' in HELP_TABS");
+        assert!(has_close_tab, "expected 'Alt+W / Ctrl+W' in HELP_TABS");
     }
 
     #[test]
