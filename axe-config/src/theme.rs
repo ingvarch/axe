@@ -97,9 +97,10 @@ pub fn parse_hex_color(hex: &str) -> Option<Color> {
 ///
 /// Returns `None` if the theme is not found.
 pub fn load_theme(name: &str) -> Option<ThemeFile> {
-    // Check user theme directory first.
-    if let Some(config_dir) = dirs::config_dir() {
-        let user_theme_path = config_dir
+    // Check user theme directory first (~/.config/axe/themes/).
+    if let Some(home) = dirs::home_dir() {
+        let user_theme_path = home
+            .join(".config")
             .join("axe")
             .join("themes")
             .join(format!("{name}.toml"));

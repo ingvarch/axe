@@ -305,9 +305,9 @@ impl AppConfig {
         let mut config = Self::default();
         let mut warnings = Vec::new();
 
-        // Load global config.
-        if let Some(config_dir) = dirs::config_dir() {
-            let global_path = config_dir.join("axe").join("config.toml");
+        // Load global config from ~/.config/axe/config.toml.
+        if let Some(home) = dirs::home_dir() {
+            let global_path = home.join(".config").join("axe").join("config.toml");
             match Self::load_from_path(&global_path) {
                 Ok(Some(global)) => config = global,
                 Ok(None) => {} // File doesn't exist, no warning needed.
