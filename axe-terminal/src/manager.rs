@@ -204,14 +204,19 @@ impl TerminalManager {
 
     /// Drains pending PTY output from the channel and routes it to the correct tab by ID.
     ///
-    /// Returns the indices of tabs whose child processes have exited (sorted descending
-    /// so the caller can safely close them back-to-front without index invalidation).
-    pub fn poll_output(&mut self) -> Vec<usize> {
+    /// Returns `(had_output, exited_indices)`:
+    /// - `had_output`: true if any PTY output data was processed this call.
+    /// - `exited_indices`: indices of tabs whose child processes have exited,
+    ///   sorted descending so the caller can safely close them back-to-front
+    ///   without index invalidation.
+    pub fn poll_output(&mut self) -> (bool, Vec<usize>) {
         let mut exited_indices = Vec::new();
+        let mut had_output = false;
 
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 TermEvent::Output(tab_id, data) => {
+                    had_output = true;
                     if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
                         if let Some(tab) = self.tabs.get_mut(idx) {
                             tab.process_output(&data);
@@ -231,7 +236,7 @@ impl TerminalManager {
 
         // Sort descending so caller can close back-to-front safely.
         exited_indices.sort_unstable_by(|a, b| b.cmp(a));
-        exited_indices
+        (had_output, exited_indices)
     }
 
     /// Writes raw bytes to the active terminal tab's PTY.
@@ -252,6 +257,17 @@ impl TerminalManager {
     /// Resizes the active terminal tab's PTY and grid.
     pub fn resize_active(&mut self, cols: u16, rows: u16) -> Result<()> {
         if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.resize(cols, rows)?;
+        }
+        Ok(())
+    }
+
+    /// Resizes all terminal tabs' PTY and grid to the given dimensions.
+    ///
+    /// Unlike `resize_active`, this ensures inactive tabs are also updated,
+    /// so switching tabs after a resize shows correctly wrapped content.
+    pub fn resize_all(&mut self, cols: u16, rows: u16) -> Result<()> {
+        for tab in &mut self.tabs {
             tab.resize(cols, rows)?;
         }
         Ok(())
@@ -500,7 +516,7 @@ mod tests {
         mgr.send_event(TermEvent::Output(tab1_id, b"world".to_vec()));
         // Send data tagged for tab 0 (first tab).
         mgr.send_event(TermEvent::Output(tab0_id, b"hello".to_vec()));
-        mgr.poll_output();
+        let _ = mgr.poll_output();
 
         // Verify tab 0 got "hello".
         let tab0 = &mgr.tabs[0];
@@ -534,7 +550,7 @@ mod tests {
         // Manually send test data through the channel tagged with tab 0's ID.
         let tab_id = mgr.tab_ids[0];
         mgr.send_event(TermEvent::Output(tab_id, b"test".to_vec()));
-        mgr.poll_output();
+        let _ = mgr.poll_output();
 
         // Verify the data was processed by reading the grid.
         let tab = mgr.active_tab().unwrap();
@@ -626,7 +642,7 @@ mod tests {
         let tab1_id = mgr.tab_ids[1];
         mgr.send_event(TermEvent::ChildExited(tab1_id));
 
-        let exited = mgr.poll_output();
+        let (_, exited) = mgr.poll_output();
         assert_eq!(exited, vec![1], "should report index 1 as exited");
     }
 
@@ -643,7 +659,7 @@ mod tests {
         mgr.send_event(TermEvent::ChildExited(tab0_id));
         mgr.send_event(TermEvent::ChildExited(tab2_id));
 
-        let exited = mgr.poll_output();
+        let (_, exited) = mgr.poll_output();
         assert_eq!(exited, vec![2, 0], "should be sorted descending");
     }
 
@@ -656,7 +672,8 @@ mod tests {
         let tab_id = mgr.tab_ids[0];
         mgr.send_event(TermEvent::Output(tab_id, b"data".to_vec()));
 
-        let exited = mgr.poll_output();
+        let (had_output, exited) = mgr.poll_output();
+        assert!(had_output, "should report output was received");
         assert!(exited.is_empty());
     }
 
@@ -715,7 +732,7 @@ mod tests {
             let line = format!("line {i}\r\n");
             mgr.send_event(TermEvent::Output(tab_id, line.into_bytes()));
         }
-        mgr.poll_output();
+        let _ = mgr.poll_output();
 
         mgr.scroll_active(Scroll::PageUp);
         assert!(mgr.active_display_offset() > 0);
@@ -764,7 +781,7 @@ mod tests {
         // Feed content and select it.
         let tab_id = mgr.tab_ids[0];
         mgr.send_event(TermEvent::Output(tab_id, b"hello world".to_vec()));
-        mgr.poll_output();
+        let _ = mgr.poll_output();
 
         mgr.start_selection_active(
             SelectionType::Simple,
@@ -851,6 +868,40 @@ mod tests {
     fn active_tab_is_alive_returns_false_no_tabs() {
         let mut mgr = TerminalManager::new();
         assert!(!mgr.active_tab_is_alive(), "No tabs means not alive");
+    }
+
+    #[test]
+    fn resize_all_resizes_all_tabs() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        let result = mgr.resize_all(120, 40);
+        assert!(
+            result.is_ok(),
+            "resize_all should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn resize_all_noop_without_tabs() {
+        let mut mgr = TerminalManager::new();
+        let result = mgr.resize_all(120, 40);
+        assert!(result.is_ok(), "resize_all with no tabs should be a no-op");
+    }
+
+    #[test]
+    fn resize_all_skips_same_size() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        // Resize to same dimensions should succeed (early return in tab.resize).
+        let result = mgr.resize_all(80, 24);
+        assert!(result.is_ok(), "resize_all with same size should succeed");
     }
 
     #[test]

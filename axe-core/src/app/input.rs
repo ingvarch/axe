@@ -851,6 +851,9 @@ impl AppState {
                         }
                     }
                 }
+                if self.mouse_drag.border.is_some() {
+                    self.needs_full_redraw = true;
+                }
                 self.mouse_drag.border = None;
             }
             MouseEventKind::ScrollUp => {

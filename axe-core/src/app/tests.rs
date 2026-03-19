@@ -4053,3 +4053,49 @@ fn replace_all_empty_matches_noop() {
     let content = app.buffer_manager.active_buffer().unwrap().content_string();
     assert_eq!(content, "hello");
 }
+
+// --- needs_full_redraw flag tests ---
+
+#[test]
+fn toggle_tree_sets_needs_full_redraw() {
+    let mut app = AppState::new();
+    app.needs_full_redraw = false;
+    app.execute(Command::ToggleTree);
+    assert!(
+        app.needs_full_redraw,
+        "toggle_tree should set needs_full_redraw"
+    );
+}
+
+#[test]
+fn toggle_terminal_sets_needs_full_redraw() {
+    let mut app = AppState::new();
+    app.needs_full_redraw = false;
+    app.execute(Command::ToggleTerminal);
+    assert!(
+        app.needs_full_redraw,
+        "toggle_terminal should set needs_full_redraw"
+    );
+}
+
+#[test]
+fn toggle_zoom_sets_needs_full_redraw() {
+    let mut app = AppState::new();
+    app.needs_full_redraw = false;
+    app.execute(Command::ZoomPanel);
+    assert!(
+        app.needs_full_redraw,
+        "toggle_zoom should set needs_full_redraw"
+    );
+}
+
+#[test]
+fn equalize_layout_sets_needs_full_redraw() {
+    let mut app = AppState::new();
+    app.needs_full_redraw = false;
+    app.execute(Command::EqualizeLayout);
+    assert!(
+        app.needs_full_redraw,
+        "equalize_layout should set needs_full_redraw"
+    );
+}

@@ -155,6 +155,13 @@ async fn main() -> Result<()> {
         // Poll terminal PTY output before drawing.
         app.poll_terminal();
 
+        // Check if PTY output arrived this frame. If so, we'll poison
+        // ratatui's front buffer after draw() so the NEXT frame resends
+        // all cells (catching any the real terminal missed).
+        // Clear the flag now so it's fresh for the next poll_terminal().
+        let poison_buffer = app.terminal_output_this_frame;
+        app.terminal_output_this_frame = false;
+
         // Poll filesystem watcher for external file changes.
         app.poll_fs_events();
 
@@ -176,15 +183,54 @@ async fn main() -> Result<()> {
         // Clear expired status messages.
         app.expire_status_message();
 
+        // Pre-draw: sync terminal PTY size BEFORE rendering to avoid
+        // one-frame lag between resize detection and PTY content reflow.
+        let full_area = Rect::new(0, 0, size.width, size.height);
+        if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
+            let new_size = (term_rect.width, term_rect.height);
+            if new_size != last_terminal_size && new_size.0 > 0 && new_size.1 > 0 {
+                app.last_terminal_cols = new_size.0;
+                app.last_terminal_rows = new_size.1;
+                if let Some(ref mut mgr) = app.terminal_manager {
+                    if let Err(e) = mgr.resize_all(new_size.0, new_size.1) {
+                        log::warn!("Failed to resize terminal tabs: {e}");
+                    }
+                }
+                last_terminal_size = new_size;
+            }
+        }
+
         // Wrap draw in synchronized output to prevent tearing/flicker.
         // The terminal buffers all output until EndSynchronizedUpdate, then
         // renders atomically. Unsupported terminals silently ignore the sequences.
         crossterm::execute!(io::stdout(), BeginSynchronizedUpdate)?;
+
+        // Force full redraw on layout/geometry changes (resize, panel toggle, zoom).
+        // Inside the synchronized block so the clear + full redraw is atomic.
+        if app.needs_full_redraw {
+            terminal.clear()?;
+            app.needs_full_redraw = false;
+        }
+
         terminal.draw(|frame| axe_ui::render(&app, frame, &theme))?;
         crossterm::execute!(io::stdout(), EndSynchronizedUpdate)?;
 
+        // After PTY output, poison ratatui's front buffer in the terminal panel
+        // area so the next frame's diff will resend every terminal cell. This
+        // catches any cells the real terminal missed during rapid output (e.g.
+        // alternate screen exit). Unlike terminal.clear(), this does NOT send
+        // ESC[2J and only affects the terminal panel — no flicker, no black
+        // patches in the editor or tree panels.
+        if poison_buffer {
+            if let Some(term_panel) = axe_ui::terminal_outer_rect(&app, full_area) {
+                let buf = terminal.current_buffer_mut();
+                for pos in term_panel.positions() {
+                    buf[pos].set_symbol("\x00");
+                }
+            }
+        }
+
         // Sync panel dimensions after draw.
-        let full_area = Rect::new(0, 0, size.width, size.height);
 
         // Update tree inner area for mouse click detection on tree nodes.
         if let Some(tree_rect) = axe_ui::tree_inner_rect(&app, full_area) {
@@ -233,24 +279,10 @@ async fn main() -> Result<()> {
             app.editor_scrollbar_area = None;
         }
 
-        // Sync terminal PTY size with actual panel dimensions after draw.
+        // Update terminal grid area for mouse coordinate conversion (selection, etc.).
         if let Some(term_rect) = axe_ui::terminal_inner_rect(&app, full_area) {
-            // Store grid area for mouse coordinate conversion (selection, etc.).
             app.terminal_grid_area =
                 Some((term_rect.x, term_rect.y, term_rect.width, term_rect.height));
-
-            let new_size = (term_rect.width, term_rect.height);
-            if new_size != last_terminal_size && new_size.0 > 0 && new_size.1 > 0 {
-                // Update AppState so new terminal tabs use the right size.
-                app.last_terminal_cols = new_size.0;
-                app.last_terminal_rows = new_size.1;
-                if let Some(ref mut mgr) = app.terminal_manager {
-                    if let Err(e) = mgr.resize_active(new_size.0, new_size.1) {
-                        log::warn!("Failed to resize terminal: {e}");
-                    }
-                }
-                last_terminal_size = new_size;
-            }
         } else {
             app.terminal_grid_area = None;
         }
@@ -269,6 +301,9 @@ async fn main() -> Result<()> {
                         } else {
                             app.handle_mouse_event(mouse, size.width, size.height);
                         }
+                    }
+                    Event::Resize(_, _) => {
+                        app.needs_full_redraw = true;
                     }
                     _ => {}
                 }

@@ -12,7 +12,18 @@ impl AppState {
     /// or pressed Ctrl+D in the shell). Updates focus accordingly.
     pub fn poll_terminal(&mut self) {
         if let Some(ref mut mgr) = self.terminal_manager {
-            let exited = mgr.poll_output();
+            let (had_output, exited) = mgr.poll_output();
+
+            // Flag that PTY output was received this frame. The main loop
+            // uses this to "poison" ratatui's front buffer after draw(),
+            // forcing the NEXT frame's diff to resend all cells. This catches
+            // any cells the real terminal missed during rapid output (e.g.
+            // alternate screen exit, fast scrolling) without sending ESC[2J
+            // (which would cause visible flicker).
+            if had_output {
+                self.terminal_output_this_frame = true;
+            }
+
             if !exited.is_empty() {
                 // Close exited tabs back-to-front (indices are sorted descending).
                 for idx in exited {

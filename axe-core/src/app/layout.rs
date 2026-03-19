@@ -40,6 +40,7 @@ impl AppState {
     pub(super) fn equalize_layout(&mut self) {
         self.tree_width_pct = DEFAULT_TREE_WIDTH_PCT;
         self.editor_height_pct = DEFAULT_EDITOR_HEIGHT_PCT;
+        self.needs_full_redraw = true;
     }
 
     /// Toggles zoom on the focused panel.
@@ -54,6 +55,7 @@ impl AppState {
         } else {
             self.zoomed_panel = Some(self.focus.clone());
         }
+        self.needs_full_redraw = true;
     }
 
     /// Toggles the file tree panel visibility.
@@ -63,6 +65,7 @@ impl AppState {
         if !self.show_tree && self.focus == FocusTarget::Tree {
             self.focus = FocusTarget::Editor;
         }
+        self.needs_full_redraw = true;
     }
 
     /// Toggles the terminal panel visibility.
@@ -82,6 +85,7 @@ impl AppState {
         } else if matches!(self.focus, FocusTarget::Terminal(_)) {
             self.focus = FocusTarget::Editor;
         }
+        self.needs_full_redraw = true;
     }
 
     /// Cycles focus forward, skipping hidden panels.

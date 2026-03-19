@@ -208,6 +208,55 @@ pub fn terminal_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
     Some(adjust_terminal_rect(inner, has_tabs))
 }
 
+/// Returns the outer rect of the terminal panel (including borders), if visible.
+///
+/// Used by the main loop to poison ratatui's front buffer for only the terminal
+/// area, avoiding ghost characters without affecting the editor or tree panels.
+pub fn terminal_outer_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    let layout_mgr = LayoutManager {
+        show_tree: app.show_tree,
+        show_terminal: app.show_terminal,
+        tree_width_pct: app.tree_width_pct,
+        editor_height_pct: app.editor_height_pct,
+    };
+
+    if !layout_mgr.show_terminal {
+        return None;
+    }
+
+    if let Some(ref zoomed) = app.zoomed_panel {
+        return if matches!(zoomed, FocusTarget::Terminal(_)) {
+            let vertical =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+            Some(vertical[0])
+        } else {
+            None
+        };
+    }
+
+    let vertical = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let main_area = vertical[0];
+
+    let right_area = if layout_mgr.show_tree {
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(layout_mgr.tree_width_pct),
+            Constraint::Percentage(100 - layout_mgr.tree_width_pct),
+        ])
+        .split(main_area);
+        horizontal[1]
+    } else {
+        main_area
+    };
+
+    let right_split = Layout::vertical([
+        Constraint::Percentage(layout_mgr.editor_height_pct),
+        Constraint::Percentage(100 - layout_mgr.editor_height_pct),
+    ])
+    .split(right_area);
+
+    Some(right_split[1])
+}
+
 /// Computes the editor content area rect (after borders and gutter).
 ///
 /// Used by main.rs to sync `AppState::editor_inner_area` each frame.

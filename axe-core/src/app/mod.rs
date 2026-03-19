@@ -146,6 +146,16 @@ pub struct AppState {
     last_git_branch_check: Option<Instant>,
     /// Set of absolute file paths with uncommitted changes (modified, new, deleted).
     pub git_modified_files: std::collections::HashSet<std::path::PathBuf>,
+    /// When true, the next frame must call `terminal.clear()` before drawing
+    /// to force ratatui to do a full redraw instead of a diff against stale geometry.
+    /// Set on resize events, panel toggles, zoom changes, and border drag end.
+    pub needs_full_redraw: bool,
+    /// Set to `true` by `poll_terminal()` when PTY output is received.
+    ///
+    /// The main loop reads and clears this flag after each draw. When set,
+    /// it "poisons" ratatui's front buffer so the next frame's diff resends
+    /// all cells, catching any updates the real terminal missed.
+    pub terminal_output_this_frame: bool,
 }
 
 impl AppState {
@@ -203,6 +213,8 @@ impl AppState {
             last_git_branch_check: None,
             file_watcher: None,
             git_modified_files: std::collections::HashSet::new(),
+            needs_full_redraw: true,
+            terminal_output_this_frame: false,
         }
     }
 

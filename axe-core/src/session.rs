@@ -75,7 +75,10 @@ fn ensure_global_gitignore_at(path: &Path) -> Result<()> {
 
     let content = std::fs::read_to_string(path).unwrap_or_default();
 
-    if content.lines().any(|line| line.trim() == GLOBAL_GITIGNORE_PATTERN) {
+    if content
+        .lines()
+        .any(|line| line.trim() == GLOBAL_GITIGNORE_PATTERN)
+    {
         return Ok(());
     }
 
@@ -424,7 +427,10 @@ mod tests {
         ensure_global_gitignore_at(&ignore_path).unwrap();
 
         let content = std::fs::read_to_string(&ignore_path).unwrap();
-        let count = content.lines().filter(|l| l.trim() == GLOBAL_GITIGNORE_PATTERN).count();
+        let count = content
+            .lines()
+            .filter(|l| l.trim() == GLOBAL_GITIGNORE_PATTERN)
+            .count();
         assert_eq!(count, 1);
     }
 
