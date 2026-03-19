@@ -886,16 +886,16 @@ Complete and polish the status bar.
 
 ---
 
-### Task 10.4 — Startup Screen
+### Task 10.4 — Startup Screen ✅
 
 Show a welcome screen when Axe is opened without a file or project.
 
 **Acceptance criteria:**
-- ASCII art logo "AXE" displayed centered
-- Version number below the logo
-- List of key shortcuts: "Ctrl+P: Open file", "Ctrl+N: New file", etc.
-- Recent projects/files list (if session history exists)
-- Disappears as soon as a file is opened or any editing begins
+- ASCII art logo "AXE" displayed centered ✅
+- Version number below the logo ✅
+- List of key shortcuts: "Ctrl+P: Open file", "Ctrl+N: New file", etc. ✅
+- Recent projects/files list (if session history exists) — deferred to Task 10.2 (Session Save & Restore)
+- Disappears as soon as a file is opened or any editing begins ✅
 
 ---
 

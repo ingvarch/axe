@@ -18,7 +18,7 @@ use ratatui::Frame;
 use axe_core::{AppState, FocusTarget};
 
 use editor_panel::{
-    editor_title, gutter_width, render_editor_content, render_no_files_message,
+    editor_title, gutter_width, render_editor_content, render_startup_screen,
     EDITOR_SCROLLBAR_WIDTH,
 };
 use layout::LayoutManager;
@@ -561,7 +561,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
                         tab_bar,
                     );
                 } else {
-                    render_no_files_message(inner, frame, theme);
+                    render_startup_screen(inner, frame, theme, &app.build_version);
                 }
             }
         }

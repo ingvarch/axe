@@ -668,32 +668,64 @@ fn editor_inner_rect_accounts_for_tab_bar() {
     );
 }
 
-// --- No files open message tests ---
+// --- Startup screen tests ---
 
 #[test]
-fn render_zoomed_editor_shows_message_when_no_buffer() {
+fn startup_screen_shows_logo() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
     let content = render_app_to_string(&app, 100, 24);
     assert!(
-        content.contains("No files open"),
-        "expected 'No files open' in zoomed editor with no buffers"
+        content.contains("@@@@@@") && content.contains("@!@!@!@!"),
+        "expected logo chars in startup screen with no buffers"
     );
 }
 
 #[test]
-fn render_unzoomed_editor_shows_message_when_no_buffer() {
-    let app = AppState::new();
-    let content = render_app_to_string(&app, 100, 24);
+fn startup_screen_shows_version() {
+    let mut app = AppState::new();
+    app.build_version = "v0.1.0-abc123".to_string();
+    app.focus = FocusTarget::Editor;
+    app.zoomed_panel = Some(FocusTarget::Editor);
+    let content = render_app_to_string(&app, 100, 30);
     assert!(
-        content.contains("No files open"),
-        "expected 'No files open' in editor panel with no buffers"
+        content.contains("v0.1.0-abc123"),
+        "expected version string in startup screen"
+    );
+    // Must not double the 'v' prefix.
+    assert!(
+        !content.contains("vv0.1.0"),
+        "expected no double 'v' prefix"
     );
 }
 
 #[test]
-fn render_zoomed_editor_no_message_when_buffer_exists() {
+fn startup_screen_shows_shortcuts() {
+    let mut app = AppState::new();
+    app.focus = FocusTarget::Editor;
+    app.zoomed_panel = Some(FocusTarget::Editor);
+    let content = render_app_to_string(&app, 100, 40);
+    assert!(
+        content.contains("Ctrl+P"),
+        "expected 'Ctrl+P' shortcut in startup screen"
+    );
+    assert!(
+        content.contains("Open file finder"),
+        "expected 'Open file finder' description in startup screen"
+    );
+    assert!(
+        content.contains("Ctrl+H"),
+        "expected 'Ctrl+H' for help in startup screen"
+    );
+    assert!(
+        content.contains("Ctrl+T"),
+        "expected 'Ctrl+T' for terminal in startup screen"
+    );
+}
+
+#[test]
+fn startup_screen_disappears_when_file_opened() {
     let mut app = AppState::new();
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut tmp, b"hello\n").unwrap();
@@ -703,8 +735,31 @@ fn render_zoomed_editor_no_message_when_buffer_exists() {
     app.zoomed_panel = Some(FocusTarget::Editor);
     let content = render_app_to_string(&app, 100, 24);
     assert!(
-        !content.contains("No files open"),
-        "expected no 'No files open' when a buffer is open"
+        !content.contains("@@@@@@"),
+        "expected no logo when a buffer is open"
+    );
+}
+
+#[test]
+fn startup_screen_graceful_on_small_area() {
+    let mut app = AppState::new();
+    app.focus = FocusTarget::Editor;
+    app.zoomed_panel = Some(FocusTarget::Editor);
+    // Small terminal — should not panic.
+    let content = render_app_to_string(&app, 40, 5);
+    assert!(
+        !content.is_empty(),
+        "expected non-empty output on small terminal"
+    );
+}
+
+#[test]
+fn startup_screen_unzoomed_shows_logo() {
+    let app = AppState::new();
+    let content = render_app_to_string(&app, 100, 24);
+    assert!(
+        content.contains("@@@@@@"),
+        "expected logo in unzoomed editor with no buffers"
     );
 }
 

@@ -236,29 +236,178 @@ pub(crate) fn char_to_display_col(char_to_col: &[usize], char_idx: usize) -> usi
     }
 }
 
-/// Renders the "No files open" message when no buffers exist.
-pub(crate) fn render_no_files_message(area: Rect, frame: &mut Frame, theme: &Theme) {
-    let text = Line::from(vec![
-        Span::styled(
+/// ASCII logo for the startup screen.
+const AXE_LOGO: &[&str] = &[
+    r" @@@@@@   @@@  @@@  @@@@@@@@",
+    r"@@@@@@@@  @@@  @@@  @@@@@@@@",
+    r"@@!  @@@  @@!  !@@  @@!",
+    r"!@!  @!@  !@!  @!!  !@!",
+    r"@!@!@!@!   !@@!@!   @!!!:!",
+    r"!!!@!!!!    @!!!    !!!!!:",
+    r"!!:  !!!   !: :!!   !!:",
+    r":!:  !:!  :!:  !:!  :!:",
+    r"::   :::   ::  :::   :: ::::",
+    r" :   : :   :   ::   : :: ::",
+];
+
+/// Keyboard shortcuts shown on the startup screen.
+const STARTUP_SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+P", "Open file finder"),
+    ("F1 / Ctrl+Shift+P", "Command palette"),
+    ("F2 / Ctrl+Shift+F", "Find in project"),
+    ("Ctrl+B", "Toggle file tree"),
+    ("Ctrl+T", "Toggle terminal"),
+    ("Ctrl+H", "Help"),
+    ("Ctrl+Q", "Quit"),
+];
+
+// IMPACT ANALYSIS — render_startup_screen
+// Parents: render() and render_right_panels() call this when no buffers are open.
+// Children: None — leaf rendering function.
+// Siblings: render_no_terminals_message() in terminal_panel.rs — independent.
+/// Renders the startup/welcome screen when no buffers are open.
+///
+/// Shows an ASCII logo, version string, and keyboard shortcuts.
+/// Gracefully degrades for small terminal sizes.
+pub(crate) fn render_startup_screen(area: Rect, frame: &mut Frame, theme: &Theme, version: &str) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let height = area.height as usize;
+
+    // Graceful degradation for small terminals.
+    if height < 3 {
+        // Fallback: single dim message.
+        let text = Line::from(Span::styled(
             "No files open",
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::DIM),
-        ),
-        Span::styled(
-            " -- Select a file from the tree",
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(Modifier::DIM),
-        ),
-    ]);
-    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
-    let centered_area = Rect {
-        y: area.y + area.height / 2,
-        height: 1,
-        ..area
-    };
-    frame.render_widget(paragraph, centered_area);
+        ));
+        let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+        let centered = Rect {
+            y: area.y + area.height / 2,
+            height: 1,
+            ..area
+        };
+        frame.render_widget(paragraph, centered);
+        return;
+    }
+
+    let logo_height = AXE_LOGO.len();
+    let version_line = if version.is_empty() { 0 } else { 1 };
+    let shortcuts_height = STARTUP_SHORTCUTS.len();
+
+    // Determine what to show based on available height.
+    let show_version = height >= logo_height + 2 + version_line;
+    let show_shortcuts = height >= logo_height + 2 + version_line + 1 + shortcuts_height;
+
+    let total_height = logo_height
+        + if show_version { 2 } else { 0 }
+        + if show_shortcuts {
+            1 + shortcuts_height
+        } else {
+            0
+        };
+
+    let start_y = area.y + (area.height.saturating_sub(total_height as u16)) / 2;
+    let mut y = start_y;
+
+    let logo_style = Style::default().fg(theme.panel_border_active);
+
+    // Render logo as a left-aligned block centered as a whole.
+    let logo_max_width = AXE_LOGO.iter().map(|l| l.len()).max().unwrap_or(0) as u16;
+    let logo_x = area.x + area.width.saturating_sub(logo_max_width) / 2;
+    let logo_w = logo_max_width.min(area.width);
+
+    for line in AXE_LOGO {
+        if y >= area.y + area.height {
+            break;
+        }
+        let paragraph = Paragraph::new(Line::from(Span::styled(*line, logo_style)))
+            .alignment(Alignment::Left);
+        frame.render_widget(
+            paragraph,
+            Rect {
+                x: logo_x,
+                y,
+                width: logo_w,
+                height: 1,
+            },
+        );
+        y += 1;
+    }
+
+    // Render version.
+    if show_version {
+        y += 1; // blank line
+        let version_text = if version.starts_with('v') {
+            version.to_string()
+        } else {
+            format!("v{version}")
+        };
+        let version_style = Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::DIM);
+        let paragraph = Paragraph::new(Line::from(Span::styled(version_text, version_style)))
+            .alignment(Alignment::Center);
+        frame.render_widget(
+            paragraph,
+            Rect {
+                y,
+                height: 1,
+                ..area
+            },
+        );
+        y += 1;
+    }
+
+    // Render shortcuts as an aligned table (same style as help overlay).
+    if show_shortcuts {
+        y += 1; // blank line
+
+        let key_style = Style::default()
+            .fg(theme.panel_border_active)
+            .add_modifier(Modifier::BOLD);
+        let desc_style = Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::DIM);
+
+        // Fixed column width for key names, matching help overlay style.
+        const KEY_COL_WIDTH: usize = 20;
+
+        // Build all shortcut lines as left-aligned paragraphs, then center
+        // the block as a whole by computing the x offset once.
+        let max_line_len = STARTUP_SHORTCUTS
+            .iter()
+            .map(|(_, d)| KEY_COL_WIDTH + d.len())
+            .max()
+            .unwrap_or(0);
+        let block_x = area.x + area.width.saturating_sub(max_line_len as u16) / 2;
+        let block_w = (max_line_len as u16).min(area.width);
+
+        for (key, desc) in STARTUP_SHORTCUTS {
+            if y >= area.y + area.height {
+                break;
+            }
+            let line = Line::from(vec![
+                Span::styled(format!("{key:<KEY_COL_WIDTH$}"), key_style),
+                Span::styled(*desc, desc_style),
+            ]);
+            let paragraph = Paragraph::new(line).alignment(Alignment::Left);
+            frame.render_widget(
+                paragraph,
+                Rect {
+                    x: block_x,
+                    y,
+                    width: block_w,
+                    height: 1,
+                },
+            );
+            y += 1;
+        }
+    }
 }
 
 /// Renders a vertical scrollbar in the given 1-column-wide area.

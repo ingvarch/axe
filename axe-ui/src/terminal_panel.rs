@@ -10,7 +10,7 @@ use axe_core::{AppState, FocusTarget};
 use axe_terminal::TerminalManager;
 
 use crate::editor_panel::{
-    editor_title, render_editor_content, render_no_files_message, render_scrollbar,
+    editor_title, render_editor_content, render_scrollbar, render_startup_screen,
 };
 use crate::layout::LayoutManager;
 use crate::theme::Theme;
@@ -397,7 +397,7 @@ pub(crate) fn render_right_panels(
                 tab_bar,
             );
         } else {
-            render_no_files_message(editor_inner, frame, theme);
+            render_startup_screen(editor_inner, frame, theme, &app.build_version);
         }
 
         let term_block = crate::panel_block(
@@ -442,7 +442,7 @@ pub(crate) fn render_right_panels(
                 tab_bar,
             );
         } else {
-            render_no_files_message(editor_inner, frame, theme);
+            render_startup_screen(editor_inner, frame, theme, &app.build_version);
         }
     }
 }
