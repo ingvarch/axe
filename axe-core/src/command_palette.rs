@@ -62,6 +62,7 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Edit: Cut", Command::EditorCut),
         ("Edit: Paste", Command::EditorPaste),
         ("Edit: Find", Command::EditorFind),
+        ("Edit: Find and Replace", Command::EditorFindReplace),
         ("Tab: New Tab", Command::NewTab),
         ("Tab: Close Tab", Command::CloseTab),
         ("Tab: Next Tab", Command::NextTab),
@@ -226,7 +227,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 33, "Expected 33 palette commands");
+        assert_eq!(p.items.len(), 34, "Expected 34 palette commands");
     }
 
     #[test]

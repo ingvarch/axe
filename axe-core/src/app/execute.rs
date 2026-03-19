@@ -525,6 +525,104 @@ impl AppState {
                 }
                 // If already open, no-op (focus stays on search bar).
             }
+            // IMPACT ANALYSIS — EditorFindReplace
+            // Parents: KeyEvent -> Ctrl+H -> keymap -> this command
+            // Children: SearchState created/modified with replace_visible=true
+            // Siblings: EditorFind (same search state, just without replace row)
+            Command::EditorFindReplace => {
+                use crate::search::SearchField;
+                if let Some(ref mut search) = self.search {
+                    search.replace_visible = true;
+                    search.active_field = SearchField::Replace;
+                } else {
+                    let mut search = SearchState::new();
+                    search.replace_visible = true;
+                    // Pre-fill from selection if available.
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if let Some(text) = buf.selected_text() {
+                            let first_line = text.lines().next().unwrap_or("").to_string();
+                            if !first_line.is_empty() {
+                                search.query = first_line;
+                                search.update_matches(buf);
+                                let row = buf.cursor.row;
+                                let col = buf.cursor.col;
+                                search.nearest_match_from(row, col);
+                            }
+                        }
+                    }
+                    self.search = Some(search);
+                }
+            }
+            // IMPACT ANALYSIS — ReplaceNext
+            // Parents: Enter in replace field, or command dispatch
+            // Children: Buffer content changes (apply_text_edit), search matches recomputed
+            // Siblings: last_edit_time (autosave trigger), LSP didChange
+            Command::ReplaceNext => {
+                let (h, w) = self.editor_viewport();
+                if let Some(ref search) = self.search {
+                    if let Some(m) = search.current_match().cloned() {
+                        let replace_text = search.replace_query.clone();
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.apply_text_edit(
+                                m.row,
+                                m.col_start,
+                                m.row,
+                                m.col_end,
+                                &replace_text,
+                            );
+                            buf.ensure_cursor_visible(h, w);
+                        }
+                        self.last_edit_time = Some(Instant::now());
+                        self.notify_lsp_change();
+                        if let Some(ref mut search) = self.search {
+                            if let Some(buf) = self.buffer_manager.active_buffer() {
+                                search.update_matches(buf);
+                                let cursor_row = buf.cursor.row;
+                                let cursor_col = buf.cursor.col;
+                                search.nearest_match_from(cursor_row, cursor_col);
+                            }
+                        }
+                    }
+                }
+            }
+            // IMPACT ANALYSIS — ReplaceAll
+            // Parents: Ctrl+Alt+Enter in search/replace bar
+            // Children: Buffer content changes (multiple apply_text_edit), undo grouped
+            // Siblings: last_edit_time, LSP didChange, status message
+            Command::ReplaceAll => {
+                let (h, w) = self.editor_viewport();
+                if let Some(ref search) = self.search {
+                    let matches: Vec<_> = search.matches.clone();
+                    let replace_text = search.replace_query.clone();
+                    if matches.is_empty() {
+                        return;
+                    }
+                    let count = matches.len();
+                    if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                        buf.begin_undo_group();
+                        // Iterate in reverse so earlier indices stay valid.
+                        for m in matches.iter().rev() {
+                            buf.apply_text_edit(
+                                m.row,
+                                m.col_start,
+                                m.row,
+                                m.col_end,
+                                &replace_text,
+                            );
+                        }
+                        buf.end_undo_group();
+                        buf.ensure_cursor_visible(h, w);
+                    }
+                    self.last_edit_time = Some(Instant::now());
+                    self.notify_lsp_change();
+                    if let Some(ref mut search) = self.search {
+                        if let Some(buf) = self.buffer_manager.active_buffer() {
+                            search.update_matches(buf);
+                        }
+                    }
+                    self.set_status_message(format!("Replaced {count} occurrences"));
+                }
+            }
             Command::SearchClose => {
                 self.search = None;
             }

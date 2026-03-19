@@ -715,8 +715,8 @@ fn startup_screen_shows_shortcuts() {
         "expected 'Open file finder' description in startup screen"
     );
     assert!(
-        content.contains("Ctrl+H"),
-        "expected 'Ctrl+H' for help in startup screen"
+        content.contains("Ctrl+Shift+H"),
+        "expected 'Ctrl+Shift+H' for help in startup screen"
     );
     assert!(
         content.contains("Ctrl+T"),

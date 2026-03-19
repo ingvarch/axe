@@ -194,6 +194,11 @@ pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
+            primary_key: "Ctrl+H",
+            description: "Find and Replace",
+        },
+        HelpEntry {
+            fallback_key: None,
             primary_key: "Shift+Arrows",
             description: "Select text",
         },
@@ -326,7 +331,7 @@ pub(crate) const HELP_CLOSE: HelpSection = HelpSection {
     entries: &[
         HelpEntry {
             fallback_key: None,
-            primary_key: "Ctrl+H",
+            primary_key: "Ctrl+Shift+H",
             description: "Toggle this help",
         },
         HelpEntry {

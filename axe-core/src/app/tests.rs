@@ -404,12 +404,18 @@ fn handle_key_ctrl_t_toggles_terminal() {
 }
 
 #[test]
-fn handle_key_ctrl_h_toggles_help() {
+fn handle_key_ctrl_shift_h_toggles_help() {
     let mut app = AppState::new();
     assert!(!app.show_help);
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('H'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert!(app.show_help);
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('H'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert!(!app.show_help);
 }
 
@@ -3899,4 +3905,157 @@ fn scrollbar_drag_updates_scroll_position() {
         "expected scroll_row in middle range, got {}",
         buf.scroll_row
     );
+}
+
+// --- Find and Replace tests ---
+
+fn app_with_text(text: &str) -> AppState {
+    let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    std::fs::write(tmp.path(), text).expect("write temp file");
+    let mut app = AppState::new();
+    app.focus = FocusTarget::Editor;
+    app.buffer_manager.open_file(tmp.path()).expect("open file");
+    app
+}
+
+#[test]
+fn find_replace_opens_with_replace_visible() {
+    let mut app = app_with_text("hello");
+    app.execute(Command::EditorFindReplace);
+    let search = app.search.as_ref().expect("search should be open");
+    assert!(search.replace_visible);
+}
+
+#[test]
+fn find_replace_reuses_existing_search() {
+    let mut app = app_with_text("hello");
+    app.execute(Command::EditorFind);
+    assert!(app.search.is_some());
+    assert!(!app.search.as_ref().unwrap().replace_visible);
+    app.execute(Command::EditorFindReplace);
+    let search = app.search.as_ref().unwrap();
+    assert!(search.replace_visible);
+    assert_eq!(search.active_field, crate::search::SearchField::Replace);
+}
+
+#[test]
+fn replace_next_replaces_current_match() {
+    let mut app = app_with_text("foo foo foo");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "foo".to_string();
+            search.replace_query = "bar".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceNext);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "bar foo foo");
+}
+
+#[test]
+fn replace_next_advances_to_next() {
+    let mut app = app_with_text("foo foo foo");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "foo".to_string();
+            search.replace_query = "bar".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceNext);
+    let search = app.search.as_ref().unwrap();
+    // After replacing first "foo" with "bar", there should be 2 matches left.
+    assert_eq!(search.matches.len(), 2);
+}
+
+#[test]
+fn replace_next_no_match_noop() {
+    let mut app = app_with_text("hello world");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "xyz".to_string();
+            search.replace_query = "abc".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceNext);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "hello world");
+}
+
+#[test]
+fn replace_all_replaces_all() {
+    let mut app = app_with_text("foo foo foo");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "foo".to_string();
+            search.replace_query = "bar".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceAll);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "bar bar bar");
+}
+
+#[test]
+fn replace_all_single_undo() {
+    let mut app = app_with_text("foo foo foo");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "foo".to_string();
+            search.replace_query = "bar".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceAll);
+    // Single undo should restore original.
+    app.execute(Command::EditorUndo);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "foo foo foo");
+}
+
+#[test]
+fn replace_all_different_length() {
+    let mut app = app_with_text("ab ab");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "ab".to_string();
+            search.replace_query = "xyz".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceAll);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "xyz xyz");
+}
+
+#[test]
+fn replace_all_empty_matches_noop() {
+    let mut app = app_with_text("hello");
+    app.execute(Command::EditorFind);
+    if let Some(ref mut search) = app.search {
+        if let Some(buf) = app.buffer_manager.active_buffer() {
+            search.query = "xyz".to_string();
+            search.replace_query = "abc".to_string();
+            search.replace_visible = true;
+            search.update_matches(buf);
+        }
+    }
+    app.execute(Command::ReplaceAll);
+    let content = app.buffer_manager.active_buffer().unwrap().content_string();
+    assert_eq!(content, "hello");
 }

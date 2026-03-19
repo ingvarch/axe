@@ -14,6 +14,14 @@ pub struct SearchMatch {
     pub col_end: usize,
 }
 
+/// Which input field is active in the search/replace bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchField {
+    #[default]
+    Find,
+    Replace,
+}
+
 /// State for the in-file search feature.
 ///
 /// Tracks the query, match positions, navigation index, and search flags.
@@ -26,6 +34,12 @@ pub struct SearchState {
     pub regex_mode: bool,
     /// Set when regex compilation fails.
     pub regex_error: bool,
+    /// Text to replace matches with.
+    pub replace_query: String,
+    /// Whether the replace row is visible.
+    pub replace_visible: bool,
+    /// Which field (Find or Replace) is currently active for input.
+    pub active_field: SearchField,
 }
 
 impl SearchState {
@@ -38,6 +52,9 @@ impl SearchState {
             case_sensitive: false,
             regex_mode: false,
             regex_error: false,
+            replace_query: String::new(),
+            replace_visible: false,
+            active_field: SearchField::Find,
         }
     }
 
@@ -187,6 +204,24 @@ impl SearchState {
         self.update_matches(buffer);
     }
 
+    /// Appends a character to the replace query.
+    pub fn replace_input_char(&mut self, c: char) {
+        self.replace_query.push(c);
+    }
+
+    /// Removes the last character from the replace query.
+    pub fn replace_input_backspace(&mut self) {
+        self.replace_query.pop();
+    }
+
+    /// Toggles the active input field between Find and Replace.
+    pub fn toggle_field(&mut self) {
+        self.active_field = match self.active_field {
+            SearchField::Find => SearchField::Replace,
+            SearchField::Replace => SearchField::Find,
+        };
+    }
+
     /// Returns a display string for the match count.
     pub fn match_count_display(&self) -> String {
         if self.query.is_empty() {
@@ -217,6 +252,65 @@ mod tests {
         let mut buf = EditorBuffer::new();
         buf.insert_text(text);
         buf
+    }
+
+    #[test]
+    fn new_has_empty_replace_query() {
+        let search = SearchState::new();
+        assert!(search.replace_query.is_empty());
+    }
+
+    #[test]
+    fn new_has_replace_visible_false() {
+        let search = SearchState::new();
+        assert!(!search.replace_visible);
+    }
+
+    #[test]
+    fn new_has_active_field_find() {
+        use super::SearchField;
+        let search = SearchState::new();
+        assert_eq!(search.active_field, SearchField::Find);
+    }
+
+    #[test]
+    fn replace_input_char_appends() {
+        let mut search = SearchState::new();
+        search.replace_input_char('a');
+        search.replace_input_char('b');
+        assert_eq!(search.replace_query, "ab");
+    }
+
+    #[test]
+    fn replace_input_backspace_pops() {
+        let mut search = SearchState::new();
+        search.replace_query = "abc".to_string();
+        search.replace_input_backspace();
+        assert_eq!(search.replace_query, "ab");
+    }
+
+    #[test]
+    fn replace_input_backspace_empty_noop() {
+        let mut search = SearchState::new();
+        search.replace_input_backspace();
+        assert!(search.replace_query.is_empty());
+    }
+
+    #[test]
+    fn toggle_field_switches_find_to_replace() {
+        use super::SearchField;
+        let mut search = SearchState::new();
+        search.toggle_field();
+        assert_eq!(search.active_field, SearchField::Replace);
+    }
+
+    #[test]
+    fn toggle_field_switches_replace_to_find() {
+        use super::SearchField;
+        let mut search = SearchState::new();
+        search.active_field = SearchField::Replace;
+        search.toggle_field();
+        assert_eq!(search.active_field, SearchField::Find);
     }
 
     #[test]

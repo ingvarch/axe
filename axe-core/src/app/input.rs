@@ -248,17 +248,37 @@ impl AppState {
 
         // Search bar active: intercept keys for search input before editor keys.
         if self.search.is_some() && self.focus == FocusTarget::Editor && !self.show_help {
+            // Ctrl+Alt+Enter: Replace All (works from either field).
+            if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && key.code == KeyCode::Enter
+            {
+                self.execute(Command::ReplaceAll);
+                return;
+            }
+
+            // Determine active field for field-specific handling.
+            let replace_visible = self.search.as_ref().is_some_and(|s| s.replace_visible);
+            let in_replace_field = replace_visible
+                && self
+                    .search
+                    .as_ref()
+                    .is_some_and(|s| s.active_field == crate::search::SearchField::Replace);
+
+            // Tab / BackTab: toggle between Find and Replace fields.
+            if replace_visible
+                && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+                && (key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT)
+            {
+                if let Some(ref mut search) = self.search {
+                    search.toggle_field();
+                }
+                return;
+            }
+
+            // Common toggles that work from either field.
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) => {
                     self.execute(Command::SearchClose);
-                    return;
-                }
-                (KeyModifiers::NONE, KeyCode::Enter) => {
-                    self.execute(Command::SearchNextMatch);
-                    return;
-                }
-                (KeyModifiers::SHIFT, KeyCode::Enter) => {
-                    self.execute(Command::SearchPrevMatch);
                     return;
                 }
                 (KeyModifiers::ALT, KeyCode::Char('c')) => {
@@ -269,25 +289,64 @@ impl AppState {
                     self.execute(Command::SearchToggleRegex);
                     return;
                 }
-                (KeyModifiers::NONE, KeyCode::Backspace) => {
-                    if let Some(ref mut search) = self.search {
-                        if let Some(buf) = self.buffer_manager.active_buffer() {
-                            search.input_backspace(buf);
-                        }
+                _ => {}
+            }
+
+            if in_replace_field {
+                // Replace field input handling.
+                match (key.modifiers, key.code) {
+                    (KeyModifiers::NONE, KeyCode::Enter) => {
+                        self.execute(Command::ReplaceNext);
+                        return;
                     }
-                    return;
-                }
-                (KeyModifiers::NONE, KeyCode::Char(c))
-                | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
-                    if let Some(ref mut search) = self.search {
-                        if let Some(buf) = self.buffer_manager.active_buffer() {
-                            search.input_char(c, buf);
+                    (KeyModifiers::NONE, KeyCode::Backspace) => {
+                        if let Some(ref mut search) = self.search {
+                            search.replace_input_backspace();
                         }
+                        return;
                     }
-                    return;
+                    (KeyModifiers::NONE, KeyCode::Char(c))
+                    | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                        if let Some(ref mut search) = self.search {
+                            search.replace_input_char(c);
+                        }
+                        return;
+                    }
+                    _ => {
+                        // Let Ctrl+F, Ctrl+Q, etc. fall through to global keymap.
+                    }
                 }
-                _ => {
-                    // Let Ctrl+F, Ctrl+Q, etc. fall through to global keymap.
+            } else {
+                // Find field input handling (original behavior).
+                match (key.modifiers, key.code) {
+                    (KeyModifiers::NONE, KeyCode::Enter) => {
+                        self.execute(Command::SearchNextMatch);
+                        return;
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::Enter) => {
+                        self.execute(Command::SearchPrevMatch);
+                        return;
+                    }
+                    (KeyModifiers::NONE, KeyCode::Backspace) => {
+                        if let Some(ref mut search) = self.search {
+                            if let Some(buf) = self.buffer_manager.active_buffer() {
+                                search.input_backspace(buf);
+                            }
+                        }
+                        return;
+                    }
+                    (KeyModifiers::NONE, KeyCode::Char(c))
+                    | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                        if let Some(ref mut search) = self.search {
+                            if let Some(buf) = self.buffer_manager.active_buffer() {
+                                search.input_char(c, buf);
+                            }
+                        }
+                        return;
+                    }
+                    _ => {
+                        // Let Ctrl+F, Ctrl+Q, etc. fall through to global keymap.
+                    }
                 }
             }
         }

@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use axe_core::search::SearchField;
 use axe_core::{AppState, SearchState};
 use axe_editor::diagnostic::{diagnostics_for_line, most_severe_for_line, DiagnosticSeverity};
 use axe_editor::EditorBuffer;
@@ -49,9 +50,19 @@ pub(crate) fn gutter_width(line_count: usize) -> u16 {
     DIAGNOSTIC_GUTTER_WIDTH + digits + GUTTER_PADDING + DIFF_GUTTER_WIDTH
 }
 
-/// Renders the search bar in a 1-row area at the top of the editor content.
+/// Returns the number of rows the search bar needs (1 for find-only, 2 with replace).
+pub(crate) fn search_bar_rows(search: &SearchState) -> u16 {
+    if search.replace_visible {
+        2
+    } else {
+        1
+    }
+}
+
+/// Renders the search bar in 1 or 2 rows at the top of the editor content.
 ///
-/// Layout: `Find: [query|] [3 of 17] [Aa] [.*]`
+/// Row 1: `Find:    [query|] [3 of 17] [Aa] [.*]`
+/// Row 2 (when replace visible): `Replace: [text|]  [Replace] [All]`
 fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -62,8 +73,18 @@ fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme:
     let dim_fg = theme.status_bar_key;
     let active_fg = theme.search_active_match_bg;
 
-    let label_style = Style::default().fg(dim_fg).bg(bar_bg);
-    let query_style = Style::default().fg(bar_fg).bg(bar_bg);
+    let find_active = search.active_field == SearchField::Find;
+
+    let find_label_style = if find_active || !search.replace_visible {
+        Style::default().fg(bar_fg).bg(bar_bg)
+    } else {
+        Style::default().fg(dim_fg).bg(bar_bg)
+    };
+    let query_style = if find_active || !search.replace_visible {
+        Style::default().fg(bar_fg).bg(bar_bg)
+    } else {
+        Style::default().fg(dim_fg).bg(bar_bg)
+    };
     let count_style = Style::default().fg(dim_fg).bg(bar_bg);
 
     let case_style = if search.case_sensitive {
@@ -79,10 +100,22 @@ fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme:
 
     let count_display = search.match_count_display();
 
+    // Use consistent label width so fields align when replace is visible.
+    let label = if search.replace_visible {
+        " Find:    "
+    } else {
+        " Find: "
+    };
+    let cursor_char = if find_active || !search.replace_visible {
+        "\u{2502}"
+    } else {
+        ""
+    };
+
     let mut spans = vec![
-        Span::styled(" Find: ", label_style),
+        Span::styled(label, find_label_style),
         Span::styled(&search.query, query_style),
-        Span::styled("\u{2502}", query_style), // cursor pipe
+        Span::styled(cursor_char, query_style),
     ];
 
     if !count_display.is_empty() {
@@ -102,9 +135,51 @@ fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme:
         ));
     }
 
+    let find_row = Rect { height: 1, ..area };
     let line = Line::from(spans);
     let paragraph = Paragraph::new(vec![line]).style(Style::default().bg(bar_bg));
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, find_row);
+
+    // Row 2: Replace field (only when visible and area has room).
+    if search.replace_visible && area.height > 1 {
+        let replace_active = search.active_field == SearchField::Replace;
+        let replace_label_style = if replace_active {
+            Style::default().fg(bar_fg).bg(bar_bg)
+        } else {
+            Style::default().fg(dim_fg).bg(bar_bg)
+        };
+        let replace_query_style = if replace_active {
+            Style::default().fg(bar_fg).bg(bar_bg)
+        } else {
+            Style::default().fg(dim_fg).bg(bar_bg)
+        };
+        let replace_cursor = if replace_active { "\u{2502}" } else { "" };
+
+        let mut rspans = vec![
+            Span::styled(" Replace: ", replace_label_style),
+            Span::styled(&search.replace_query, replace_query_style),
+            Span::styled(replace_cursor, replace_query_style),
+            Span::styled("  [Replace] [All]", Style::default().fg(dim_fg).bg(bar_bg)),
+        ];
+
+        let rused: usize = rspans.iter().map(|s| s.content.len()).sum();
+        let rremaining = (area.width as usize).saturating_sub(rused);
+        if rremaining > 0 {
+            rspans.push(Span::styled(
+                " ".repeat(rremaining),
+                Style::default().bg(bar_bg),
+            ));
+        }
+
+        let replace_row = Rect {
+            y: area.y + 1,
+            height: 1,
+            ..area
+        };
+        let rline = Line::from(rspans);
+        let rparagraph = Paragraph::new(vec![rline]).style(Style::default().bg(bar_bg));
+        frame.render_widget(rparagraph, replace_row);
+    }
 }
 
 // IMPACT ANALYSIS — render_tab_bar
@@ -257,7 +332,7 @@ const STARTUP_SHORTCUTS: &[(&str, &str)] = &[
     ("F2 / Ctrl+Shift+F", "Find in project"),
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
-    ("Ctrl+H", "Help"),
+    ("Ctrl+Shift+H", "Help"),
     ("Ctrl+Q", "Quit"),
 ];
 
@@ -514,19 +589,20 @@ pub(crate) fn render_editor_content(
         area
     };
 
-    // If search is active, split off 1 row at the top for the search bar.
-    let (search_area, content_area_full) = if search.is_some() && area.height > 1 {
+    // If search is active, split off rows at the top for the search bar.
+    let search_rows = search.map(search_bar_rows).unwrap_or(0);
+    let (search_area, content_area_full) = if search_rows > 0 && area.height > search_rows {
         let search_rect = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height: 1,
+            height: search_rows,
         };
         let content_rect = Rect {
             x: area.x,
-            y: area.y + 1,
+            y: area.y + search_rows,
             width: area.width,
-            height: area.height - 1,
+            height: area.height - search_rows,
         };
         (Some(search_rect), content_rect)
     } else {

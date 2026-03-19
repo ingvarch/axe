@@ -33,6 +33,9 @@ pub struct EditGroup {
 pub struct EditHistory {
     undo_stack: Vec<EditGroup>,
     redo_stack: Vec<EditGroup>,
+    /// When true, all new edits merge into the current group regardless
+    /// of contiguity or timeout. Used for Replace All undo grouping.
+    force_merge: bool,
 }
 
 impl EditHistory {
@@ -41,7 +44,17 @@ impl EditHistory {
         Self {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            force_merge: false,
         }
+    }
+
+    /// Enables or disables forced merge mode.
+    ///
+    /// When enabled, all subsequent edits merge into the current undo group
+    /// regardless of contiguity or timeout. Used by Replace All to create
+    /// a single undo step for multiple replacements.
+    pub fn set_force_merge(&mut self, enabled: bool) {
+        self.force_merge = enabled;
     }
 
     /// Records an edit, merging it into the current group if it is
@@ -52,8 +65,9 @@ impl EditHistory {
         self.redo_stack.clear();
 
         let should_merge = self.undo_stack.last().is_some_and(|group| {
-            now.duration_since(group.timestamp) < EDIT_GROUP_TIMEOUT
-                && is_contiguous(group.edits.last(), &edit)
+            self.force_merge
+                || (now.duration_since(group.timestamp) < EDIT_GROUP_TIMEOUT
+                    && is_contiguous(group.edits.last(), &edit))
         });
 
         if should_merge {
@@ -83,8 +97,9 @@ impl EditHistory {
         self.redo_stack.clear();
 
         let should_merge = self.undo_stack.last().is_some_and(|group| {
-            at.duration_since(group.timestamp) < EDIT_GROUP_TIMEOUT
-                && is_contiguous(group.edits.last(), &edit)
+            self.force_merge
+                || (at.duration_since(group.timestamp) < EDIT_GROUP_TIMEOUT
+                    && is_contiguous(group.edits.last(), &edit))
         });
 
         if should_merge {
@@ -306,6 +321,39 @@ mod tests {
         history.clear();
         assert!(!history.can_undo());
         assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn force_merge_groups_non_contiguous_edits() {
+        let mut history = EditHistory::new();
+        history.set_force_merge(true);
+        let now = Instant::now();
+        history.record_at(insert_edit(0, "a"), cursor(0, 0), cursor(0, 1), now);
+        // Non-contiguous: char_idx 10, but force_merge is on.
+        history.record_at(
+            insert_edit(10, "b"),
+            cursor(0, 10),
+            cursor(0, 11),
+            now + std::time::Duration::from_millis(100),
+        );
+        assert_eq!(history.undo_stack.len(), 1);
+        assert_eq!(history.undo_stack[0].edits.len(), 2);
+    }
+
+    #[test]
+    fn force_merge_disabled_creates_separate_groups() {
+        let mut history = EditHistory::new();
+        history.set_force_merge(true);
+        let now = Instant::now();
+        history.record_at(insert_edit(0, "a"), cursor(0, 0), cursor(0, 1), now);
+        history.set_force_merge(false);
+        history.record_at(
+            insert_edit(10, "b"),
+            cursor(0, 10),
+            cursor(0, 11),
+            now + std::time::Duration::from_millis(100),
+        );
+        assert_eq!(history.undo_stack.len(), 2);
     }
 
     #[test]

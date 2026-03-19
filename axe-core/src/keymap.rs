@@ -137,6 +137,9 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "paste" => Some(Command::EditorPaste),
         "select_all" => Some(Command::EditorSelectAll),
         "find" => Some(Command::EditorFind),
+        "find_replace" => Some(Command::EditorFindReplace),
+        "replace_next" => Some(Command::ReplaceNext),
+        "replace_all" => Some(Command::ReplaceAll),
         "close_buffer" => Some(Command::CloseBuffer),
         "next_buffer" => Some(Command::NextBuffer),
         "prev_buffer" => Some(Command::PrevBuffer),
@@ -275,7 +278,22 @@ impl KeymapResolver {
             KeyCode::Char('t'),
             Command::ToggleTerminal,
         );
-        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('h'), Command::ShowHelp);
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('h'),
+            Command::EditorFindReplace,
+        );
+        // Ctrl+Shift+H: help (moved from Ctrl+H to make room for find & replace).
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('H'),
+            Command::ShowHelp,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('h'),
+            Command::ShowHelp,
+        );
         resolver.bind(KeyModifiers::NONE, KeyCode::Esc, Command::CloseOverlay);
         resolver.bind(
             KeyModifiers::CONTROL,
@@ -606,9 +624,19 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_ctrl_h_show_help() {
+    fn ctrl_h_opens_find_replace() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EditorFindReplace));
+    }
+
+    #[test]
+    fn ctrl_shift_h_shows_help() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('H'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::ShowHelp));
     }
 
@@ -1296,6 +1324,24 @@ mod tests {
             command_from_str("format_document"),
             Some(Command::FormatDocument)
         );
+    }
+
+    #[test]
+    fn command_from_str_find_replace() {
+        assert_eq!(
+            command_from_str("find_replace"),
+            Some(Command::EditorFindReplace)
+        );
+    }
+
+    #[test]
+    fn command_from_str_replace_next() {
+        assert_eq!(command_from_str("replace_next"), Some(Command::ReplaceNext));
+    }
+
+    #[test]
+    fn command_from_str_replace_all() {
+        assert_eq!(command_from_str("replace_all"), Some(Command::ReplaceAll));
     }
 
     #[test]

@@ -186,6 +186,12 @@ pub enum Command {
     ActivateBuffer(usize),
     /// Open or focus the in-file search bar.
     EditorFind,
+    /// Open the find & replace bar (Ctrl+H).
+    EditorFindReplace,
+    /// Replace the current match and advance to the next.
+    ReplaceNext,
+    /// Replace all matches in a single undo group.
+    ReplaceAll,
     /// Close the search bar.
     SearchClose,
     /// Jump to the next search match.
@@ -346,6 +352,9 @@ mod tests {
             Command::ActivateBuffer(0),
             Command::ActivateBuffer(1),
             Command::EditorFind,
+            Command::EditorFindReplace,
+            Command::ReplaceNext,
+            Command::ReplaceAll,
             Command::SearchClose,
             Command::SearchNextMatch,
             Command::SearchPrevMatch,

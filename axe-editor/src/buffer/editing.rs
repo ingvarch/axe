@@ -6,6 +6,19 @@ use crate::history::Edit;
 use super::EditorBuffer;
 
 impl EditorBuffer {
+    /// Begins an undo group — all subsequent edits merge into a single undo step.
+    ///
+    /// Call `end_undo_group()` when done. Used by Replace All so that
+    /// a single Ctrl+Z undoes all replacements at once.
+    pub fn begin_undo_group(&mut self) {
+        self.history.set_force_merge(true);
+    }
+
+    /// Ends the undo group started by `begin_undo_group()`.
+    pub fn end_undo_group(&mut self) {
+        self.history.set_force_merge(false);
+    }
+
     // IMPACT ANALYSIS — insert_char
     // Parents: KeyEvent → Command::EditorInsertChar(ch) → this function
     // Children: UI renders updated content, cursor advances, modified flag set

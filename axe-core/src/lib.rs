@@ -26,7 +26,7 @@ pub use hover::HoverInfo;
 pub use keymap::KeymapResolver;
 pub use location_list::LocationList;
 pub use project_search::ProjectSearch;
-pub use search::SearchState;
+pub use search::{SearchField, SearchState};
 
 /// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {
