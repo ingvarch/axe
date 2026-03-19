@@ -12,7 +12,9 @@ const SESSION_VERSION: u32 = 1;
 
 /// Session file path relative to project root.
 const SESSION_DIR: &str = ".axe";
-const SESSION_FILE: &str = "session.json";
+const SESSION_FILE: &str = "session.local.json";
+/// Pattern for the global gitignore (`~/.config/git/ignore`).
+const GLOBAL_GITIGNORE_PATTERN: &str = "**/.axe/session.local.json";
 
 /// Persisted session state for a project.
 ///
@@ -53,6 +55,45 @@ pub struct LayoutSession {
     pub editor_height_pct: u16,
     pub show_tree: bool,
     pub show_terminal: bool,
+}
+
+/// Ensures `GLOBAL_GITIGNORE_PATTERN` is present in `~/.config/git/ignore`.
+///
+/// Creates the file and parent directories if they don't exist.
+/// Appends the pattern only if it's not already present.
+fn ensure_global_gitignore() -> Result<()> {
+    let home = dirs::home_dir().context("Could not determine home directory")?;
+    ensure_global_gitignore_at(&home.join(".config/git/ignore"))
+}
+
+/// Testable helper: ensures `GLOBAL_GITIGNORE_PATTERN` is present in the given file.
+fn ensure_global_gitignore_at(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+
+    if content.lines().any(|line| line.trim() == GLOBAL_GITIGNORE_PATTERN) {
+        return Ok(());
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("Failed to open {}", path.display()))?;
+
+    // Ensure we start on a new line if the file doesn't end with one.
+    if !content.is_empty() && !content.ends_with('\n') {
+        writeln!(file)?;
+    }
+
+    writeln!(file, "{GLOBAL_GITIGNORE_PATTERN}")?;
+
+    Ok(())
 }
 
 impl Session {
@@ -121,17 +162,23 @@ impl Session {
         }
     }
 
-    /// Saves the session atomically to `{project_root}/.axe/session.json`.
+    /// Saves the session atomically to `{project_root}/.axe/session.local.json`.
     ///
-    /// Creates the `.axe/` directory if needed. Writes to a temp file first,
-    /// then renames to the target path to prevent partial writes.
+    /// Creates the `.axe/` directory if needed. Also creates `.axe/.gitignore`
+    /// (if absent) to keep the session file out of version control.
+    /// Writes to a temp file first, then renames to prevent partial writes.
     pub fn save(&self, project_root: &Path) -> Result<()> {
         let session_dir = project_root.join(SESSION_DIR);
         std::fs::create_dir_all(&session_dir)
             .with_context(|| format!("Failed to create {}", session_dir.display()))?;
 
+        // Ensure the session file pattern is in the global gitignore.
+        if let Err(e) = ensure_global_gitignore() {
+            log::warn!("Failed to update global gitignore: {e}");
+        }
+
         let session_path = session_dir.join(SESSION_FILE);
-        let tmp_path = session_dir.join("session.json.tmp");
+        let tmp_path = session_dir.join(format!("{SESSION_FILE}.tmp"));
 
         let json = serde_json::to_string_pretty(self).context("Failed to serialize session")?;
 
@@ -145,7 +192,7 @@ impl Session {
         Ok(())
     }
 
-    /// Loads a session from `{project_root}/.axe/session.json`.
+    /// Loads a session from `{project_root}/.axe/session.local.json`.
     ///
     /// Returns `Ok(None)` if the session file does not exist.
     /// Returns `Err` if the file exists but cannot be read or parsed.
@@ -354,7 +401,59 @@ mod tests {
         };
 
         session.save(tmp.path()).unwrap();
-        assert!(tmp.path().join(".axe/session.json").exists());
+        assert!(tmp.path().join(SESSION_DIR).join(SESSION_FILE).exists());
+    }
+
+    #[test]
+    fn global_gitignore_creates_file_with_pattern() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ignore_path = tmp.path().join("config/git/ignore");
+
+        ensure_global_gitignore_at(&ignore_path).unwrap();
+
+        let content = std::fs::read_to_string(&ignore_path).unwrap();
+        assert!(content.contains(GLOBAL_GITIGNORE_PATTERN));
+    }
+
+    #[test]
+    fn global_gitignore_does_not_duplicate_pattern() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ignore_path = tmp.path().join("config/git/ignore");
+
+        ensure_global_gitignore_at(&ignore_path).unwrap();
+        ensure_global_gitignore_at(&ignore_path).unwrap();
+
+        let content = std::fs::read_to_string(&ignore_path).unwrap();
+        let count = content.lines().filter(|l| l.trim() == GLOBAL_GITIGNORE_PATTERN).count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn global_gitignore_appends_to_existing_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ignore_path = tmp.path().join("config/git/ignore");
+        std::fs::create_dir_all(ignore_path.parent().unwrap()).unwrap();
+        std::fs::write(&ignore_path, "*.log\n").unwrap();
+
+        ensure_global_gitignore_at(&ignore_path).unwrap();
+
+        let content = std::fs::read_to_string(&ignore_path).unwrap();
+        assert!(content.starts_with("*.log\n"));
+        assert!(content.contains(GLOBAL_GITIGNORE_PATTERN));
+    }
+
+    #[test]
+    fn global_gitignore_handles_file_without_trailing_newline() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ignore_path = tmp.path().join("config/git/ignore");
+        std::fs::create_dir_all(ignore_path.parent().unwrap()).unwrap();
+        std::fs::write(&ignore_path, "*.log").unwrap();
+
+        ensure_global_gitignore_at(&ignore_path).unwrap();
+
+        let content = std::fs::read_to_string(&ignore_path).unwrap();
+        // Pattern should be on its own line, not appended to "*.log".
+        assert!(content.contains(&format!("\n{GLOBAL_GITIGNORE_PATTERN}")));
     }
 
     #[test]
@@ -387,12 +486,17 @@ mod tests {
         session.save(tmp.path()).unwrap();
 
         // Verify the file contains valid JSON.
-        let content = std::fs::read_to_string(tmp.path().join(".axe/session.json")).unwrap();
+        let content =
+            std::fs::read_to_string(tmp.path().join(SESSION_DIR).join(SESSION_FILE)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(parsed["version"], 1);
 
         // Temp file should not remain.
-        assert!(!tmp.path().join(".axe/session.json.tmp").exists());
+        assert!(!tmp
+            .path()
+            .join(SESSION_DIR)
+            .join(format!("{SESSION_FILE}.tmp"))
+            .exists());
     }
 
     #[test]

@@ -186,6 +186,7 @@ dependencies = [
  "axe-terminal",
  "axe-tree",
  "crossterm",
+ "dirs",
  "git2",
  "ignore",
  "log",

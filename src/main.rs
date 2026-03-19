@@ -113,6 +113,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Persist initial session state so .axe/ directory and global gitignore
+    // are created immediately, not only on exit.
+    if let Err(e) = axe_core::session::Session::from_app(&app).save(&root) {
+        log::warn!("Failed to save initial session: {e}");
+    }
+
     // Build theme from config — resolved once at startup.
     let theme = load_theme(&app.config.ui.theme)
         .map(|tf| Theme::from_theme_file(&tf))
