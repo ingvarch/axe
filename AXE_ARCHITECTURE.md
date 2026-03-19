@@ -1437,7 +1437,7 @@ pub struct Session {
 }
 ```
 
-Saved to `.axe/session.json` in the project root. Auto-restored on next open.
+Saved to `.axe/session.local.json` in the project root. Auto-restored on next open.
 
 ---
 

@@ -860,7 +860,7 @@ Load user configuration from TOML file.
 Remember open files and layout between sessions.
 
 **Acceptance criteria:**
-- On quit, save session to `.axe/session.json`: open buffers (paths + cursor positions + scroll), layout (panel sizes, visibility), active buffer, expanded tree nodes ✅
+- On quit, save session to `.axe/session.local.json`: open buffers (paths + cursor positions + scroll), layout (panel sizes, visibility), active buffer, expanded tree nodes ✅
 - On startup in the same project, restore session: re-open files, restore cursor positions, restore layout ✅
 - `--no-session` flag skips session restore ✅
 - If a previously open file no longer exists, skip it and show a notification ✅
