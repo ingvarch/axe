@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use axe_core::completion::{self, CompletionState};
 use axe_core::project_search::{DisplayItem, SearchField};
-use axe_core::{AppState, CommandPalette, FileFinder, ProjectSearch};
+use axe_core::{AppState, CommandPalette, FileFinder, GoToLineDialog, ProjectSearch};
 use axe_editor::EditorBuffer;
 
 use crate::editor_panel::{DIAGNOSTIC_GUTTER_WIDTH, DIFF_GUTTER_WIDTH, GUTTER_PADDING};
@@ -122,7 +122,7 @@ pub(crate) const HELP_TREE: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Ctrl+G",
+            primary_key: "Ctrl+Shift+G",
             description: "Toggle ignored files",
         },
         HelpEntry {
@@ -182,6 +182,11 @@ pub(crate) const HELP_TABS: HelpSection = HelpSection {
 pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
     title: "Editor",
     entries: &[
+        HelpEntry {
+            fallback_key: None,
+            primary_key: "Ctrl+G",
+            description: "Go to line",
+        },
         HelpEntry {
             fallback_key: None,
             primary_key: "Ctrl+F",
@@ -1789,6 +1794,77 @@ pub(crate) fn render_command_palette(palette: &CommandPalette, frame: &mut Frame
         ));
         let footer_area = Rect {
             y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+/// Width of the Go to Line dialog in columns.
+const GO_TO_LINE_WIDTH: u16 = 30;
+/// Height of the Go to Line dialog in rows (border + input + footer).
+const GO_TO_LINE_HEIGHT: u16 = 5;
+
+/// Renders the Go to Line dialog centered on the screen.
+pub(crate) fn render_go_to_line(dialog: &GoToLineDialog, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = GO_TO_LINE_WIDTH.min(area.width.saturating_sub(4));
+    let overlay_height = GO_TO_LINE_HEIGHT.min(area.height.saturating_sub(2));
+
+    let horizontal = Layout::horizontal([Constraint::Length(overlay_width)])
+        .flex(Flex::Center)
+        .split(area);
+    let vertical = Layout::vertical([Constraint::Length(overlay_height)])
+        .flex(Flex::Center)
+        .split(horizontal[0]);
+    let overlay_area = vertical[0];
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::default()
+        .title(" Go to Line ")
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Input line: "> {input}|"
+    let input_line = Line::from(vec![
+        Span::styled(
+            " > ",
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(&dialog.input, Style::default().fg(theme.foreground)),
+        Span::styled("|", Style::default().fg(theme.panel_border_active)),
+    ]);
+    let input_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Footer: "Line 1..{max_lines}"
+    if inner.height > 1 {
+        let footer_text = format!(" Line 1..{}", dialog.max_lines);
+        let footer_line = Line::from(Span::styled(
+            footer_text,
+            Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: inner.y + inner.height.saturating_sub(1),
             height: 1,
             ..inner
         };

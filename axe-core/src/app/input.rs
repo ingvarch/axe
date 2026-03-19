@@ -52,6 +52,36 @@ impl AppState {
             return;
         }
 
+        // Go to Line dialog intercepts all keys when open.
+        if let Some(ref mut dialog) = self.go_to_line {
+            match key.code {
+                KeyCode::Esc => {
+                    self.go_to_line = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(line) = dialog.parse_line() {
+                        let (h, w) = self.editor_viewport();
+                        if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                            buf.cursor.row = line;
+                            buf.cursor.col = 0;
+                            buf.cursor.desired_col = 0;
+                            buf.clear_selection();
+                            buf.ensure_cursor_visible(h, w);
+                        }
+                    }
+                    self.go_to_line = None;
+                }
+                KeyCode::Backspace => {
+                    dialog.input_backspace();
+                }
+                KeyCode::Char(c) => {
+                    dialog.input_char(c);
+                }
+                _ => {} // Consume all other keys
+            }
+            return;
+        }
+
         // Command palette overlay intercepts all keys when open.
         if let Some(ref mut palette) = self.command_palette {
             match key.code {

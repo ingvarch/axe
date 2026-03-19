@@ -224,6 +224,8 @@ pub enum Command {
     ShowHover,
     /// Format the current document using the LSP formatter.
     FormatDocument,
+    /// Open the Go to Line dialog (Ctrl+G).
+    GoToLine,
 }
 
 #[cfg(test)]
@@ -363,6 +365,7 @@ mod tests {
             Command::FindReferences,
             Command::ShowHover,
             Command::FormatDocument,
+            Command::GoToLine,
         ];
 
         for (i, a) in variants.iter().enumerate() {

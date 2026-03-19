@@ -128,6 +128,8 @@ pub struct AppState {
     pub completion: Option<crate::completion::CompletionState>,
     /// Active location list overlay (definition/references results).
     pub location_list: Option<crate::location_list::LocationList>,
+    /// Active Go to Line dialog, if open.
+    pub go_to_line: Option<GoToLineDialog>,
     /// Active hover tooltip, if showing.
     pub hover_info: Option<crate::hover::HoverInfo>,
     /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
@@ -179,6 +181,7 @@ impl AppState {
             file_finder: None,
             command_palette: None,
             project_search: None,
+            go_to_line: None,
             editor_selecting: false,
             scrollbar_dragging: false,
             editor_scrollbar_area: None,

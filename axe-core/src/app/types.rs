@@ -196,3 +196,144 @@ impl ConfirmDialog {
         }
     }
 }
+
+/// Dialog for jumping to a specific line number.
+///
+/// Accepts digit input only. Displays line count for reference.
+/// Input is 1-indexed (user types "42" to go to line 42); `parse_line()`
+/// converts to 0-indexed and clamps to file bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoToLineDialog {
+    /// The current digit input string.
+    pub input: String,
+    /// Total number of lines in the active buffer.
+    pub max_lines: usize,
+}
+
+impl GoToLineDialog {
+    /// Creates a new dialog for a buffer with the given line count.
+    pub fn new(max_lines: usize) -> Self {
+        Self {
+            input: String::new(),
+            max_lines,
+        }
+    }
+
+    /// Appends a digit character. Non-digit characters are silently rejected.
+    pub fn input_char(&mut self, c: char) {
+        if c.is_ascii_digit() {
+            self.input.push(c);
+        }
+    }
+
+    /// Removes the last character from the input.
+    pub fn input_backspace(&mut self) {
+        self.input.pop();
+    }
+
+    /// Parses the input as a 1-indexed line number and returns 0-indexed.
+    ///
+    /// Returns `None` for empty input or "0".
+    /// Clamps to `max_lines - 1` if the input exceeds the file length.
+    pub fn parse_line(&self) -> Option<usize> {
+        if self.input.is_empty() {
+            return None;
+        }
+        let n: usize = self.input.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        // Convert 1-indexed to 0-indexed, clamped to file bounds.
+        let zero_indexed = n.saturating_sub(1);
+        Some(zero_indexed.min(self.max_lines.saturating_sub(1)))
+    }
+}
+
+#[cfg(test)]
+mod go_to_line_tests {
+    use super::*;
+
+    #[test]
+    fn new_initializes_with_empty_input() {
+        let dialog = GoToLineDialog::new(100);
+        assert_eq!(dialog.input, "");
+        assert_eq!(dialog.max_lines, 100);
+    }
+
+    #[test]
+    fn input_char_appends_digit() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('5');
+        assert_eq!(dialog.input, "5");
+        dialog.input_char('3');
+        assert_eq!(dialog.input, "53");
+    }
+
+    #[test]
+    fn input_char_rejects_non_digit() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('a');
+        assert_eq!(dialog.input, "");
+        dialog.input_char('!');
+        assert_eq!(dialog.input, "");
+        dialog.input_char(' ');
+        assert_eq!(dialog.input, "");
+    }
+
+    #[test]
+    fn input_backspace_removes_last_char() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('4');
+        dialog.input_char('2');
+        dialog.input_backspace();
+        assert_eq!(dialog.input, "4");
+    }
+
+    #[test]
+    fn input_backspace_on_empty_is_noop() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_backspace();
+        assert_eq!(dialog.input, "");
+    }
+
+    #[test]
+    fn parse_line_returns_zero_indexed() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('5');
+        assert_eq!(dialog.parse_line(), Some(4)); // line 5 -> index 4
+    }
+
+    #[test]
+    fn parse_line_returns_none_for_empty_input() {
+        let dialog = GoToLineDialog::new(100);
+        assert_eq!(dialog.parse_line(), None);
+    }
+
+    #[test]
+    fn parse_line_returns_none_for_zero() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('0');
+        assert_eq!(dialog.parse_line(), None);
+    }
+
+    #[test]
+    fn parse_line_clamps_to_max_lines() {
+        let mut dialog = GoToLineDialog::new(50);
+        dialog.input = "999".to_string();
+        assert_eq!(dialog.parse_line(), Some(49)); // clamped to last line index
+    }
+
+    #[test]
+    fn parse_line_line_one_returns_zero() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input_char('1');
+        assert_eq!(dialog.parse_line(), Some(0));
+    }
+
+    #[test]
+    fn parse_line_max_line_returns_last_index() {
+        let mut dialog = GoToLineDialog::new(100);
+        dialog.input = "100".to_string();
+        assert_eq!(dialog.parse_line(), Some(99));
+    }
+}

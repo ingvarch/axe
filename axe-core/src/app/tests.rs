@@ -1085,12 +1085,88 @@ fn toggle_ignored_toggles_filter() {
 }
 
 #[test]
-fn ctrl_g_toggles_ignored() {
+fn ctrl_shift_g_toggles_ignored() {
     let (mut app, _tmp) = app_with_tree_focused();
     // Default config has show_hidden=false, so show_ignored starts as false.
     assert!(!app.file_tree.as_ref().unwrap().show_ignored());
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('G'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert!(app.file_tree.as_ref().unwrap().show_ignored());
+}
+
+#[test]
+fn ctrl_g_opens_go_to_line_dialog() {
+    let (mut app, _tmp) = app_with_tree_focused();
+    // Need an active buffer for GoToLine to work.
+    let file = _tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
+    app.execute(Command::OpenFile(file));
+    assert!(app.go_to_line.is_none());
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert!(app.go_to_line.is_some());
+    let dialog = app.go_to_line.as_ref().unwrap();
+    assert_eq!(dialog.input, "");
+}
+
+#[test]
+fn go_to_line_no_op_without_buffer() {
+    let mut app = AppState::new();
+    app.focus = FocusTarget::Editor;
+    app.execute(Command::GoToLine);
+    assert!(app.go_to_line.is_none());
+}
+
+#[test]
+fn go_to_line_no_op_when_not_editor_focused() {
+    let (mut app, _tmp) = app_with_tree_focused();
+    let file = _tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\n").unwrap();
+    app.execute(Command::OpenFile(file));
+    // Switch focus away from editor.
+    app.focus = FocusTarget::Tree;
+    app.execute(Command::GoToLine);
+    assert!(app.go_to_line.is_none());
+}
+
+#[test]
+fn go_to_line_esc_closes_dialog() {
+    let (mut app, _tmp) = app_with_tree_focused();
+    let file = _tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\n").unwrap();
+    app.execute(Command::OpenFile(file));
+    app.execute(Command::GoToLine);
+    assert!(app.go_to_line.is_some());
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.go_to_line.is_none());
+}
+
+#[test]
+fn go_to_line_enter_jumps_to_line() {
+    let (mut app, _tmp) = app_with_tree_focused();
+    let file = _tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+    app.execute(Command::OpenFile(file));
+    app.execute(Command::GoToLine);
+    // Type "3" then Enter.
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.go_to_line.is_none());
+    let buf = app.buffer_manager.active_buffer().unwrap();
+    assert_eq!(buf.cursor.row, 2); // 0-indexed line 2 = user line 3
+    assert_eq!(buf.cursor.col, 0);
+}
+
+#[test]
+fn go_to_line_rejects_non_digit() {
+    let (mut app, _tmp) = app_with_tree_focused();
+    let file = _tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\n").unwrap();
+    app.execute(Command::OpenFile(file));
+    app.execute(Command::GoToLine);
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    assert_eq!(app.go_to_line.as_ref().unwrap().input, "");
 }
 
 #[test]

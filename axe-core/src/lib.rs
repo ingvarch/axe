@@ -13,8 +13,8 @@ pub mod search;
 pub mod session;
 
 pub use app::{
-    AppState, ConfirmButton, ConfirmDialog, DragBorder, FocusTarget, MouseDragState,
-    ResizeModeState,
+    AppState, ConfirmButton, ConfirmDialog, DragBorder, FocusTarget, GoToLineDialog,
+    MouseDragState, ResizeModeState,
 };
 pub use axe_tree::FileTree;
 pub use command::Command;

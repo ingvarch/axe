@@ -184,6 +184,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "find_references" => Some(Command::FindReferences),
         "show_hover" => Some(Command::ShowHover),
         "format_document" => Some(Command::FormatDocument),
+        "go_to_line" => Some(Command::GoToLine),
         _ => None,
     }
 }
@@ -299,8 +300,15 @@ impl KeymapResolver {
             KeyCode::Char('Z'),
             Command::EditorRedo,
         );
+        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('g'), Command::GoToLine);
+        // Ctrl+Shift+G: toggle ignored files (was Ctrl+G before GoToLine took that binding).
         resolver.bind(
-            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('G'),
+            Command::ToggleIgnored,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char('g'),
             Command::ToggleIgnored,
         );
@@ -650,9 +658,19 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_ctrl_g_toggle_ignored() {
+    fn default_bindings_ctrl_g_go_to_line() {
         let resolver = KeymapResolver::with_defaults();
         let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToLine));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_g_toggle_ignored() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('G'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::ToggleIgnored));
     }
 
@@ -1278,6 +1296,11 @@ mod tests {
             command_from_str("format_document"),
             Some(Command::FormatDocument)
         );
+    }
+
+    #[test]
+    fn command_from_str_go_to_line() {
+        assert_eq!(command_from_str("go_to_line"), Some(Command::GoToLine));
     }
 
     #[test]

@@ -24,7 +24,8 @@ use editor_panel::{
 use layout::LayoutManager;
 use overlays::{
     render_command_palette, render_completion_popup, render_confirm_dialog, render_file_finder,
-    render_help_overlay, render_hover_tooltip, render_location_list, render_project_search,
+    render_go_to_line, render_help_overlay, render_hover_tooltip, render_location_list,
+    render_project_search,
 };
 use status_bar::build_status_bar;
 use terminal_panel::{adjust_terminal_rect, render_right_panels, render_terminal_content};
@@ -619,6 +620,8 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {
         render_confirm_dialog(dialog, frame, theme);
+    } else if let Some(ref go_to_line) = app.go_to_line {
+        render_go_to_line(go_to_line, frame, theme);
     } else if let Some(ref palette) = app.command_palette {
         render_command_palette(palette, frame, theme);
     } else if let Some(ref search) = app.project_search {

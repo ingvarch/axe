@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use axe_tree::NodeKind;
 
-use super::{AppState, ConfirmDialog, FocusTarget};
+use super::{AppState, ConfirmDialog, FocusTarget, GoToLineDialog};
 use crate::command::Command;
 use crate::command_palette::CommandPalette;
 use crate::file_finder::FileFinder;
@@ -27,7 +27,9 @@ impl AppState {
             Command::ToggleTerminal => self.toggle_terminal(),
             Command::ShowHelp => self.show_help = !self.show_help,
             Command::CloseOverlay => {
-                if self.command_palette.is_some() {
+                if self.go_to_line.is_some() {
+                    self.go_to_line = None;
+                } else if self.command_palette.is_some() {
                     self.command_palette = None;
                 } else if let Some(ref mut ps) = self.project_search {
                     ps.cancel_search();
@@ -627,6 +629,14 @@ impl AppState {
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {
                     self.set_status_message("Formatting not available".to_string());
+                }
+            }
+            Command::GoToLine => {
+                if self.focus == FocusTarget::Editor {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        let line_count = buf.line_count();
+                        self.go_to_line = Some(GoToLineDialog::new(line_count));
+                    }
                 }
             }
         }
