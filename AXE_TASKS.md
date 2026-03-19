@@ -855,15 +855,15 @@ Load user configuration from TOML file.
 
 ---
 
-### Task 10.2 — Session Save & Restore
+### Task 10.2 — Session Save & Restore ✅
 
 Remember open files and layout between sessions.
 
 **Acceptance criteria:**
-- On quit, save session to `.axe/session.json`: open buffers (paths + cursor positions + scroll), layout (panel sizes, visibility), active buffer, expanded tree nodes
-- On startup in the same project, restore session: re-open files, restore cursor positions, restore layout
-- `--no-session` flag skips session restore
-- If a previously open file no longer exists, skip it and show a notification
+- On quit, save session to `.axe/session.json`: open buffers (paths + cursor positions + scroll), layout (panel sizes, visibility), active buffer, expanded tree nodes ✅
+- On startup in the same project, restore session: re-open files, restore cursor positions, restore layout ✅
+- `--no-session` flag skips session restore ✅
+- If a previously open file no longer exists, skip it and show a notification ✅
 
 **Implementation details:**
 - `Session` struct serialized with `serde_json`
@@ -872,17 +872,17 @@ Remember open files and layout between sessions.
 
 ---
 
-### Task 10.3 — Status Bar Polish
+### Task 10.3 — Status Bar Polish ✅
 
 Complete and polish the status bar.
 
 **Acceptance criteria:**
-- Left side: mode indicator (INSERT/NORMAL/RESIZE), filename, modified indicator
-- Center: notifications (temporary messages that fade after 3 seconds)
-- Right side: file type, encoding (UTF-8), line ending (LF/CRLF), cursor position `Ln X, Col Y`, git branch, diagnostic counts
-- Status bar has a distinct background color from the theme
-- Each section is styled differently (e.g., mode indicator has colored background)
-- Status bar updates in real-time
+- Left side: mode indicator (INSERT/NORMAL/RESIZE), filename, modified indicator ✅
+- Center: notifications (temporary messages that fade after 3 seconds) ✅
+- Right side: file type, encoding (UTF-8), line ending (LF/CRLF), cursor position `Ln X, Col Y`, git branch, diagnostic counts ✅
+- Status bar has a distinct background color from the theme ✅
+- Each section is styled differently (e.g., mode indicator has colored background) ✅
+- Status bar updates in real-time ✅
 
 ---
 

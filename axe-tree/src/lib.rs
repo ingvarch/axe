@@ -226,7 +226,7 @@ impl FileTree {
     /// Unlike `expand()`, this does not use `self.selected`. Returns the number
     /// of children inserted. Noop (returns 0) if the index is out of bounds,
     /// points to a non-directory, or the directory is already expanded.
-    fn expand_at(&mut self, index: usize) -> Result<usize> {
+    pub fn expand_at(&mut self, index: usize) -> Result<usize> {
         if index >= self.nodes.len() {
             return Ok(0);
         }
@@ -585,6 +585,54 @@ impl FileTree {
             self.refresh_tree();
         }
         Ok(())
+    }
+
+    /// Re-expands directories from a set of previously expanded paths.
+    ///
+    /// Walks the tree in forward order (parent before child) and expands
+    /// any collapsed directory whose path is in the given set. This ensures
+    /// correct ordering because `expand_at` inserts children after the node.
+    pub fn restore_expanded(&mut self, paths: &HashSet<PathBuf>) {
+        let mut i = 0;
+        while i < self.nodes.len() {
+            if matches!(self.nodes[i].kind, NodeKind::Directory { .. })
+                && !self.nodes[i].expanded
+                && paths.contains(&self.nodes[i].path)
+            {
+                let _ = self.expand_at(i);
+            }
+            i += 1;
+        }
+    }
+
+    /// Selects the node whose path matches the given path.
+    ///
+    /// If no node matches, tries parent directories. If nothing matches,
+    /// selection is unchanged.
+    pub fn set_selected_by_path(&mut self, path: &Path) {
+        if let Some(idx) = self.nodes.iter().position(|n| n.path == path) {
+            self.selected = idx;
+            self.adjust_scroll();
+            return;
+        }
+        // Try parent directories.
+        let mut candidate = path.parent();
+        while let Some(parent) = candidate {
+            if let Some(idx) = self.nodes.iter().position(|n| n.path == parent) {
+                self.selected = idx;
+                self.adjust_scroll();
+                return;
+            }
+            candidate = parent.parent();
+        }
+    }
+
+    /// Sets the vertical scroll offset directly.
+    ///
+    /// Clamped so the scroll cannot exceed `nodes.len() - viewport_height`.
+    pub fn set_scroll(&mut self, scroll: usize) {
+        let max_scroll = self.nodes.len().saturating_sub(self.viewport_height);
+        self.scroll = scroll.min(max_scroll);
     }
 
     /// Rebuilds the tree from scratch: collapses all, reloads root children.
@@ -2147,5 +2195,129 @@ mod tests {
                 .expanded,
             "expanded state should be preserved after toggle_show_ignored"
         );
+    }
+
+    // --- restore_expanded tests ---
+
+    #[test]
+    fn restore_expanded_expands_matching_dirs() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Get the canonical path for "sub".
+        let sub_path = tree
+            .nodes()
+            .iter()
+            .find(|n| n.name == "sub")
+            .unwrap()
+            .path
+            .clone();
+
+        // Initially "sub" is collapsed.
+        assert!(
+            !tree
+                .nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded
+        );
+
+        let paths: HashSet<PathBuf> = [sub_path].into_iter().collect();
+        tree.restore_expanded(&paths);
+
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded
+        );
+        // Children should be visible.
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"nested"));
+        assert!(names.contains(&"file.txt"));
+    }
+
+    #[test]
+    fn restore_expanded_ignores_nonexistent_paths() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let initial_len = tree.nodes().len();
+
+        let paths: HashSet<PathBuf> = [PathBuf::from("/nonexistent/path")].into_iter().collect();
+        tree.restore_expanded(&paths);
+
+        assert_eq!(tree.nodes().len(), initial_len);
+    }
+
+    // --- set_selected_by_path tests ---
+
+    #[test]
+    fn set_selected_by_path_selects_matching_node() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let other_path = tree
+            .nodes()
+            .iter()
+            .find(|n| n.name == "other.txt")
+            .unwrap()
+            .path
+            .clone();
+
+        assert_eq!(tree.selected(), 0); // initially root
+        tree.set_selected_by_path(&other_path);
+        assert_eq!(tree.selected_node().unwrap().name, "other.txt");
+    }
+
+    #[test]
+    fn set_selected_by_path_falls_back_to_parent() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand sub so its children are visible.
+        tree.move_down();
+        tree.expand().unwrap();
+        let nested_path = tree
+            .nodes()
+            .iter()
+            .find(|n| n.name == "nested")
+            .unwrap()
+            .path
+            .clone();
+        // Create a fake path inside nested that doesn't exist as a node.
+        let fake_child = nested_path.join("nonexistent.rs");
+        tree.set_selected_by_path(&fake_child);
+        // Should fall back to "nested" directory.
+        assert_eq!(tree.selected_node().unwrap().name, "nested");
+    }
+
+    #[test]
+    fn set_selected_by_path_noop_for_unknown_path() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.select(1);
+        tree.set_selected_by_path(Path::new("/completely/unknown/path"));
+        // Selection unchanged.
+        assert_eq!(tree.selected(), 1);
+    }
+
+    // --- set_scroll tests ---
+
+    #[test]
+    fn set_scroll_sets_value() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.set_scroll(2);
+        assert_eq!(tree.scroll(), 2);
+    }
+
+    #[test]
+    fn set_scroll_clamps_to_max() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.set_scroll(1000);
+        let max_scroll = tree.nodes().len().saturating_sub(3);
+        assert_eq!(tree.scroll(), max_scroll);
     }
 }

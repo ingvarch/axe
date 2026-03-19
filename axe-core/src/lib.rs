@@ -10,6 +10,7 @@ pub mod keymap;
 pub mod location_list;
 pub mod project_search;
 pub mod search;
+pub mod session;
 
 pub use app::{
     AppState, ConfirmButton, ConfirmDialog, DragBorder, FocusTarget, MouseDragState,

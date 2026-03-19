@@ -325,8 +325,8 @@ pub(crate) fn render_startup_screen(area: Rect, frame: &mut Frame, theme: &Theme
         if y >= area.y + area.height {
             break;
         }
-        let paragraph = Paragraph::new(Line::from(Span::styled(*line, logo_style)))
-            .alignment(Alignment::Left);
+        let paragraph =
+            Paragraph::new(Line::from(Span::styled(*line, logo_style))).alignment(Alignment::Left);
         frame.render_widget(
             paragraph,
             Rect {

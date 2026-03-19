@@ -37,6 +37,10 @@ struct Cli {
     /// Directory to open (defaults to current directory)
     #[arg(default_value = ".")]
     path: PathBuf,
+
+    /// Skip session restore on startup
+    #[arg(long)]
+    no_session: bool,
 }
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -98,6 +102,16 @@ async fn main() -> Result<()> {
 
     let mut app = AppState::new_with_root(root.clone());
     app.build_version = BUILD_VERSION.to_string();
+
+    // Restore session from previous run (unless --no-session).
+    if !cli.no_session {
+        if let Ok(Some(session)) = axe_core::session::Session::load(&root) {
+            let warnings = session.apply(&mut app);
+            for msg in warnings {
+                log::warn!("Session restore: {msg}");
+            }
+        }
+    }
 
     // Build theme from config — resolved once at startup.
     let theme = load_theme(&app.config.ui.theme)
@@ -256,6 +270,13 @@ async fn main() -> Result<()> {
                     break;
                 }
             }
+        }
+    }
+
+    // Save session state before exit.
+    if let Some(ref project_root) = app.project_root {
+        if let Err(e) = axe_core::session::Session::from_app(&app).save(project_root) {
+            log::warn!("Failed to save session: {e}");
         }
     }
 

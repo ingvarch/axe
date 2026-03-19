@@ -178,6 +178,7 @@ name = "axe-core"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "anyhow",
  "arboard",
  "axe-config",
  "axe-editor",
