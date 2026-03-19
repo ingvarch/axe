@@ -155,8 +155,8 @@ fn render_help_overlay_shows_keybindings() {
     assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
     assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
     assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");
-    assert!(content.contains("Ctrl+H"), "expected 'Ctrl+H' in help");
     assert!(content.contains("Ctrl+R"), "expected 'Ctrl+R' in help");
+    assert!(content.contains("Ctrl+N"), "expected 'Ctrl+N' in help");
     assert!(content.contains("Esc"), "expected 'Esc' in help");
 }
 
@@ -715,8 +715,8 @@ fn startup_screen_shows_shortcuts() {
         "expected 'Open file finder' description in startup screen"
     );
     assert!(
-        content.contains("Ctrl+Shift+H"),
-        "expected 'Ctrl+Shift+H' for help in startup screen"
+        content.contains("F1"),
+        "expected 'F1' for help in startup screen"
     );
     assert!(
         content.contains("Ctrl+T"),

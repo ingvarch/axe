@@ -278,26 +278,19 @@ impl KeymapResolver {
             KeyCode::Char('t'),
             Command::ToggleTerminal,
         );
-        resolver.bind(
-            KeyModifiers::CONTROL,
-            KeyCode::Char('h'),
-            Command::EditorFindReplace,
-        );
-        // Ctrl+Shift+H: help (moved from Ctrl+H to make room for find & replace).
-        resolver.bind(
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            KeyCode::Char('H'),
-            Command::ShowHelp,
-        );
-        resolver.bind(
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            KeyCode::Char('h'),
-            Command::ShowHelp,
-        );
+        // F1: Show help overlay.
+        resolver.bind(KeyModifiers::NONE, KeyCode::F(1), Command::ShowHelp);
         resolver.bind(KeyModifiers::NONE, KeyCode::Esc, Command::CloseOverlay);
+        // Ctrl+R: Find and replace.
         resolver.bind(
             KeyModifiers::CONTROL,
             KeyCode::Char('r'),
+            Command::EditorFindReplace,
+        );
+        // Ctrl+N: Enter resize mode (Zellij-style).
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('n'),
             Command::EnterResizeMode,
         );
         resolver.bind(
@@ -382,12 +375,8 @@ impl KeymapResolver {
             KeyCode::Char('p'),
             Command::OpenCommandPalette,
         );
-        // F1 as universal fallback — works in terminals without Kitty keyboard protocol.
-        resolver.bind(
-            KeyModifiers::NONE,
-            KeyCode::F(1),
-            Command::OpenCommandPalette,
-        );
+        // Note: F1 is now bound to ShowHelp (above). Command palette is
+        // accessible via Ctrl+Shift+P only.
         // Ctrl+Shift+F: terminals without Kitty protocol report uppercase 'F'.
         resolver.bind(
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -624,20 +613,24 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_h_opens_find_replace() {
+    fn f1_shows_help() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        let key = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(resolver.resolve(&key), Some(Command::ShowHelp));
+    }
+
+    #[test]
+    fn ctrl_r_opens_find_replace() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(resolver.resolve(&key), Some(Command::EditorFindReplace));
     }
 
     #[test]
-    fn ctrl_shift_h_shows_help() {
+    fn ctrl_n_enters_resize_mode() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(
-            KeyCode::Char('H'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        );
-        assert_eq!(resolver.resolve(&key), Some(Command::ShowHelp));
+        let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::EnterResizeMode));
     }
 
     #[test]
@@ -647,12 +640,8 @@ mod tests {
         assert_eq!(resolver.resolve(&key), Some(Command::CloseOverlay));
     }
 
-    #[test]
-    fn default_bindings_ctrl_r_enters_resize_mode() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
-        assert_eq!(resolver.resolve(&key), Some(Command::EnterResizeMode));
-    }
+    // Ctrl+R is now EditorFindReplace (tested above).
+    // Ctrl+N is EnterResizeMode (tested above).
 
     #[test]
     fn default_bindings_ctrl_z_undoes() {
@@ -1043,12 +1032,7 @@ mod tests {
         assert_eq!(resolver.resolve(&key), Some(Command::OpenCommandPalette));
     }
 
-    #[test]
-    fn default_bindings_f1_opens_command_palette() {
-        let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
-        assert_eq!(resolver.resolve(&key), Some(Command::OpenCommandPalette));
-    }
+    // F1 is now ShowHelp (tested above).
 
     #[test]
     fn command_from_str_open_command_palette() {

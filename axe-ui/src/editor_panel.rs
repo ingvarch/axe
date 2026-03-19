@@ -328,11 +328,11 @@ const AXE_LOGO: &[&str] = &[
 /// Keyboard shortcuts shown on the startup screen.
 const STARTUP_SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+P", "Open file finder"),
-    ("F1 / Ctrl+Shift+P", "Command palette"),
+    ("Ctrl+Shift+P", "Command palette"),
     ("F2 / Ctrl+Shift+F", "Find in project"),
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+T", "Toggle terminal"),
-    ("Ctrl+Shift+H", "Help"),
+    ("F1", "Help"),
     ("Ctrl+Q", "Quit"),
 ];
 

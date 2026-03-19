@@ -76,7 +76,7 @@ pub(crate) const HELP_GENERAL: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Ctrl+R",
+            primary_key: "Ctrl+N",
             description: "Resize mode",
         },
         HelpEntry {
@@ -194,7 +194,7 @@ pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Ctrl+H",
+            primary_key: "Ctrl+R",
             description: "Find and Replace",
         },
         HelpEntry {
@@ -248,7 +248,7 @@ pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
             description: "Open file finder",
         },
         HelpEntry {
-            fallback_key: Some("F1"),
+            fallback_key: None,
             primary_key: "Ctrl+Shift+P",
             description: "Command palette",
         },
@@ -331,7 +331,7 @@ pub(crate) const HELP_CLOSE: HelpSection = HelpSection {
     entries: &[
         HelpEntry {
             fallback_key: None,
-            primary_key: "Ctrl+Shift+H",
+            primary_key: "F1",
             description: "Toggle this help",
         },
         HelpEntry {

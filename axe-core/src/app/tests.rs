@@ -404,18 +404,12 @@ fn handle_key_ctrl_t_toggles_terminal() {
 }
 
 #[test]
-fn handle_key_ctrl_shift_h_toggles_help() {
+fn handle_key_f1_toggles_help() {
     let mut app = AppState::new();
     assert!(!app.show_help);
-    app.handle_key_event(KeyEvent::new(
-        KeyCode::Char('H'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key_event(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
     assert!(app.show_help);
-    app.handle_key_event(KeyEvent::new(
-        KeyCode::Char('H'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key_event(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
     assert!(!app.show_help);
 }
 
@@ -719,9 +713,9 @@ fn resize_mode_allows_request_quit() {
 }
 
 #[test]
-fn handle_ctrl_r_enters_resize_mode() {
+fn handle_ctrl_n_enters_resize_mode() {
     let mut app = AppState::new();
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     assert!(app.resize_mode.active);
 }
 
