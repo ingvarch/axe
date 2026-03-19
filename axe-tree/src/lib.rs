@@ -1,8 +1,11 @@
 mod filter;
 pub mod icons;
+pub mod watcher;
 
 pub use filter::TreeFilter;
+pub use watcher::FileWatcher;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -214,33 +217,40 @@ impl FileTree {
     ///
     /// Noop if the selected node is a file or already expanded.
     pub fn expand(&mut self) -> Result<()> {
-        if self.selected >= self.nodes.len() {
-            return Ok(());
+        self.expand_at(self.selected)?;
+        Ok(())
+    }
+
+    /// Expands a directory at the given index, loading its children.
+    ///
+    /// Unlike `expand()`, this does not use `self.selected`. Returns the number
+    /// of children inserted. Noop (returns 0) if the index is out of bounds,
+    /// points to a non-directory, or the directory is already expanded.
+    fn expand_at(&mut self, index: usize) -> Result<usize> {
+        if index >= self.nodes.len() {
+            return Ok(0);
         }
-        let node = &self.nodes[self.selected];
+        let node = &self.nodes[index];
         if !matches!(node.kind, NodeKind::Directory { .. }) || node.expanded {
-            return Ok(());
+            return Ok(0);
         }
 
         let dir_path = node.path.clone();
         let depth = node.depth + 1;
-        let parent_index = self.selected;
 
-        // Discover nested .gitignore before reading children.
         self.filter.add_nested_gitignore(&dir_path);
+        let children = Self::read_children(&dir_path, depth, index, &self.filter)?;
+        let count = children.len();
 
-        let children = Self::read_children(&dir_path, depth, parent_index, &self.filter)?;
+        self.nodes[index].expanded = true;
+        self.nodes[index].children_loaded = true;
 
-        self.nodes[self.selected].expanded = true;
-        self.nodes[self.selected].children_loaded = true;
-
-        // Insert children right after the selected node.
-        let insert_pos = self.selected + 1;
+        let insert_pos = index + 1;
         for (i, child) in children.into_iter().enumerate() {
             self.nodes.insert(insert_pos + i, child);
         }
 
-        Ok(())
+        Ok(count)
     }
 
     /// Collapses the selected directory, removing all its descendants.
@@ -300,12 +310,12 @@ impl FileTree {
         }
     }
 
-    /// Toggles visibility of gitignored files and rebuilds the tree.
+    /// Toggles visibility of gitignored files and refreshes the tree.
     ///
-    /// Collapses everything and reloads root children to reflect the new filter state.
+    /// Preserves expanded directories and selection while reflecting the new filter state.
     pub fn toggle_show_ignored(&mut self) {
         self.filter.toggle_show_ignored();
-        self.rebuild_tree();
+        self.refresh_tree();
     }
 
     /// Returns whether ignored files are currently shown.
@@ -534,7 +544,7 @@ impl FileTree {
                     })?;
                 }
                 self.action = TreeAction::Idle;
-                self.rebuild_tree();
+                self.refresh_tree();
                 Ok(())
             }
             TreeAction::Renaming { node_idx, input } => {
@@ -550,7 +560,7 @@ impl FileTree {
                 std::fs::rename(old_path, &new_path)
                     .with_context(|| format!("Failed to rename: {}", old_path.display()))?;
                 self.action = TreeAction::Idle;
-                self.rebuild_tree();
+                self.refresh_tree();
                 Ok(())
             }
             _ => Ok(()),
@@ -572,7 +582,7 @@ impl FileTree {
                     .with_context(|| format!("Failed to delete file: {}", path.display()))?;
             }
             self.action = TreeAction::Idle;
-            self.rebuild_tree();
+            self.refresh_tree();
         }
         Ok(())
     }
@@ -591,6 +601,70 @@ impl FileTree {
 
         self.selected = 0;
         self.scroll = 0;
+    }
+
+    // IMPACT ANALYSIS — refresh_tree
+    // Parents: confirm_action(), confirm_delete(), toggle_show_ignored() — called after FS ops.
+    // Children: rebuild_tree() (resets tree), expand_at() (re-expands dirs).
+    // Siblings: selection, scroll, action state — selection/scroll restored, action untouched.
+    // Risk: Re-expansion order must be top-down (parent before child) because expand_at
+    //        inserts children and shifts subsequent indices.
+
+    /// Refreshes the tree while preserving expanded directories and selection.
+    ///
+    /// Snapshots expanded paths and selected path, rebuilds from disk, then
+    /// re-expands directories in top-to-bottom order and restores selection.
+    pub fn refresh_tree(&mut self) {
+        // 1. Snapshot expanded directory paths (excluding root, which is always expanded).
+        let expanded_paths: HashSet<PathBuf> = self
+            .nodes
+            .iter()
+            .filter(|n| n.expanded && n.depth > 0)
+            .map(|n| n.path.clone())
+            .collect();
+
+        // 2. Snapshot selected path.
+        let selected_path = self.nodes.get(self.selected).map(|n| n.path.clone());
+
+        // 3. Rebuild from scratch.
+        self.rebuild_tree();
+
+        // 4. Re-expand directories in forward order (parent before child).
+        //    After each expand_at(), new children are inserted, shifting later indices.
+        //    We scan forward to find the next directory to expand.
+        let mut i = 0;
+        while i < self.nodes.len() {
+            if matches!(self.nodes[i].kind, NodeKind::Directory { .. })
+                && !self.nodes[i].expanded
+                && expanded_paths.contains(&self.nodes[i].path)
+            {
+                let _ = self.expand_at(i);
+            }
+            i += 1;
+        }
+
+        // 5. Restore selection to same path, or clamp to bounds.
+        if let Some(ref path) = selected_path {
+            if let Some(idx) = self.nodes.iter().position(|n| &n.path == path) {
+                self.selected = idx;
+            } else {
+                // Path gone — try to find nearest parent.
+                let mut candidate = path.parent();
+                while let Some(parent) = candidate {
+                    if let Some(idx) = self.nodes.iter().position(|n| n.path == parent) {
+                        self.selected = idx;
+                        break;
+                    }
+                    candidate = parent.parent();
+                }
+                // If no parent found, clamp to bounds.
+                if self.selected >= self.nodes.len() {
+                    self.selected = self.nodes.len().saturating_sub(1);
+                }
+            }
+        }
+
+        self.adjust_scroll();
     }
 
     /// Keeps the selected index within the visible scroll window.
@@ -1789,5 +1863,289 @@ mod tests {
         tree.set_viewport_width(200);
         tree.scroll_horizontally_by(100, 2, 2);
         assert_eq!(tree.scroll_col(), 0, "should not scroll when content fits");
+    }
+
+    // --- expand_at tests ---
+
+    #[test]
+    fn expand_at_non_selected_directory() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Initial: root(0), sub(1), other.txt(2)
+        assert_eq!(tree.selected(), 0);
+        // Expand "sub" at index 1 without changing selection.
+        let inserted = tree.expand_at(1).unwrap();
+        assert_eq!(inserted, 2); // nested/ and file.txt
+        assert_eq!(tree.selected(), 0); // selection unchanged
+        assert!(tree.nodes()[1].expanded);
+        assert_eq!(tree.nodes().len(), 5);
+    }
+
+    // --- refresh_tree tests ---
+
+    #[test]
+    fn refresh_tree_preserves_expanded_dirs() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub" (index 1).
+        tree.move_down();
+        tree.expand().unwrap();
+        // Nodes: root(0), sub(1 expanded), nested(2), file.txt(3), other.txt(4)
+        assert!(tree.nodes()[1].expanded);
+        assert_eq!(tree.nodes().len(), 5);
+
+        tree.refresh_tree();
+
+        // After refresh, "sub" should still be expanded with its children.
+        assert_eq!(tree.nodes().len(), 5);
+        let sub = tree.nodes().iter().find(|n| n.name == "sub").unwrap();
+        assert!(sub.expanded);
+    }
+
+    #[test]
+    fn refresh_tree_preserves_selection() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select "other.txt" (index 2).
+        tree.move_down();
+        tree.move_down();
+        let selected_path = tree.selected_node().unwrap().path.clone();
+        assert_eq!(tree.selected_node().unwrap().name, "other.txt");
+
+        tree.refresh_tree();
+
+        assert_eq!(tree.selected_node().unwrap().path, selected_path);
+    }
+
+    #[test]
+    fn refresh_tree_adjusts_selection_when_file_deleted() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select "other.txt" (last node, index 2).
+        tree.move_end();
+        assert_eq!(tree.selected_node().unwrap().name, "other.txt");
+
+        // Delete other.txt externally.
+        fs::remove_file(tmp.path().join("other.txt")).unwrap();
+
+        tree.refresh_tree();
+
+        // Selection should clamp to valid range (path gone, falls to nearest/parent).
+        assert!(tree.selected() < tree.nodes().len());
+    }
+
+    #[test]
+    fn refresh_tree_shows_new_files() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        let initial_len = tree.nodes().len();
+
+        // Create a new file externally.
+        fs::write(tmp.path().join("new_file.txt"), "hello").unwrap();
+
+        tree.refresh_tree();
+
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&"new_file.txt"),
+            "new file should appear: {names:?}"
+        );
+        assert_eq!(tree.nodes().len(), initial_len + 1);
+    }
+
+    #[test]
+    fn refresh_tree_removes_deleted_files() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+
+        // Delete "other.txt" externally.
+        fs::remove_file(tmp.path().join("other.txt")).unwrap();
+
+        tree.refresh_tree();
+
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            !names.contains(&"other.txt"),
+            "deleted file should be gone: {names:?}"
+        );
+    }
+
+    #[test]
+    fn refresh_tree_preserves_deeply_nested_expansion() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub" then "nested".
+        tree.move_down(); // select sub
+        tree.expand().unwrap();
+        // Nodes: root(0), sub(1), nested(2), file.txt(3), other.txt(4)
+        tree.move_down(); // select nested
+        tree.expand().unwrap();
+        // nested is now expanded (empty dir, but expanded flag set).
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded
+        );
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "nested")
+                .unwrap()
+                .expanded
+        );
+
+        tree.refresh_tree();
+
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded
+        );
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "nested")
+                .unwrap()
+                .expanded
+        );
+    }
+
+    // --- State-preserving operation tests ---
+
+    #[test]
+    fn confirm_create_preserves_expanded_state() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub".
+        tree.move_down();
+        tree.expand().unwrap();
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded
+        );
+
+        // Create a new file at root.
+        tree.select(0);
+        tree.start_create_file();
+        for c in "newfile.txt".chars() {
+            tree.input_char(c);
+        }
+        tree.confirm_action().unwrap();
+
+        // "sub" should still be expanded after create.
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded,
+            "expanded state should be preserved after create"
+        );
+        let names: Vec<&str> = tree.nodes().iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"newfile.txt"));
+    }
+
+    #[test]
+    fn confirm_rename_preserves_expanded_state() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub".
+        tree.move_down();
+        tree.expand().unwrap();
+
+        // Rename "other.txt" (find its index after expansion).
+        let other_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "other.txt")
+            .unwrap();
+        tree.select(other_idx);
+        tree.start_rename();
+        for _ in 0.."other.txt".len() {
+            tree.input_backspace();
+        }
+        for c in "renamed.txt".chars() {
+            tree.input_char(c);
+        }
+        tree.confirm_action().unwrap();
+
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded,
+            "expanded state should be preserved after rename"
+        );
+    }
+
+    #[test]
+    fn confirm_delete_preserves_expanded_state() {
+        let tmp = create_nested_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Expand "sub".
+        tree.move_down();
+        tree.expand().unwrap();
+
+        // Delete "other.txt".
+        let other_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "other.txt")
+            .unwrap();
+        tree.select(other_idx);
+        tree.start_delete();
+        tree.confirm_delete().unwrap();
+
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "sub")
+                .unwrap()
+                .expanded,
+            "expanded state should be preserved after delete"
+        );
+    }
+
+    #[test]
+    fn toggle_show_ignored_preserves_expanded_state() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        fs::write(root.join("debug.log"), "").unwrap();
+
+        let mut tree = FileTree::new(root.to_path_buf()).unwrap();
+        // Expand "src".
+        let src_idx = tree.nodes().iter().position(|n| n.name == "src").unwrap();
+        tree.select(src_idx);
+        tree.expand().unwrap();
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "src")
+                .unwrap()
+                .expanded
+        );
+
+        tree.toggle_show_ignored();
+
+        assert!(
+            tree.nodes()
+                .iter()
+                .find(|n| n.name == "src")
+                .unwrap()
+                .expanded,
+            "expanded state should be preserved after toggle_show_ignored"
+        );
     }
 }

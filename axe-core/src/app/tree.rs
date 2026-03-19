@@ -1,6 +1,25 @@
 use super::AppState;
 
 impl AppState {
+    // IMPACT ANALYSIS — poll_fs_events
+    // Parents: main loop calls this each iteration after poll_terminal().
+    // Children: FileWatcher::has_changes() (drains events), FileTree::refresh_tree()
+    //           (preserves expanded/selection), refresh_git_modified_files().
+    // Siblings: poll_terminal, poll_lsp — independent polling loops.
+    // Risk: None — debounced, non-blocking, read-only on watcher state.
+
+    /// Polls the filesystem watcher for external changes and refreshes the tree
+    /// if any relevant events (create, remove, rename) were detected.
+    pub fn poll_fs_events(&mut self) {
+        let changed = self.file_watcher.as_mut().is_some_and(|w| w.has_changes());
+        if changed {
+            if let Some(ref mut tree) = self.file_tree {
+                tree.refresh_tree();
+            }
+            self.refresh_git_modified_files();
+        }
+    }
+
     /// Scrolls the file tree vertically by the given delta lines.
     pub(super) fn tree_scroll(&mut self, delta: i32) {
         if let Some(ref mut tree) = self.file_tree {

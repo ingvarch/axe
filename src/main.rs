@@ -135,6 +135,9 @@ async fn main() -> Result<()> {
         // Poll terminal PTY output before drawing.
         app.poll_terminal();
 
+        // Poll filesystem watcher for external file changes.
+        app.poll_fs_events();
+
         // Drain project search results from background thread.
         app.drain_project_search_results();
 

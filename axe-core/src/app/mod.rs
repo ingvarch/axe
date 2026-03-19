@@ -136,6 +136,8 @@ pub struct AppState {
     pending_format_save: bool,
     /// Full build version string (e.g. "v0.1.0-abc123"), set by the binary crate.
     pub build_version: String,
+    /// Filesystem watcher for detecting external file changes (create, delete, rename).
+    file_watcher: Option<axe_tree::FileWatcher>,
     /// Current git branch name (e.g. "main") or short commit hash for detached HEAD.
     pub git_branch: Option<String>,
     /// Timestamp of last git branch check, for periodic refresh.
@@ -196,6 +198,7 @@ impl AppState {
             build_version: String::new(),
             git_branch: None,
             last_git_branch_check: None,
+            file_watcher: None,
             git_modified_files: std::collections::HashSet::new(),
         }
     }
@@ -247,11 +250,20 @@ impl AppState {
             Some((msg, Instant::now()))
         };
 
+        let file_watcher = match axe_tree::FileWatcher::new(&root) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                log::warn!("Failed to create filesystem watcher: {e}");
+                None
+            }
+        };
+
         let git_branch = crate::git::current_branch(&root);
         let git_modified_files = crate::git::modified_files(&root);
 
         Self {
             file_tree,
+            file_watcher,
             project_root: Some(root),
             buffer_manager,
             config,
