@@ -261,11 +261,37 @@ impl KeymapResolver {
             KeyCode::Char('q'),
             Command::RequestQuit,
         );
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('1'), Command::FocusTree);
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('2'), Command::FocusEditor);
+        // Ctrl+Shift+B: focus tree (Browse). Dual bindings for Kitty/non-Kitty.
         resolver.bind(
-            KeyModifiers::ALT,
-            KeyCode::Char('3'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('B'),
+            Command::FocusTree,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('b'),
+            Command::FocusTree,
+        );
+        // Ctrl+Shift+E: focus editor.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('E'),
+            Command::FocusEditor,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('e'),
+            Command::FocusEditor,
+        );
+        // Ctrl+Shift+L: focus terminal.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('L'),
+            Command::FocusTerminal,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('l'),
             Command::FocusTerminal,
         );
         resolver.bind(
@@ -298,7 +324,17 @@ impl KeymapResolver {
             KeyCode::Char('z'),
             Command::EditorUndo,
         );
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('z'), Command::ZoomPanel);
+        // Ctrl+Shift+M: zoom (maximize) panel.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('M'),
+            Command::ZoomPanel,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('m'),
+            Command::ZoomPanel,
+        );
         resolver.bind(
             KeyModifiers::CONTROL,
             KeyCode::Char('y'),
@@ -397,21 +433,54 @@ impl KeymapResolver {
         );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal
-        // based on current focus. Alt+] / Alt+[ avoids terminal emulator conflicts
-        // (Ctrl+Tab is intercepted by many terminals like Rio, iTerm2, etc.)
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char(']'), Command::NextTab);
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('['), Command::PrevTab);
-        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('w'), Command::CloseTab);
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('t'), Command::NewTab);
-        resolver.bind(KeyModifiers::ALT, KeyCode::Char('w'), Command::CloseTab);
-
-        // Code completion (Alt+/).
+        // based on current focus. Ctrl+Shift+] / Ctrl+Shift+[.
+        // Without Kitty protocol: Shift+] = '}', Shift+[ = '{'.
         resolver.bind(
-            KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('}'),
+            Command::NextTab,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char(']'),
+            Command::NextTab,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('{'),
+            Command::PrevTab,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('['),
+            Command::PrevTab,
+        );
+        resolver.bind(KeyModifiers::CONTROL, KeyCode::Char('w'), Command::CloseTab);
+        // Ctrl+Shift+T: new tab.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('T'),
+            Command::NewTab,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('t'),
+            Command::NewTab,
+        );
+
+        // Ctrl+Shift+/: code completion.
+        // Without Kitty protocol: Shift+/ = '?'
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('?'),
+            Command::TriggerCompletion,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char('/'),
             Command::TriggerCompletion,
         );
-        // F3 as universal fallback for completion trigger.
+        // F3: code completion fallback (universal, works in all terminals).
         resolver.bind(
             KeyModifiers::NONE,
             KeyCode::F(3),
@@ -447,14 +516,25 @@ impl KeymapResolver {
             Command::FormatDocument,
         );
 
-        // Diagnostic navigation.
+        // Diagnostic navigation: Ctrl+Shift+. / Ctrl+Shift+,
+        // Without Kitty protocol: Shift+. = '>', Shift+, = '<'
         resolver.bind(
-            KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('>'),
+            Command::GoToNextDiagnostic,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char('.'),
             Command::GoToNextDiagnostic,
         );
         resolver.bind(
-            KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('<'),
+            Command::GoToPrevDiagnostic,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char(','),
             Command::GoToPrevDiagnostic,
         );
@@ -578,23 +658,64 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_alt_1_focus_tree() {
+    fn default_bindings_ctrl_shift_b_focus_tree() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
+        // Uppercase 'B' — terminals without Kitty protocol.
+        let key = KeyEvent::new(
+            KeyCode::Char('B'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::FocusTree));
     }
 
     #[test]
-    fn default_bindings_alt_2_focus_editor() {
+    fn default_bindings_ctrl_shift_b_kitty_focus_tree() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT);
+        // Lowercase 'b' + SHIFT — terminals with Kitty protocol.
+        let key = KeyEvent::new(
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::FocusTree));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_e_focus_editor() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('E'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::FocusEditor));
     }
 
     #[test]
-    fn default_bindings_alt_3_focus_terminal() {
+    fn default_bindings_ctrl_shift_e_kitty_focus_editor() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT);
+        let key = KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::FocusEditor));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_l_focus_terminal() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('L'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::FocusTerminal));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_l_kitty_focus_terminal() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::FocusTerminal));
     }
 
@@ -651,9 +772,22 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_alt_z_zoom_panel() {
+    fn default_bindings_ctrl_shift_m_zoom_panel() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT);
+        let key = KeyEvent::new(
+            KeyCode::Char('M'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::ZoomPanel));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_m_kitty_zoom_panel() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(
+            KeyCode::Char('m'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::ZoomPanel));
     }
 
@@ -773,17 +907,23 @@ mod tests {
     // --- Unified tab command bindings ---
 
     #[test]
-    fn default_bindings_alt_t_new_tab() {
+    fn default_bindings_ctrl_shift_t_new_tab() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT);
+        let key = KeyEvent::new(
+            KeyCode::Char('T'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::NewTab));
     }
 
     #[test]
-    fn default_bindings_alt_w_close_tab() {
+    fn default_bindings_ctrl_shift_t_kitty_new_tab() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT);
-        assert_eq!(resolver.resolve(&key), Some(Command::CloseTab));
+        let key = KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::NewTab));
     }
 
     #[test]
@@ -794,16 +934,46 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_alt_bracket_right_next_tab() {
+    fn default_bindings_ctrl_shift_bracket_right_next_tab() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT);
+        // Without Kitty: Shift+] = '}'
+        let key = KeyEvent::new(
+            KeyCode::Char('}'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::NextTab));
     }
 
     #[test]
-    fn default_bindings_alt_bracket_left_prev_tab() {
+    fn default_bindings_ctrl_shift_bracket_right_kitty_next_tab() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::ALT);
+        // With Kitty: literal ']' + SHIFT
+        let key = KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::NextTab));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_bracket_left_prev_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        // Without Kitty: Shift+[ = '{'
+        let key = KeyEvent::new(
+            KeyCode::Char('{'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::PrevTab));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_bracket_left_kitty_prev_tab() {
+        let resolver = KeymapResolver::with_defaults();
+        // With Kitty: literal '[' + SHIFT
+        let key = KeyEvent::new(
+            KeyCode::Char('['),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::PrevTab));
     }
 
@@ -849,10 +1019,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_key_combo_alt_bracket_right() {
+    fn parse_key_combo_ctrl_shift_bracket() {
         assert_eq!(
-            parse_key_combo("alt+]"),
-            Some((KeyModifiers::ALT, KeyCode::Char(']')))
+            parse_key_combo("ctrl+shift+]"),
+            Some((
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                KeyCode::Char(']')
+            ))
         );
     }
 
@@ -1080,16 +1253,46 @@ mod tests {
     // --- Diagnostic navigation ---
 
     #[test]
-    fn default_bindings_alt_dot_next_diagnostic() {
+    fn default_bindings_ctrl_shift_dot_next_diagnostic() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT);
+        // Without Kitty protocol: Shift+. = '>'
+        let key = KeyEvent::new(
+            KeyCode::Char('>'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::GoToNextDiagnostic));
     }
 
     #[test]
-    fn default_bindings_alt_comma_prev_diagnostic() {
+    fn default_bindings_ctrl_shift_dot_kitty_next_diagnostic() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT);
+        // With Kitty protocol: literal '.' + SHIFT
+        let key = KeyEvent::new(
+            KeyCode::Char('.'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToNextDiagnostic));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_comma_prev_diagnostic() {
+        let resolver = KeymapResolver::with_defaults();
+        // Without Kitty protocol: Shift+, = '<'
+        let key = KeyEvent::new(
+            KeyCode::Char('<'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::GoToPrevDiagnostic));
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_comma_kitty_prev_diagnostic() {
+        let resolver = KeymapResolver::with_defaults();
+        // With Kitty protocol: literal ',' + SHIFT
+        let key = KeyEvent::new(
+            KeyCode::Char(','),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::GoToPrevDiagnostic));
     }
 
@@ -1104,9 +1307,24 @@ mod tests {
     // --- Completion ---
 
     #[test]
-    fn alt_slash_triggers_completion() {
+    fn ctrl_shift_slash_triggers_completion() {
         let resolver = KeymapResolver::with_defaults();
-        let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT);
+        // Without Kitty: Shift+/ = '?'
+        let key = KeyEvent::new(
+            KeyCode::Char('?'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&key), Some(Command::TriggerCompletion));
+    }
+
+    #[test]
+    fn ctrl_shift_slash_kitty_triggers_completion() {
+        let resolver = KeymapResolver::with_defaults();
+        // With Kitty: literal '/' + SHIFT
+        let key = KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         assert_eq!(resolver.resolve(&key), Some(Command::TriggerCompletion));
     }
 

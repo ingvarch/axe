@@ -360,17 +360,23 @@ fn handle_alt_1_focuses_tree() {
 }
 
 #[test]
-fn handle_alt_2_focuses_editor() {
+fn handle_ctrl_shift_e_focuses_editor() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Tree;
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('E'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert_eq!(app.focus, FocusTarget::Editor);
 }
 
 #[test]
-fn handle_alt_3_focuses_terminal() {
+fn handle_ctrl_shift_l_focuses_terminal() {
     let mut app = AppState::new();
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('L'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert_eq!(app.focus, FocusTarget::Terminal(0));
 }
 
@@ -966,12 +972,18 @@ fn zoom_panel_exits_resize_mode() {
 }
 
 #[test]
-fn handle_key_alt_z_toggles_zoom() {
+fn handle_key_ctrl_shift_m_toggles_zoom() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('M'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert_eq!(app.zoomed_panel, Some(FocusTarget::Editor));
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT));
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('M'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
     assert_eq!(app.zoomed_panel, None);
 }
 

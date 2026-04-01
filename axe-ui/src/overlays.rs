@@ -51,17 +51,17 @@ pub(crate) const HELP_GENERAL: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+1",
+            primary_key: "Ctrl+Shift+B",
             description: "Focus Files",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+2",
+            primary_key: "Ctrl+Shift+E",
             description: "Focus Editor",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+3",
+            primary_key: "Ctrl+Shift+L",
             description: "Focus Terminal",
         },
         HelpEntry {
@@ -81,7 +81,7 @@ pub(crate) const HELP_GENERAL: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+Z",
+            primary_key: "Ctrl+Shift+M",
             description: "Zoom panel",
         },
         HelpEntry {
@@ -163,17 +163,17 @@ pub(crate) const HELP_TABS: HelpSection = HelpSection {
     entries: &[
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+T",
-            description: "New tab (terminal)",
+            primary_key: "Ctrl+Shift+T",
+            description: "New tab",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+W / Ctrl+W",
+            primary_key: "Ctrl+W",
             description: "Close tab",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+]/[",
+            primary_key: "Ctrl+Shift+]/[",
             description: "Next/prev tab",
         },
     ],
@@ -259,17 +259,17 @@ pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
         },
         HelpEntry {
             fallback_key: Some("F3"),
-            primary_key: "Alt+/",
+            primary_key: "Ctrl+Shift+/",
             description: "Code completion",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+.",
+            primary_key: "Ctrl+Shift+.",
             description: "Next diagnostic",
         },
         HelpEntry {
             fallback_key: None,
-            primary_key: "Alt+,",
+            primary_key: "Ctrl+Shift+,",
             description: "Prev diagnostic",
         },
         HelpEntry {

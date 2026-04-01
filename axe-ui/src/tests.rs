@@ -765,13 +765,16 @@ fn startup_screen_unzoomed_shows_logo() {
 
 #[test]
 fn help_sections_contain_tab_keybindings() {
-    let has_next_tab = HELP_TABS.entries.iter().any(|e| e.primary_key == "Alt+]/[");
+    let has_next_tab = HELP_TABS
+        .entries
+        .iter()
+        .any(|e| e.primary_key == "Ctrl+Shift+]/[");
     let has_close_tab = HELP_TABS
         .entries
         .iter()
-        .any(|e| e.primary_key == "Alt+W / Ctrl+W");
-    assert!(has_next_tab, "expected 'Alt+]/[' in HELP_TABS");
-    assert!(has_close_tab, "expected 'Alt+W / Ctrl+W' in HELP_TABS");
+        .any(|e| e.primary_key == "Ctrl+W");
+    assert!(has_next_tab, "expected 'Ctrl+PgDn/PgUp' in HELP_TABS");
+    assert!(has_close_tab, "expected 'Ctrl+W' in HELP_TABS");
 }
 
 #[test]
