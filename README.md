@@ -1,6 +1,19 @@
-# Axe
+```
+ @@@@@@   @@@  @@@  @@@@@@@@
+@@@@@@@@  @@@  @@@  @@@@@@@@
+@@!  @@@  @@!  !@@  @@!
+!@!  @!@  !@!  @!!  !@!
+@!@!@!@!   !@@!@!   @!!!:!
+!!!@!!!!    @!!!    !!!!!:
+!!:  !!!   !: :!!   !!:
+:!:  !:!  :!:  !:!  :!:
+::   :::   ::  :::   :: ::::
+ :   : :   :   ::   : :: ::
+```
 
 A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
+
+**This is a fun project built with 100% vibe coding.**
 
 ## Features
 
