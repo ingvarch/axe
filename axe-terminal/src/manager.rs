@@ -14,6 +14,9 @@ use log;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Direction, Point};
 use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::Term;
+
+use crate::PtyEventListener;
 
 use crate::tab::TerminalTab;
 
@@ -24,6 +27,104 @@ pub enum TabBarHit {
     Tab(usize),
     /// A click on the [+] button.
     PlusButton,
+}
+
+/// A terminal tab that can be either a local PTY or a remote SSH session.
+pub enum ManagedTab {
+    /// A local terminal tab backed by a PTY.
+    Local(TerminalTab),
+}
+
+impl ManagedTab {
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Local(tab) => tab.title(),
+        }
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.write(data),
+        }
+    }
+
+    pub fn process_output(&mut self, data: &[u8]) {
+        match self {
+            Self::Local(tab) => tab.process_output(data),
+        }
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.resize(cols, rows),
+        }
+    }
+
+    pub fn term(&self) -> &Term<PtyEventListener> {
+        match self {
+            Self::Local(tab) => tab.term(),
+        }
+    }
+
+    pub fn term_mut(&mut self) -> &mut Term<PtyEventListener> {
+        match self {
+            Self::Local(tab) => tab.term_mut(),
+        }
+    }
+
+    pub fn kill(&mut self) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.kill(),
+        }
+    }
+
+    pub fn scroll(&mut self, scroll: Scroll) {
+        match self {
+            Self::Local(tab) => tab.scroll(scroll),
+        }
+    }
+
+    pub fn display_offset(&self) -> usize {
+        match self {
+            Self::Local(tab) => tab.display_offset(),
+        }
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        match self {
+            Self::Local(tab) => tab.is_alive(),
+        }
+    }
+
+    pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Direction) {
+        match self {
+            Self::Local(tab) => tab.start_selection(ty, point, side),
+        }
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Direction) {
+        match self {
+            Self::Local(tab) => tab.update_selection(point, side),
+        }
+    }
+
+    pub fn selection_to_string(&self) -> Option<String> {
+        match self {
+            Self::Local(tab) => tab.selection_to_string(),
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        match self {
+            Self::Local(tab) => tab.clear_selection(),
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        match self {
+            Self::Local(tab) => tab.has_selection(),
+        }
+    }
 }
 
 /// Size of the read buffer for the background PTY reader thread.
@@ -45,7 +146,7 @@ pub enum TermEvent {
 
 /// Manages terminal tabs and their background I/O threads.
 pub struct TerminalManager {
-    tabs: Vec<TerminalTab>,
+    tabs: Vec<ManagedTab>,
     active: usize,
     event_rx: Receiver<TermEvent>,
     event_tx: Sender<TermEvent>,
@@ -103,7 +204,7 @@ impl TerminalManager {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
-        self.tabs.push(tab);
+        self.tabs.push(ManagedTab::Local(tab));
         self.tab_ids.push(tab_id);
 
         let tx = self.event_tx.clone();
@@ -281,7 +382,7 @@ impl TerminalManager {
     }
 
     /// Returns a reference to the currently active tab, if any.
-    pub fn active_tab(&self) -> Option<&TerminalTab> {
+    pub fn active_tab(&self) -> Option<&ManagedTab> {
         self.tabs.get(self.active)
     }
 

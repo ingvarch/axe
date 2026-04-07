@@ -5,4 +5,4 @@ pub mod pty;
 pub mod tab;
 
 pub use event_listener::PtyEventListener;
-pub use manager::{TabBarHit, TerminalManager};
+pub use manager::{ManagedTab, TabBarHit, TerminalManager};
