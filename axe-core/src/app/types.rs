@@ -337,3 +337,72 @@ mod go_to_line_tests {
         assert_eq!(dialog.parse_line(), Some(99));
     }
 }
+
+/// Dialog for entering an SSH password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordDialog {
+    /// The host being connected to (for display).
+    pub host_display: String,
+    /// The current password input.
+    pub input: String,
+    /// Index of the SSH tab awaiting the password.
+    pub tab_index: usize,
+}
+
+impl PasswordDialog {
+    /// Creates a new password dialog for the given host.
+    pub fn new(host_display: String, tab_index: usize) -> Self {
+        Self {
+            host_display,
+            input: String::new(),
+            tab_index,
+        }
+    }
+
+    /// Appends a character to the password input.
+    pub fn input_char(&mut self, c: char) {
+        self.input.push(c);
+    }
+
+    /// Removes the last character from the password input.
+    pub fn input_backspace(&mut self) {
+        self.input.pop();
+    }
+}
+
+#[cfg(test)]
+mod password_dialog_tests {
+    use super::*;
+
+    #[test]
+    fn new_initializes_empty_input() {
+        let dialog = PasswordDialog::new("user@host".to_string(), 0);
+        assert_eq!(dialog.input, "");
+        assert_eq!(dialog.host_display, "user@host");
+        assert_eq!(dialog.tab_index, 0);
+    }
+
+    #[test]
+    fn input_char_appends() {
+        let mut dialog = PasswordDialog::new("host".to_string(), 0);
+        dialog.input_char('a');
+        dialog.input_char('b');
+        assert_eq!(dialog.input, "ab");
+    }
+
+    #[test]
+    fn input_backspace_removes_last() {
+        let mut dialog = PasswordDialog::new("host".to_string(), 0);
+        dialog.input_char('a');
+        dialog.input_char('b');
+        dialog.input_backspace();
+        assert_eq!(dialog.input, "a");
+    }
+
+    #[test]
+    fn input_backspace_on_empty_is_noop() {
+        let mut dialog = PasswordDialog::new("host".to_string(), 0);
+        dialog.input_backspace();
+        assert_eq!(dialog.input, "");
+    }
+}

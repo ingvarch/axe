@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use alacritty_terminal::index::{Column, Line, Point};
 use crossterm::event::KeyEvent;
 
-use super::{AppState, FocusTarget};
+use super::{AppState, FocusTarget, PasswordDialog};
 
 impl AppState {
     /// Polls terminal output from the PTY background thread and feeds it to the terminal.
@@ -42,6 +42,20 @@ impl AppState {
                     self.show_terminal = false;
                     if matches!(self.focus, FocusTarget::Terminal(_)) {
                         self.focus = FocusTarget::Editor;
+                    }
+                }
+            }
+
+            // Check if any SSH tab needs a password and show the dialog.
+            if self.password_dialog.is_none() {
+                for (idx, tab) in mgr.tabs_ref().iter().enumerate() {
+                    if let axe_terminal::ManagedTab::Ssh(ref ssh_tab) = tab {
+                        if ssh_tab.state == axe_terminal::ssh_tab::SshConnectionState::NeedsPassword
+                        {
+                            self.password_dialog =
+                                Some(PasswordDialog::new(ssh_tab.title().to_string(), idx));
+                            break;
+                        }
                     }
                 }
             }
@@ -115,6 +129,15 @@ impl AppState {
                     self.terminal_manager = Some(mgr);
                 }
                 Err(e) => log::warn!("Failed to create SSH tab: {e}"),
+            }
+        }
+    }
+
+    /// Sends a password to an SSH tab for authentication.
+    pub(super) fn send_ssh_password(&mut self, tab_idx: usize, password: String) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            if let Some(axe_terminal::ManagedTab::Ssh(ref tab)) = mgr.tabs_ref().get(tab_idx) {
+                tab.send_password(password);
             }
         }
     }

@@ -7,7 +7,9 @@ use ratatui::Frame;
 use axe_core::completion::{self, CompletionState};
 use axe_core::project_search::{DisplayItem, SearchField};
 use axe_core::ssh_host_finder::SshHostFinder;
-use axe_core::{AppState, CommandPalette, FileFinder, GoToLineDialog, ProjectSearch};
+use axe_core::{
+    AppState, CommandPalette, FileFinder, GoToLineDialog, PasswordDialog, ProjectSearch,
+};
 use axe_editor::EditorBuffer;
 
 use crate::editor_panel::{DIAGNOSTIC_GUTTER_WIDTH, DIFF_GUTTER_WIDTH, GUTTER_PADDING};
@@ -2066,6 +2068,109 @@ pub(crate) fn render_ssh_host_finder(finder: &SshHostFinder, frame: &mut Frame, 
         ));
         let footer_area = Rect {
             y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+/// Renders the SSH password input dialog.
+pub(crate) fn render_password_dialog(dialog: &PasswordDialog, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = 50u16.min(area.width.saturating_sub(4));
+    let overlay_height = 5u16.min(area.height.saturating_sub(4));
+
+    // Center the overlay.
+    let [_, center_v, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_height),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(area);
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_width),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(center_v);
+
+    // Clear background and draw border.
+    frame.render_widget(Clear, center);
+    let block = Block::default()
+        .title(" SSH Authentication ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(
+            Style::default()
+                .fg(theme.panel_border_active)
+                .bg(theme.overlay_bg),
+        );
+    let inner = block.inner(center);
+    frame.render_widget(block, center);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    // Host info line.
+    let host_line = Line::from(vec![
+        Span::styled(
+            " Password for ",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled(
+            &dialog.host_display,
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let host_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(host_line), host_area);
+
+    // Password input line (masked with dots).
+    if inner.height > 1 {
+        let masked = "\u{2022}".repeat(dialog.input.len());
+        let input_line = Line::from(vec![
+            Span::styled(
+                " > ",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(masked, Style::default().fg(theme.foreground)),
+            Span::styled(
+                "|",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        let input_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(input_line), input_area);
+    }
+
+    // Footer hint.
+    if inner.height > 2 {
+        let footer_line = Line::from(Span::styled(
+            " Enter to submit, Esc to cancel",
+            Style::default()
+                .fg(theme.panel_border)
+                .add_modifier(Modifier::DIM),
+        ));
+        let footer_area = Rect {
+            y: inner.y + inner.height.saturating_sub(1),
             height: 1,
             ..inner
         };

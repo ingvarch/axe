@@ -460,6 +460,11 @@ impl TerminalManager {
         Ok(())
     }
 
+    /// Returns a reference to the tabs list.
+    pub fn tabs_ref(&self) -> &[ManagedTab] {
+        &self.tabs
+    }
+
     /// Returns a reference to the currently active tab, if any.
     pub fn active_tab(&self) -> Option<&ManagedTab> {
         self.tabs.get(self.active)

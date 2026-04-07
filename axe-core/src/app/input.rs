@@ -52,6 +52,32 @@ impl AppState {
             return;
         }
 
+        // SSH password dialog intercepts all keys when open.
+        if let Some(ref mut dialog) = self.password_dialog {
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel: close the SSH tab that was waiting for password.
+                    let tab_idx = dialog.tab_index;
+                    self.password_dialog = None;
+                    if let Some(ref mut mgr) = self.terminal_manager {
+                        if let Err(e) = mgr.close_tab(tab_idx) {
+                            log::warn!("Failed to close SSH tab on password cancel: {e}");
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    let password = dialog.input.clone();
+                    let tab_idx = dialog.tab_index;
+                    self.password_dialog = None;
+                    self.send_ssh_password(tab_idx, password);
+                }
+                KeyCode::Backspace => dialog.input_backspace(),
+                KeyCode::Char(c) => dialog.input_char(c),
+                _ => {}
+            }
+            return;
+        }
+
         // Go to Line dialog intercepts all keys when open.
         if let Some(ref mut dialog) = self.go_to_line {
             match key.code {

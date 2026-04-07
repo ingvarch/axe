@@ -132,6 +132,8 @@ pub struct AppState {
     pub location_list: Option<crate::location_list::LocationList>,
     /// Active Go to Line dialog, if open.
     pub go_to_line: Option<GoToLineDialog>,
+    /// Active SSH password dialog, if open.
+    pub password_dialog: Option<PasswordDialog>,
     /// Active hover tooltip, if showing.
     pub hover_info: Option<crate::hover::HoverInfo>,
     /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
@@ -195,6 +197,7 @@ impl AppState {
             project_search: None,
             ssh_host_finder: None,
             go_to_line: None,
+            password_dialog: None,
             editor_selecting: false,
             scrollbar_dragging: false,
             editor_scrollbar_area: None,
