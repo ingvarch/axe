@@ -52,10 +52,7 @@ fn base_version_from_describe(describe: &Option<String>, pkg_version: &str) -> S
     if let Some(desc) = describe {
         if desc.contains('-') {
             // "v0.1.0-5-gabc123" → "v0.1.0"
-            desc.rsplitn(3, '-')
-                .last()
-                .unwrap_or(desc)
-                .to_string()
+            desc.rsplitn(3, '-').last().unwrap_or(desc).to_string()
         } else {
             // Exactly on tag.
             desc.clone()
