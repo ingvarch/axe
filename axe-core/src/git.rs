@@ -233,6 +233,16 @@ mod tests {
             .output()
             .expect("git init failed");
         ProcessCommand::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .expect("git config email failed");
+        ProcessCommand::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .expect("git config name failed");
+        ProcessCommand::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(dir)
             .output()
@@ -251,6 +261,16 @@ mod tests {
             .current_dir(dir)
             .output()
             .expect("git init failed");
+        ProcessCommand::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .expect("git config email failed");
+        ProcessCommand::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .expect("git config name failed");
         ProcessCommand::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(dir)
