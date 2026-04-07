@@ -101,6 +101,8 @@ pub struct AppState {
     pub command_palette: Option<crate::command_palette::CommandPalette>,
     /// Active project-wide search overlay state, if open.
     pub project_search: Option<crate::project_search::ProjectSearch>,
+    /// Active SSH host finder overlay state, if open.
+    pub ssh_host_finder: Option<crate::ssh_host_finder::SshHostFinder>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
     /// Whether an editor scrollbar drag is currently in progress.
@@ -191,6 +193,7 @@ impl AppState {
             file_finder: None,
             command_palette: None,
             project_search: None,
+            ssh_host_finder: None,
             go_to_line: None,
             editor_selecting: false,
             scrollbar_dragging: false,

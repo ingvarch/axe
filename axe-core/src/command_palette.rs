@@ -74,6 +74,7 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Search: Find in Project", Command::OpenProjectSearch),
         ("Edit: Format Document", Command::FormatDocument),
         ("Edit: Go to Line", Command::GoToLine),
+        ("SSH: Connect to Host", Command::OpenSshHostFinder),
     ];
 
     entries
@@ -227,7 +228,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 34, "Expected 34 palette commands");
+        assert_eq!(p.items.len(), 35, "Expected 35 palette commands");
     }
 
     #[test]

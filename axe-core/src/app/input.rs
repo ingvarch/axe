@@ -103,6 +103,39 @@ impl AppState {
             return;
         }
 
+        // SSH host finder overlay intercepts all keys when open.
+        if let Some(ref mut finder) = self.ssh_host_finder {
+            match key.code {
+                KeyCode::Esc => {
+                    self.ssh_host_finder = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(host) = finder.selected_host().cloned() {
+                        self.ssh_host_finder = None;
+                        // TODO: Phase 4 — self.spawn_ssh_tab(host);
+                        log::info!(
+                            "SSH connect to: {}@{}:{}",
+                            host.user,
+                            host.hostname,
+                            host.port
+                        );
+                    }
+                }
+                KeyCode::Up => finder.move_up(),
+                KeyCode::Down => finder.move_down(),
+                KeyCode::PageUp => {
+                    finder.move_page_up(crate::ssh_host_finder::SSH_FINDER_PAGE_SIZE)
+                }
+                KeyCode::PageDown => {
+                    finder.move_page_down(crate::ssh_host_finder::SSH_FINDER_PAGE_SIZE)
+                }
+                KeyCode::Backspace => finder.input_backspace(),
+                KeyCode::Char(c) => finder.input_char(c),
+                _ => {}
+            }
+            return;
+        }
+
         // Project search overlay intercepts all keys when open.
         if let Some(ref mut search) = self.project_search {
             match (key.modifiers, key.code) {

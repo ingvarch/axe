@@ -20,6 +20,9 @@ pub struct AppConfig {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    /// SSH remote host configurations.
+    #[serde(default)]
+    pub ssh: SshConfig,
     /// User-configured keybinding overrides.
     ///
     /// Maps key combo strings (e.g., `"ctrl+q"`) to command names
@@ -144,6 +147,31 @@ impl Default for UiConfig {
             border_style: default_border_style(),
         }
     }
+}
+
+/// SSH remote host configurations.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SshConfig {
+    /// Configured SSH hosts.
+    #[serde(default)]
+    pub hosts: Vec<SshHostEntry>,
+}
+
+/// Configuration for a single SSH host.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SshHostEntry {
+    /// Display name / alias for the host.
+    pub name: String,
+    /// Hostname or IP address.
+    pub hostname: String,
+    /// SSH port (default: 22).
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    /// Username for authentication.
+    pub user: String,
+    /// Path to identity file (private key).
+    #[serde(default)]
+    pub identity_file: Option<String>,
 }
 
 /// Configuration for a single LSP server.
@@ -288,6 +316,9 @@ fn default_border_style() -> String {
 }
 fn default_sort_order() -> String {
     "directories_first".to_string()
+}
+fn default_ssh_port() -> u16 {
+    22
 }
 
 impl AppConfig {
@@ -664,5 +695,52 @@ args = ["--stdio"]
         assert!(config.command.is_empty());
         assert!(config.args.is_empty());
         assert!(config.init_options.is_none());
+    }
+
+    // --- SSH config ---
+
+    #[test]
+    fn default_config_has_empty_ssh_hosts() {
+        let config = AppConfig::default();
+        assert!(config.ssh.hosts.is_empty());
+    }
+
+    #[test]
+    fn parse_ssh_hosts_from_toml() {
+        let toml_str = r#"
+[[ssh.hosts]]
+name = "prod"
+hostname = "192.168.1.10"
+user = "deploy"
+port = 2222
+identity_file = "~/.ssh/id_prod"
+
+[[ssh.hosts]]
+name = "staging"
+hostname = "staging.example.com"
+user = "admin"
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse SSH config");
+        assert_eq!(config.ssh.hosts.len(), 2);
+        assert_eq!(config.ssh.hosts[0].name, "prod");
+        assert_eq!(config.ssh.hosts[0].hostname, "192.168.1.10");
+        assert_eq!(config.ssh.hosts[0].user, "deploy");
+        assert_eq!(config.ssh.hosts[0].port, 2222);
+        assert_eq!(
+            config.ssh.hosts[0].identity_file.as_deref(),
+            Some("~/.ssh/id_prod")
+        );
+        assert_eq!(config.ssh.hosts[1].name, "staging");
+        assert_eq!(config.ssh.hosts[1].port, 22); // default
+        assert!(config.ssh.hosts[1].identity_file.is_none());
+    }
+
+    #[test]
+    fn parse_ssh_empty_section_returns_defaults() {
+        let toml_str = r#"
+[ssh]
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse empty SSH section");
+        assert!(config.ssh.hosts.is_empty());
     }
 }

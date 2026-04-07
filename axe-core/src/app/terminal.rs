@@ -82,6 +82,18 @@ impl AppState {
         }
     }
 
+    /// Opens the SSH Host Finder overlay by parsing SSH configs and creating the finder.
+    pub(super) fn open_ssh_host_finder(&mut self) {
+        let ssh_config_path = crate::ssh_host::default_ssh_config_path();
+        let ssh_hosts = ssh_config_path
+            .as_deref()
+            .map(crate::ssh_host::parse_ssh_config)
+            .unwrap_or_default();
+        let axe_hosts = crate::ssh_host::hosts_from_axe_config(&self.config);
+        let merged = crate::ssh_host::merge_hosts(ssh_hosts, axe_hosts);
+        self.ssh_host_finder = Some(crate::ssh_host_finder::SshHostFinder::new(merged));
+    }
+
     /// Creates a new terminal tab and focuses it.
     ///
     /// No-op if the terminal panel is hidden — the user should toggle the panel first.

@@ -10,5 +10,8 @@ anyhow = "1"
 crossterm = "0.29"
 log = "0.4"
 portable-pty = "0.9"
+russh = "0.60"
 serde = { version = "1", features = ["derive"] }
+ssh-key = "0.6"
+tokio = { version = "1", features = ["sync", "rt"] }
 vte = "0.15"

@@ -737,6 +737,9 @@ impl AppState {
                     }
                 }
             }
+            Command::OpenSshHostFinder => {
+                self.open_ssh_host_finder();
+            }
         }
         // Auto-promote preview buffer if user started editing it.
         self.buffer_manager.auto_promote_if_modified();

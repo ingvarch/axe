@@ -232,6 +232,8 @@ pub enum Command {
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
     GoToLine,
+    /// Open the SSH Host Finder overlay (Ctrl+Shift+S).
+    OpenSshHostFinder,
 }
 
 #[cfg(test)]
