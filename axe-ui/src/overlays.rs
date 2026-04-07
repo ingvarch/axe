@@ -329,6 +329,15 @@ pub(crate) const HELP_TERMINAL: HelpSection = HelpSection {
     ],
 };
 
+pub(crate) const HELP_SSH: HelpSection = HelpSection {
+    title: "SSH",
+    entries: &[HelpEntry {
+        fallback_key: None,
+        primary_key: "Ctrl+Shift+S",
+        description: "SSH Host Finder",
+    }],
+};
+
 pub(crate) const HELP_CLOSE: HelpSection = HelpSection {
     title: "",
     entries: &[
@@ -351,6 +360,7 @@ pub(crate) const HELP_SECTIONS: &[&HelpSection] = &[
     &HELP_TABS,
     &HELP_EDITOR,
     &HELP_TERMINAL,
+    &HELP_SSH,
     &HELP_CLOSE,
 ];
 
