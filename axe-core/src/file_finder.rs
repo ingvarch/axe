@@ -12,6 +12,9 @@ use nucleo_matcher::{Matcher, Utf32Str};
 
 use crate::fuzzy::{FilteredItem, MAX_RESULTS};
 
+/// Default number of items to skip when using PageUp/PageDown in the file finder.
+pub const FILE_FINDER_PAGE_SIZE: usize = 10;
+
 /// A single file entry in the finder.
 #[derive(Debug, Clone)]
 pub struct FileFinderItem {
@@ -58,6 +61,10 @@ impl FileFinder {
                 continue;
             }
             let abs = entry.into_path();
+            // Skip VCS internals (.git directory contents).
+            if abs.components().any(|c| c.as_os_str() == ".git") {
+                continue;
+            }
             if let Ok(rel) = abs.strip_prefix(root) {
                 let relative_path = rel.to_string_lossy().to_string();
                 items.push(FileFinderItem {
@@ -177,6 +184,22 @@ impl FileFinder {
         } else {
             self.selected += 1;
         }
+    }
+
+    /// Moves selection up by `page_size` items, clamping to the first item.
+    pub fn move_page_up(&mut self, page_size: usize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        self.selected = self.selected.saturating_sub(page_size);
+    }
+
+    /// Moves selection down by `page_size` items, clamping to the last item.
+    pub fn move_page_down(&mut self, page_size: usize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + page_size).min(self.filtered.len() - 1);
     }
 
     /// Returns the absolute path of the currently selected item, if any.
@@ -478,5 +501,107 @@ mod tests {
         let finder = FileFinder::new(dir.path());
         assert!(finder.items.is_empty());
         assert!(finder.filtered.is_empty());
+    }
+
+    #[test]
+    fn git_directory_files_excluded() {
+        let dir = TempDir::new().expect("create temp dir");
+        // Create .git directory with internal files (simulating a git repo)
+        fs::create_dir_all(dir.path().join(".git/objects")).expect("create .git/objects");
+        fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+        fs::write(dir.path().join(".git/config"), "").expect("write git config");
+        // Create a normal project file
+        fs::write(dir.path().join("main.rs"), "").expect("write main.rs");
+
+        let finder = FileFinder::new(dir.path());
+        let paths: Vec<&str> = finder
+            .items
+            .iter()
+            .map(|i| i.relative_path.as_str())
+            .collect();
+        assert!(
+            paths.contains(&"main.rs"),
+            "project files should be present"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains(".git/")),
+            "files inside .git/ should be excluded, but found: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    fn dotfiles_are_included() {
+        let dir = setup_temp_dir(&[".env", ".gitignore", "src/main.rs"]);
+        let finder = FileFinder::new(dir.path());
+        let paths: Vec<&str> = finder
+            .items
+            .iter()
+            .map(|i| i.relative_path.as_str())
+            .collect();
+        assert!(paths.contains(&".env"), ".env should be included");
+        assert!(
+            paths.contains(&".gitignore"),
+            ".gitignore should be included"
+        );
+    }
+
+    #[test]
+    fn move_page_down_advances_by_page_size() {
+        let files: Vec<String> = (0..20).map(|i| format!("file{i:02}.txt")).collect();
+        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+        let dir = setup_temp_dir(&file_refs);
+        let mut finder = FileFinder::new(dir.path());
+        assert_eq!(finder.selected, 0);
+        finder.move_page_down(5);
+        assert_eq!(finder.selected, 5);
+    }
+
+    #[test]
+    fn move_page_down_clamps_to_last() {
+        let dir = setup_temp_dir(&["a.txt", "b.txt", "c.txt"]);
+        let mut finder = FileFinder::new(dir.path());
+        finder.move_page_down(10);
+        assert_eq!(finder.selected, 2);
+    }
+
+    #[test]
+    fn move_page_up_retreats_by_page_size() {
+        let files: Vec<String> = (0..20).map(|i| format!("file{i:02}.txt")).collect();
+        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+        let dir = setup_temp_dir(&file_refs);
+        let mut finder = FileFinder::new(dir.path());
+        finder.selected = 10;
+        finder.move_page_up(5);
+        assert_eq!(finder.selected, 5);
+    }
+
+    #[test]
+    fn move_page_up_clamps_to_zero() {
+        let dir = setup_temp_dir(&["a.txt", "b.txt", "c.txt"]);
+        let mut finder = FileFinder::new(dir.path());
+        finder.selected = 2;
+        finder.move_page_up(10);
+        assert_eq!(finder.selected, 0);
+    }
+
+    #[test]
+    fn move_page_down_on_empty_is_noop() {
+        let dir = setup_temp_dir(&["a.txt"]);
+        let mut finder = FileFinder::new(dir.path());
+        finder.query = "zzzzz_nonexistent".to_string();
+        finder.update_matches();
+        assert!(finder.filtered.is_empty());
+        finder.move_page_down(10); // Should not panic.
+    }
+
+    #[test]
+    fn move_page_up_on_empty_is_noop() {
+        let dir = setup_temp_dir(&["a.txt"]);
+        let mut finder = FileFinder::new(dir.path());
+        finder.query = "zzzzz_nonexistent".to_string();
+        finder.update_matches();
+        assert!(finder.filtered.is_empty());
+        finder.move_page_up(10); // Should not panic.
     }
 }

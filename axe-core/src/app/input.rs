@@ -219,6 +219,10 @@ impl AppState {
                 }
                 KeyCode::Up => finder.move_up(),
                 KeyCode::Down => finder.move_down(),
+                KeyCode::PageUp => finder.move_page_up(crate::file_finder::FILE_FINDER_PAGE_SIZE),
+                KeyCode::PageDown => {
+                    finder.move_page_down(crate::file_finder::FILE_FINDER_PAGE_SIZE)
+                }
                 KeyCode::Backspace => finder.input_backspace(),
                 KeyCode::Char(c) => finder.input_char(c),
                 _ => {}
