@@ -769,10 +769,7 @@ fn help_sections_contain_tab_keybindings() {
         .entries
         .iter()
         .any(|e| e.primary_key == "Ctrl+Shift+]/[");
-    let has_close_tab = HELP_TABS
-        .entries
-        .iter()
-        .any(|e| e.primary_key == "Ctrl+W");
+    let has_close_tab = HELP_TABS.entries.iter().any(|e| e.primary_key == "Ctrl+W");
     assert!(has_next_tab, "expected 'Ctrl+PgDn/PgUp' in HELP_TABS");
     assert!(has_close_tab, "expected 'Ctrl+W' in HELP_TABS");
 }

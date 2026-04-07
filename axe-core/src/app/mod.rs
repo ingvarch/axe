@@ -13,7 +13,7 @@ pub use types::*;
 
 // Re-export free functions from submodules for test access.
 #[cfg(test)]
-pub(crate) use lsp::{convert_lsp_diagnostics, uri_to_path};
+pub(crate) use lsp::convert_lsp_diagnostics;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

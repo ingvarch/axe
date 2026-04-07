@@ -599,7 +599,7 @@ mod tests {
         let last_span_for_main = spans[0]
             .iter()
             .filter(|s| s.col_start == 5 && s.col_end == 9)
-            .last();
+            .next_back();
         assert_eq!(
             last_span_for_main.map(|s| s.kind),
             Some(HighlightKind::Function),
@@ -620,7 +620,7 @@ mod tests {
         let last_span_for_foo = spans[0]
             .iter()
             .filter(|s| s.col_start == 5 && s.col_end == 8)
-            .last();
+            .next_back();
         assert_eq!(
             last_span_for_foo.map(|s| s.kind),
             Some(HighlightKind::Type),
