@@ -73,6 +73,8 @@ jobs:
             artifact: axe-linux-arm64
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
