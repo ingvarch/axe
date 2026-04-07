@@ -598,8 +598,7 @@ mod tests {
         // "main" at col 5..9 — the LAST span covering this range must be Function.
         let last_span_for_main = spans[0]
             .iter()
-            .filter(|s| s.col_start == 5 && s.col_end == 9)
-            .next_back();
+            .rfind(|s| s.col_start == 5 && s.col_end == 9);
         assert_eq!(
             last_span_for_main.map(|s| s.kind),
             Some(HighlightKind::Function),
@@ -619,8 +618,7 @@ mod tests {
         // "Foo" at col 5..8 — the LAST span must be Type.
         let last_span_for_foo = spans[0]
             .iter()
-            .filter(|s| s.col_start == 5 && s.col_end == 8)
-            .next_back();
+            .rfind(|s| s.col_start == 5 && s.col_end == 8);
         assert_eq!(
             last_span_for_foo.map(|s| s.kind),
             Some(HighlightKind::Type),
