@@ -146,7 +146,7 @@ impl FileTree {
     /// Sets the viewport height for scroll calculations.
     pub fn set_viewport_height(&mut self, h: usize) {
         self.viewport_height = h;
-        self.adjust_scroll();
+        self.clamp_scroll();
     }
 
     /// Sets the viewport width for horizontal scroll clamping.
@@ -721,6 +721,16 @@ impl FileTree {
             self.scroll = self.selected;
         } else if self.selected >= self.scroll + self.viewport_height {
             self.scroll = self.selected + 1 - self.viewport_height;
+        }
+    }
+
+    /// Clamps scroll to the valid range without snapping to the selected item.
+    ///
+    /// Used by `set_viewport_height` to avoid fighting mouse-wheel scrolling.
+    fn clamp_scroll(&mut self) {
+        let max_scroll = self.nodes.len().saturating_sub(self.viewport_height);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
         }
     }
 
@@ -1838,6 +1848,19 @@ mod tests {
         // Scroll way past the start.
         tree.scroll_by(-1000);
         assert_eq!(tree.scroll(), 0);
+    }
+
+    #[test]
+    fn set_viewport_height_does_not_undo_scroll_by() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        tree.set_viewport_height(3);
+        tree.scroll_by(2);
+        assert_eq!(tree.scroll(), 2);
+        // Simulate next frame: viewport height set again.
+        tree.set_viewport_height(3);
+        // scroll_by must NOT have been undone by set_viewport_height.
+        assert_eq!(tree.scroll(), 2);
     }
 
     #[test]
