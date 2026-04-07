@@ -546,8 +546,19 @@ impl AppState {
 
                 // Tab bar click takes priority -- its row overlaps with border tolerance.
                 if self.show_terminal {
-                    if let Some(tab_idx) = self.tab_bar_hit(col, row) {
-                        self.activate_terminal_tab(tab_idx);
+                    if let Some(hit) = self.tab_bar_hit(col, row) {
+                        match hit {
+                            axe_terminal::TabBarHit::Tab(idx) => {
+                                self.activate_terminal_tab(idx);
+                            }
+                            axe_terminal::TabBarHit::PlusButton => {
+                                if let Some(ref mgr) = self.terminal_manager {
+                                    if !mgr.is_at_tab_limit() {
+                                        self.execute(Command::NewTerminalTab);
+                                    }
+                                }
+                            }
+                        }
                         return;
                     }
                 }

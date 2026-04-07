@@ -201,11 +201,11 @@ impl AppState {
         }
     }
 
-    /// Checks if a click landed on the terminal tab bar and returns the tab index.
+    /// Checks if a click landed on the terminal tab bar and returns the hit target.
     ///
     /// The tab bar is the first row inside the terminal panel border.
     /// Returns `None` if the click is outside the tab bar or if there's no terminal manager.
-    pub(super) fn tab_bar_hit(&self, col: u16, row: u16) -> Option<usize> {
+    pub(super) fn tab_bar_hit(&self, col: u16, row: u16) -> Option<axe_terminal::TabBarHit> {
         let mgr = self.terminal_manager.as_ref()?;
         if !mgr.has_tabs() {
             return None;
@@ -214,7 +214,7 @@ impl AppState {
         if row != ty || col < tx || col >= tx + tw {
             return None;
         }
-        mgr.tab_at_x_offset((col - tx) as usize)
+        mgr.tab_bar_hit_at_x((col - tx) as usize)
     }
 
     // IMPACT ANALYSIS — screen_to_terminal_point

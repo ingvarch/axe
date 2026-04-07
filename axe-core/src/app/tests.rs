@@ -2903,7 +2903,7 @@ fn tab_bar_hit_uses_stored_area() {
     // Click on stored row at x=10 -> should hit tab 0.
     let result = app.tab_bar_hit(10, 20);
     assert!(result.is_some(), "expected hit on stored tab bar row");
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.unwrap(), axe_terminal::TabBarHit::Tab(0));
 }
 
 #[test]

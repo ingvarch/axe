@@ -111,6 +111,17 @@ fn render_terminal_tab_bar(mgr: &TerminalManager, area: Rect, frame: &mut Frame,
         }
     }
 
+    // [+] button for creating a new tab.
+    spans.push(Span::raw(" "));
+    let plus_style = if mgr.is_at_tab_limit() {
+        Style::default()
+            .fg(theme.foreground)
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::default().fg(theme.panel_border_active)
+    };
+    spans.push(Span::styled("[+]", plus_style));
+
     // Show scroll indicator when not at the bottom.
     if display_offset > 0 {
         let indicator = format!(" [{display_offset} lines up]");

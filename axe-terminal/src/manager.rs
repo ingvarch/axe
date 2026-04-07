@@ -17,6 +17,15 @@ use alacritty_terminal::selection::SelectionType;
 
 use crate::tab::TerminalTab;
 
+/// Result of a hit test on the terminal tab bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarHit {
+    /// A click on a tab at the given index.
+    Tab(usize),
+    /// A click on the [+] button.
+    PlusButton,
+}
+
 /// Size of the read buffer for the background PTY reader thread.
 const PTY_READ_BUF_SIZE: usize = 4096;
 
@@ -187,17 +196,39 @@ impl TerminalManager {
         self.tabs.iter().map(|t| t.title()).collect()
     }
 
+    /// Returns whether the tab limit has been reached.
+    pub fn is_at_tab_limit(&self) -> bool {
+        self.tabs.len() >= MAX_TERMINAL_TABS
+    }
+
     /// Returns the tab index at the given x offset within the tab bar, if any.
     ///
     /// Tab labels are formatted as `[N:title]` separated by spaces.
     pub fn tab_at_x_offset(&self, x: usize) -> Option<usize> {
+        match self.tab_bar_hit_at_x(x) {
+            Some(TabBarHit::Tab(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// Hit-tests the tab bar at the given x offset.
+    ///
+    /// Returns `Tab(i)` for a tab click, `PlusButton` for the `[+]` button,
+    /// or `None` if the click is outside all elements.
+    pub fn tab_bar_hit_at_x(&self, x: usize) -> Option<TabBarHit> {
         let mut pos = 0;
         for (i, tab) in self.tabs.iter().enumerate() {
             let label_width = format!("[{}:{}]", i + 1, tab.title()).len();
             if x >= pos && x < pos + label_width {
-                return Some(i);
+                return Some(TabBarHit::Tab(i));
             }
             pos += label_width + 1; // +1 for space separator
+        }
+        // [+] button follows after tabs: " [+]"
+        let plus_start = pos;
+        let plus_end = plus_start + "[+]".len();
+        if x >= plus_start && x < plus_end {
+            return Some(TabBarHit::PlusButton);
         }
         None
     }
@@ -919,5 +950,60 @@ mod tests {
         mgr.update_selection_active(Point::new(Line(0), Column(5)), Direction::Right);
         mgr.clear_selection_active();
         assert_eq!(mgr.copy_selection_active(), None);
+    }
+
+    #[test]
+    fn is_at_tab_limit_false_when_under() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        assert!(!mgr.is_at_tab_limit());
+    }
+
+    #[test]
+    fn is_at_tab_limit_true_when_at_max() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        for _ in 0..MAX_TERMINAL_TABS {
+            mgr.spawn_tab(80, 24, &cwd).unwrap();
+        }
+        assert!(mgr.is_at_tab_limit());
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_tab() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        assert_eq!(mgr.tab_bar_hit_at_x(0), Some(TabBarHit::Tab(0)));
+        assert_eq!(mgr.tab_bar_hit_at_x(1), Some(TabBarHit::Tab(0)));
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_plus_button() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        // [+] starts after the tab label + space
+        let label_len = format!("[1:{}]", mgr.tabs[0].title()).len();
+        let plus_start = label_len + 1; // +1 for space separator
+        assert_eq!(
+            mgr.tab_bar_hit_at_x(plus_start),
+            Some(TabBarHit::PlusButton)
+        );
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_none_outside() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        let label_len = format!("[1:{}]", mgr.tabs[0].title()).len();
+        // Past [+] button: label + space + "[+]" = label_len + 1 + 3
+        let past_end = label_len + 1 + 3;
+        assert_eq!(mgr.tab_bar_hit_at_x(past_end), None);
     }
 }
