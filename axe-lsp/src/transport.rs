@@ -238,4 +238,186 @@ mod tests {
         let json = serde_json::to_value(&id).expect("serialize");
         assert_eq!(json, serde_json::json!("abc-123"));
     }
+
+    #[test]
+    fn request_id_number_serialization_roundtrip() {
+        let id = RequestId::Number(42);
+        let json = serde_json::to_string(&id).unwrap();
+        let deserialized: RequestId = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RequestId::Number(42));
+    }
+
+    #[test]
+    fn request_id_string_serialization_roundtrip() {
+        let id = RequestId::String("req-001".to_string());
+        let json = serde_json::to_string(&id).unwrap();
+        let deserialized: RequestId = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RequestId::String("req-001".to_string()));
+    }
+
+    #[test]
+    fn request_id_equality() {
+        assert_eq!(RequestId::Number(1), RequestId::Number(1));
+        assert_ne!(RequestId::Number(1), RequestId::Number(2));
+        assert_eq!(
+            RequestId::String("a".to_string()),
+            RequestId::String("a".to_string())
+        );
+        assert_ne!(RequestId::Number(1), RequestId::String("1".to_string()));
+    }
+
+    #[test]
+    fn request_id_hash_consistency() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(RequestId::Number(1));
+        set.insert(RequestId::Number(1)); // duplicate
+        set.insert(RequestId::String("a".to_string()));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn json_rpc_error_serialization() {
+        let error = JsonRpcError {
+            code: -32601,
+            message: "Method not found".to_string(),
+            data: Some(serde_json::json!({"detail": "unknown method"})),
+        };
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["code"], -32601);
+        assert_eq!(json["message"], "Method not found");
+        assert_eq!(json["data"]["detail"], "unknown method");
+    }
+
+    #[test]
+    fn json_rpc_error_without_data_omits_field() {
+        let error = JsonRpcError {
+            code: -32600,
+            message: "Invalid Request".to_string(),
+            data: None,
+        };
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["code"], -32600);
+        assert!(json.get("data").is_none());
+    }
+
+    #[test]
+    fn json_rpc_error_deserialization() {
+        let json = r#"{"code": -32700, "message": "Parse error"}"#;
+        let error: JsonRpcError = serde_json::from_str(json).unwrap();
+        assert_eq!(error.code, -32700);
+        assert_eq!(error.message, "Parse error");
+        assert!(error.data.is_none());
+    }
+
+    #[test]
+    fn make_request_sets_all_fields() {
+        let msg = make_request(7, "textDocument/hover", serde_json::json!({"line": 5}));
+        assert_eq!(msg.jsonrpc, "2.0");
+        assert_eq!(msg.id, Some(RequestId::Number(7)));
+        assert_eq!(msg.method.as_deref(), Some("textDocument/hover"));
+        assert_eq!(msg.params, Some(serde_json::json!({"line": 5})));
+        assert!(msg.result.is_none());
+        assert!(msg.error.is_none());
+    }
+
+    #[test]
+    fn make_notification_sets_all_fields() {
+        let msg = make_notification(
+            "textDocument/didSave",
+            serde_json::json!({"uri": "file:///a"}),
+        );
+        assert_eq!(msg.jsonrpc, "2.0");
+        assert!(msg.id.is_none());
+        assert_eq!(msg.method.as_deref(), Some("textDocument/didSave"));
+        assert_eq!(msg.params, Some(serde_json::json!({"uri": "file:///a"})));
+        assert!(msg.result.is_none());
+        assert!(msg.error.is_none());
+    }
+
+    #[test]
+    fn encode_skips_none_fields() {
+        let msg = make_notification("test", serde_json::json!(null));
+        let encoded = encode_message(&msg).unwrap();
+        let text = String::from_utf8(encoded).unwrap();
+        let body = text.split_once("\r\n\r\n").unwrap().1;
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        // id should not be present in serialized form
+        assert!(parsed.get("id").is_none());
+        assert!(parsed.get("result").is_none());
+        assert!(parsed.get("error").is_none());
+    }
+
+    #[test]
+    fn read_ignores_content_type_header() {
+        // LSP spec allows Content-Type header alongside Content-Length.
+        let body = r#"{"jsonrpc":"2.0","method":"test"}"#;
+        let raw = format!(
+            "Content-Length: {}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let mut reader = Cursor::new(raw.into_bytes());
+        let msg = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(msg.method.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn read_errors_on_invalid_content_length_value() {
+        let data = b"Content-Length: not_a_number\r\n\r\n{}";
+        let mut reader = Cursor::new(data.to_vec());
+        let result = read_message(&mut reader);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_errors_on_invalid_json_body() {
+        let body = b"this is not json";
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut data = header.into_bytes();
+        data.extend_from_slice(body);
+        let mut reader = Cursor::new(data);
+        let result = read_message(&mut reader);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_decode_response_message() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::Number(99)),
+            method: None,
+            params: None,
+            result: Some(serde_json::json!({"items": []})),
+            error: None,
+        };
+        let encoded = encode_message(&msg).unwrap();
+        let mut reader = Cursor::new(encoded);
+        let decoded = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(decoded.id, Some(RequestId::Number(99)));
+        assert!(decoded.method.is_none());
+        assert_eq!(decoded.result, Some(serde_json::json!({"items": []})));
+    }
+
+    #[test]
+    fn encode_decode_error_response() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::Number(3)),
+            method: None,
+            params: None,
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: "Method not found".to_string(),
+                data: None,
+            }),
+        };
+        let encoded = encode_message(&msg).unwrap();
+        let mut reader = Cursor::new(encoded);
+        let decoded = read_message(&mut reader).unwrap().unwrap();
+        let error = decoded.error.unwrap();
+        assert_eq!(error.code, -32601);
+        assert_eq!(error.message, "Method not found");
+    }
 }

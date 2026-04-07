@@ -159,4 +159,50 @@ mod tests {
             Some("rust")
         );
     }
+
+    #[test]
+    fn dotfile_without_extension_returns_none() {
+        assert_eq!(language_id_for_path(Path::new(".gitignore")), None);
+        assert_eq!(language_id_for_path(Path::new(".env")), None);
+    }
+
+    #[test]
+    fn multiple_dots_in_filename_uses_last_extension() {
+        assert_eq!(
+            language_id_for_path(Path::new("my.component.tsx")),
+            Some("typescript")
+        );
+        assert_eq!(language_id_for_path(Path::new("archive.tar.gz")), None);
+        assert_eq!(
+            language_id_for_path(Path::new("config.backup.json")),
+            Some("json")
+        );
+    }
+
+    #[test]
+    fn extension_is_case_sensitive() {
+        // Rust's Path::extension preserves case, and our match is lowercase-only.
+        assert_eq!(language_id_for_path(Path::new("Main.RS")), None);
+        assert_eq!(language_id_for_path(Path::new("App.PY")), None);
+        assert_eq!(language_id_for_path(Path::new("index.HTML")), None);
+    }
+
+    #[test]
+    fn empty_path_returns_none() {
+        assert_eq!(language_id_for_path(Path::new("")), None);
+    }
+
+    #[test]
+    fn directory_like_path_no_extension_returns_none() {
+        assert_eq!(language_id_for_path(Path::new("/usr/bin/")), None);
+    }
+
+    #[test]
+    fn hidden_file_with_known_extension() {
+        assert_eq!(language_id_for_path(Path::new(".hidden.rs")), Some("rust"));
+        assert_eq!(
+            language_id_for_path(Path::new(".config.json")),
+            Some("json")
+        );
+    }
 }

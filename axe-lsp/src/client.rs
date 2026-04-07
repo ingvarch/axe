@@ -599,4 +599,192 @@ mod tests {
             _ => panic!("Expected ServerNotification event"),
         }
     }
+
+    #[test]
+    fn classify_malformed_message_no_method_no_id() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: None,
+            params: None,
+            result: None,
+            error: None,
+        };
+        let event = classify_message(msg, "python");
+        match event {
+            LspEvent::ServerCrashed {
+                language_id, error, ..
+            } => {
+                assert_eq!(language_id, "python");
+                assert!(error.contains("malformed"));
+            }
+            _ => panic!("Expected ServerCrashed for malformed message"),
+        }
+    }
+
+    #[test]
+    fn classify_server_request_with_id_and_method_treated_as_notification() {
+        // Server requests have both id and method. We treat them as notifications.
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::Number(100)),
+            method: Some("window/showMessageRequest".to_string()),
+            params: Some(serde_json::json!({"type": 1, "message": "hello"})),
+            result: None,
+            error: None,
+        };
+        let event = classify_message(msg, "rust");
+        match event {
+            LspEvent::ServerNotification { method, params } => {
+                assert_eq!(method, "window/showMessageRequest");
+                assert_eq!(params["message"], "hello");
+            }
+            _ => panic!("Expected ServerNotification for server request"),
+        }
+    }
+
+    #[test]
+    fn classify_response_with_null_result() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::Number(5)),
+            method: None,
+            params: None,
+            result: None, // No result field — should default to null
+            error: None,
+        };
+        let event = classify_message(msg, "go");
+        match event {
+            LspEvent::Response { id, result } => {
+                assert_eq!(id, RequestId::Number(5));
+                assert_eq!(result.unwrap(), serde_json::Value::Null);
+            }
+            _ => panic!("Expected Response event"),
+        }
+    }
+
+    #[test]
+    fn classify_notification_without_params() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: Some("$/progress".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        let event = classify_message(msg, "rust");
+        match event {
+            LspEvent::ServerNotification { method, params } => {
+                assert_eq!(method, "$/progress");
+                assert_eq!(params, serde_json::Value::Null);
+            }
+            _ => panic!("Expected ServerNotification"),
+        }
+    }
+
+    #[test]
+    fn classify_response_with_string_id() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::String("uuid-abc".to_string())),
+            method: None,
+            params: None,
+            result: Some(serde_json::json!(42)),
+            error: None,
+        };
+        let event = classify_message(msg, "rust");
+        match event {
+            LspEvent::Response { id, result } => {
+                assert_eq!(id, RequestId::String("uuid-abc".to_string()));
+                assert_eq!(result.unwrap(), serde_json::json!(42));
+            }
+            _ => panic!("Expected Response event"),
+        }
+    }
+
+    #[test]
+    fn pending_request_kind_all_variants_distinct() {
+        let variants = [
+            PendingRequestKind::Completion,
+            PendingRequestKind::Definition,
+            PendingRequestKind::References,
+            PendingRequestKind::Hover,
+            PendingRequestKind::Formatting,
+        ];
+        // Each variant should not equal any other variant.
+        for (i, a) in variants.iter().enumerate() {
+            for (j, b) in variants.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pending_request_kind_clone() {
+        let original = PendingRequestKind::Hover;
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn initialize_params_has_diagnostics_capabilities() {
+        let root = Url::parse("file:///tmp/project").unwrap();
+        let params = initialize_params(&root);
+        let diagnostics = &params["capabilities"]["textDocument"]["publishDiagnostics"];
+        assert!(diagnostics.is_object());
+        assert_eq!(diagnostics["relatedInformation"], true);
+    }
+
+    #[test]
+    fn initialize_params_has_sync_capabilities() {
+        let root = Url::parse("file:///tmp/project").unwrap();
+        let params = initialize_params(&root);
+        let sync = &params["capabilities"]["textDocument"]["synchronization"];
+        assert!(sync.is_object());
+        assert_eq!(sync["didSave"], true);
+        assert_eq!(sync["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn lsp_event_debug_format() {
+        // Verify Debug is implemented for LspEvent variants.
+        let event = LspEvent::Initialized {
+            language_id: "rust".to_string(),
+        };
+        let debug = format!("{event:?}");
+        assert!(debug.contains("Initialized"));
+        assert!(debug.contains("rust"));
+    }
+
+    #[test]
+    fn classify_error_response_preserves_error_details() {
+        let msg = JsonRpcMessage {
+            jsonrpc: "2.0".to_string(),
+            id: Some(RequestId::Number(10)),
+            method: None,
+            params: None,
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32603,
+                message: "Internal error".to_string(),
+                data: Some(serde_json::json!({"stack": "trace here"})),
+            }),
+        };
+        let event = classify_message(msg, "rust");
+        match event {
+            LspEvent::Response { id, result } => {
+                assert_eq!(id, RequestId::Number(10));
+                let err = result.unwrap_err();
+                assert_eq!(err.code, -32603);
+                assert_eq!(err.message, "Internal error");
+                assert!(err.data.is_some());
+            }
+            _ => panic!("Expected Response with error"),
+        }
+    }
 }
