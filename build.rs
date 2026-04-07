@@ -23,7 +23,10 @@ fn main() {
         let base = base_version_from_describe(&git_describe, &pkg_version);
         format!("{base}-nightly-{hash}")
     } else if let Some(ref desc) = git_describe {
-        if desc.contains('-') {
+        if desc.starts_with('v') && !desc.contains('-') {
+            // Exactly on a tag: "v0.1.0"
+            desc.clone()
+        } else if desc.starts_with('v') && desc.contains('-') {
             // After a tag: "v0.1.0-5-gabc123" → "v0.1.0-dev.5-<hash>"
             let parts: Vec<&str> = desc.rsplitn(3, '-').collect();
             if parts.len() == 3 {
@@ -34,8 +37,8 @@ fn main() {
                 format!("v{pkg_version}-{hash}")
             }
         } else {
-            // Exactly on a tag: "v0.1.0"
-            desc.clone()
+            // No tags reachable (shallow clone): bare hash like "c6d9bc3"
+            format!("v{pkg_version}-{hash}")
         }
     } else {
         // No git info: fallback to Cargo.toml version.
