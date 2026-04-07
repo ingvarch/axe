@@ -15,6 +15,8 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 
 **This is a fun project built with 100% vibe coding.**
 
+![Axe IDE screenshot](docs/images/pic01.png)
+
 ## Features
 
 - **Three-panel layout** -- file tree, code editor, integrated terminal
