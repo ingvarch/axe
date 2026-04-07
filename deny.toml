@@ -1,0 +1,47 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = false
+no-default-features = false
+
+# Detect known vulnerabilities in dependencies
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# `instant` is unmaintained (RUSTSEC-2024-0384), but it is a transitive
+# dependency of `notify` via `notify-types` and cannot be replaced by us.
+ignore = ["RUSTSEC-2024-0384"]
+
+# Enforce license compliance (project is MIT-licensed)
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+# Detect duplicate or banned dependencies
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+# Restrict dependency sources
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
