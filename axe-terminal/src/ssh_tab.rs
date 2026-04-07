@@ -70,6 +70,7 @@ impl SshTerminalTab {
         rows: u16,
         user: &str,
         hostname: &str,
+        port: u16,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<SshInput>) {
         let size = TermSize::new(cols, rows);
         let (pty_event_tx, pty_event_rx) = mpsc::channel();
@@ -84,7 +85,7 @@ impl SshTerminalTab {
 
         let title = format!("{user}@{hostname}");
 
-        let tab = Self {
+        let mut tab = Self {
             title,
             term,
             pty_event_rx,
@@ -94,6 +95,10 @@ impl SshTerminalTab {
             input_tx,
             state: SshConnectionState::Connecting,
         };
+
+        // Show a connecting message in the terminal grid.
+        let msg = format!("Connecting to {user}@{hostname}:{port}...\r\n");
+        tab.processor.advance(&mut tab.term, msg.as_bytes());
 
         (tab, input_rx)
     }
@@ -119,10 +124,8 @@ impl SshTerminalTab {
                 PtyEvent::Write(s) => {
                     let _ = self.input_tx.send(SshInput::Data(s.into_bytes()));
                 }
-                PtyEvent::Title(s) => {
-                    // Preserve the user@host prefix, append shell title.
-                    let base = self.title.split(" - ").next().unwrap_or(&self.title);
-                    self.title = format!("{base} - {s}");
+                PtyEvent::Title(_) => {
+                    // Ignore remote title changes — keep user@host as tab title.
                 }
                 PtyEvent::Bell => {}
             }
@@ -220,21 +223,21 @@ mod tests {
 
     #[test]
     fn new_creates_tab_in_connecting_state() {
-        let (tab, _rx) = SshTerminalTab::new(80, 24, "user", "example.com");
+        let (tab, _rx) = SshTerminalTab::new(80, 24, "user", "example.com", 22);
         assert_eq!(tab.state, SshConnectionState::Connecting);
         assert_eq!(tab.title(), "user@example.com");
     }
 
     #[test]
     fn write_ignored_when_not_connected() {
-        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         // State is Connecting, write should be a no-op.
         assert!(tab.write(b"hello").is_ok());
     }
 
     #[test]
     fn write_sends_data_when_connected() {
-        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         tab.state = SshConnectionState::Connected;
         tab.write(b"hello").unwrap();
         match rx.try_recv() {
@@ -245,7 +248,7 @@ mod tests {
 
     #[test]
     fn resize_sends_resize_input() {
-        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         tab.resize(120, 40).unwrap();
         match rx.try_recv() {
             Ok(SshInput::Resize(cols, rows)) => {
@@ -258,14 +261,14 @@ mod tests {
 
     #[test]
     fn resize_same_size_is_noop() {
-        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         tab.resize(80, 24).unwrap();
         assert!(rx.try_recv().is_err(), "No event for same-size resize");
     }
 
     #[test]
     fn kill_sends_close_and_disconnects() {
-        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         tab.kill().unwrap();
         assert_eq!(
             tab.state,
@@ -276,7 +279,7 @@ mod tests {
 
     #[test]
     fn is_alive_in_various_states() {
-        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         assert!(tab.is_alive()); // Connecting
 
         tab.state = SshConnectionState::Connected;
@@ -291,7 +294,7 @@ mod tests {
 
     #[test]
     fn send_password_sends_input() {
-        let (tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (tab, mut rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         tab.send_password("secret".to_string());
         match rx.try_recv() {
             Ok(SshInput::Password(pw)) => assert_eq!(pw, "secret"),
@@ -301,7 +304,7 @@ mod tests {
 
     #[test]
     fn process_output_updates_terminal_grid() {
-        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host");
+        let (mut tab, _rx) = SshTerminalTab::new(80, 24, "user", "host", 22);
         // Feed some output — should not panic.
         tab.process_output(b"Hello, SSH!\r\n");
     }

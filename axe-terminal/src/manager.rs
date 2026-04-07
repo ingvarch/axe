@@ -278,8 +278,13 @@ impl TerminalManager {
 
         let connect_params = crate::ssh_connect::SshConnectParams { tab_id, ..params };
 
-        let (tab, input_rx) =
-            SshTerminalTab::new(cols, rows, &connect_params.user, &connect_params.hostname);
+        let (tab, input_rx) = SshTerminalTab::new(
+            cols,
+            rows,
+            &connect_params.user,
+            &connect_params.hostname,
+            connect_params.port,
+        );
 
         self.tabs.push(ManagedTab::Ssh(tab));
         self.tab_ids.push(tab_id);
