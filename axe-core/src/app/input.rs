@@ -112,13 +112,7 @@ impl AppState {
                 KeyCode::Enter => {
                     if let Some(host) = finder.selected_host().cloned() {
                         self.ssh_host_finder = None;
-                        // TODO: Phase 4 — self.spawn_ssh_tab(host);
-                        log::info!(
-                            "SSH connect to: {}@{}:{}",
-                            host.user,
-                            host.hostname,
-                            host.port
-                        );
+                        self.spawn_ssh_tab(host);
                     }
                 }
                 KeyCode::Up => finder.move_up(),

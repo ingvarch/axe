@@ -18,6 +18,7 @@ use alacritty_terminal::Term;
 
 use crate::PtyEventListener;
 
+use crate::ssh_tab::{SshConnectionState, SshTerminalTab};
 use crate::tab::TerminalTab;
 
 /// Result of a hit test on the terminal tab bar.
@@ -33,96 +34,113 @@ pub enum TabBarHit {
 pub enum ManagedTab {
     /// A local terminal tab backed by a PTY.
     Local(TerminalTab),
+    /// A remote terminal tab backed by an SSH connection.
+    Ssh(SshTerminalTab),
 }
 
 impl ManagedTab {
     pub fn title(&self) -> &str {
         match self {
             Self::Local(tab) => tab.title(),
+            Self::Ssh(tab) => tab.title(),
         }
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
         match self {
             Self::Local(tab) => tab.write(data),
+            Self::Ssh(tab) => tab.write(data),
         }
     }
 
     pub fn process_output(&mut self, data: &[u8]) {
         match self {
             Self::Local(tab) => tab.process_output(data),
+            Self::Ssh(tab) => tab.process_output(data),
         }
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
         match self {
             Self::Local(tab) => tab.resize(cols, rows),
+            Self::Ssh(tab) => tab.resize(cols, rows),
         }
     }
 
     pub fn term(&self) -> &Term<PtyEventListener> {
         match self {
             Self::Local(tab) => tab.term(),
+            Self::Ssh(tab) => tab.term(),
         }
     }
 
     pub fn term_mut(&mut self) -> &mut Term<PtyEventListener> {
         match self {
             Self::Local(tab) => tab.term_mut(),
+            Self::Ssh(tab) => tab.term_mut(),
         }
     }
 
     pub fn kill(&mut self) -> Result<()> {
         match self {
             Self::Local(tab) => tab.kill(),
+            Self::Ssh(tab) => tab.kill(),
         }
     }
 
     pub fn scroll(&mut self, scroll: Scroll) {
         match self {
             Self::Local(tab) => tab.scroll(scroll),
+            Self::Ssh(tab) => tab.scroll(scroll),
         }
     }
 
     pub fn display_offset(&self) -> usize {
         match self {
             Self::Local(tab) => tab.display_offset(),
+            Self::Ssh(tab) => tab.display_offset(),
         }
     }
 
     pub fn is_alive(&mut self) -> bool {
         match self {
             Self::Local(tab) => tab.is_alive(),
+            Self::Ssh(tab) => tab.is_alive(),
         }
     }
 
     pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Direction) {
         match self {
             Self::Local(tab) => tab.start_selection(ty, point, side),
+            Self::Ssh(tab) => tab.start_selection(ty, point, side),
         }
     }
 
     pub fn update_selection(&mut self, point: Point, side: Direction) {
         match self {
             Self::Local(tab) => tab.update_selection(point, side),
+            Self::Ssh(tab) => tab.update_selection(point, side),
         }
     }
 
     pub fn selection_to_string(&self) -> Option<String> {
         match self {
             Self::Local(tab) => tab.selection_to_string(),
+            Self::Ssh(tab) => tab.selection_to_string(),
         }
     }
 
     pub fn clear_selection(&mut self) {
         match self {
             Self::Local(tab) => tab.clear_selection(),
+            Self::Ssh(tab) => tab.clear_selection(),
         }
     }
 
     pub fn has_selection(&self) -> bool {
         match self {
             Self::Local(tab) => tab.has_selection(),
+            Self::Ssh(tab) => tab.has_selection(),
         }
     }
 }
@@ -142,6 +160,12 @@ pub enum TermEvent {
     Output(usize, Vec<u8>),
     /// The child process for the given tab has exited.
     ChildExited(usize),
+    /// SSH connection established successfully.
+    SshConnected(usize),
+    /// SSH authentication requires a password (agent + key auth failed).
+    SshNeedsPassword(usize),
+    /// SSH connection or auth error.
+    SshError(usize, String),
 }
 
 /// Manages terminal tabs and their background I/O threads.
@@ -234,6 +258,37 @@ impl TerminalManager {
         let idx = self.spawn_tab_with_shell(cols, rows, cwd, shell)?;
         self.active = idx;
         Ok(())
+    }
+
+    /// Spawns an SSH terminal tab and starts the async connection task.
+    ///
+    /// Returns the index of the new tab. The tab starts in `Connecting` state.
+    pub fn spawn_ssh_tab(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        params: crate::ssh_connect::SshConnectParams,
+    ) -> Result<usize> {
+        if self.tabs.len() >= MAX_TERMINAL_TABS {
+            anyhow::bail!("Maximum of {MAX_TERMINAL_TABS} terminal tabs reached");
+        }
+
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let connect_params = crate::ssh_connect::SshConnectParams { tab_id, ..params };
+
+        let (tab, input_rx) =
+            SshTerminalTab::new(cols, rows, &connect_params.user, &connect_params.hostname);
+
+        self.tabs.push(ManagedTab::Ssh(tab));
+        self.tab_ids.push(tab_id);
+
+        let tx = self.event_tx.clone();
+        crate::ssh_connect::spawn_ssh_task(connect_params, tx, input_rx);
+
+        let idx = self.tabs.len() - 1;
+        Ok(idx)
     }
 
     /// Closes the tab at the given index, killing its child process.
@@ -360,6 +415,30 @@ impl TerminalManager {
                     if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
                         if !exited_indices.contains(&idx) {
                             exited_indices.push(idx);
+                        }
+                    }
+                }
+                TermEvent::SshConnected(tab_id) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::Connected;
+                            log::info!("SSH connected (tab_id={tab_id})");
+                        }
+                    }
+                }
+                TermEvent::SshNeedsPassword(tab_id) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::NeedsPassword;
+                            log::info!("SSH needs password (tab_id={tab_id})");
+                        }
+                    }
+                }
+                TermEvent::SshError(tab_id, ref msg) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::Disconnected(msg.clone());
+                            log::warn!("SSH error (tab_id={tab_id}): {msg}");
                         }
                     }
                 }

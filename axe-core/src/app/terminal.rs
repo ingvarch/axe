@@ -82,6 +82,43 @@ impl AppState {
         }
     }
 
+    /// Spawns an SSH terminal tab for the given host and focuses it.
+    pub(super) fn spawn_ssh_tab(&mut self, host: crate::ssh_host::SshHost) {
+        if !self.show_terminal {
+            self.show_terminal = true;
+        }
+
+        let params = axe_terminal::ssh_connect::SshConnectParams {
+            hostname: host.hostname.clone(),
+            port: host.port,
+            user: host.user.clone(),
+            identity_file: host.identity_file.clone(),
+            cols: self.last_terminal_cols,
+            rows: self.last_terminal_rows,
+            tab_id: 0, // Will be overwritten by manager.
+        };
+
+        if let Some(ref mut mgr) = self.terminal_manager {
+            match mgr.spawn_ssh_tab(self.last_terminal_cols, self.last_terminal_rows, params) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                }
+                Err(e) => log::warn!("Failed to create SSH tab: {e}"),
+            }
+        } else {
+            let mut mgr = axe_terminal::TerminalManager::new();
+            match mgr.spawn_ssh_tab(self.last_terminal_cols, self.last_terminal_rows, params) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                    self.terminal_manager = Some(mgr);
+                }
+                Err(e) => log::warn!("Failed to create SSH tab: {e}"),
+            }
+        }
+    }
+
     /// Opens the SSH Host Finder overlay by parsing SSH configs and creating the finder.
     pub(super) fn open_ssh_host_finder(&mut self) {
         let ssh_config_path = crate::ssh_host::default_ssh_config_path();
