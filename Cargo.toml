@@ -27,6 +27,7 @@ axe-config = { path = "axe-config" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+openssl = { version = "0.10", features = ["vendored"] }
 log = "0.4"
 simplelog = "0.12"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
