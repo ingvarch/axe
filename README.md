@@ -52,23 +52,67 @@ axe /path/to/dir # Open specific directory
 
 ## Keyboard Shortcuts
 
+### General
+
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+Q | Quit |
-| Tab / Shift+Tab | Cycle focus between panels |
-| Alt+1 / Alt+2 / Alt+3 | Focus Files / Editor / Terminal |
 | Ctrl+B | Toggle file tree |
-| Ctrl+\` | Toggle terminal |
-| Ctrl+Z | Zoom active panel |
+| Ctrl+T | Toggle terminal |
+| Ctrl+Shift+B | Focus file tree |
+| Ctrl+Shift+E | Focus editor |
+| Ctrl+Shift+L | Focus terminal |
+| Ctrl+Shift+M | Zoom active panel |
+| Ctrl+N | Enter resize mode |
+| F1 | Help |
+| Esc | Close overlay |
+
+### Editor
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+S | Save file |
+| Ctrl+Z | Undo |
+| Ctrl+Y / Ctrl+Shift+Z | Redo |
+| Ctrl+A | Select all |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste |
+| Ctrl+F | Search in file |
+| Ctrl+R | Find and replace |
+| Ctrl+G | Go to line |
 | Ctrl+P | Fuzzy file finder |
 | Ctrl+Shift+P | Command palette |
-| Ctrl+Shift+F | Project-wide search |
-| Ctrl+F | Search in file |
-| Ctrl+S | Save file |
-| Ctrl+W | Close buffer |
-| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous buffer |
-| Ctrl+Shift+T | New terminal tab |
-| Ctrl+R | Enter resize mode |
+| F2 / Ctrl+Shift+F | Project-wide search |
+| F12 | Go to definition |
+| Shift+F12 | Find references |
+| Ctrl+Shift+K / F4 | Show hover info |
+| Ctrl+Shift+I | Format document |
+| Ctrl+Shift+. / Ctrl+Shift+, | Next / previous diagnostic |
+
+### Tabs
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Shift+T | New tab |
+| Ctrl+W | Close tab |
+| Ctrl+Shift+] / Ctrl+Shift+[ | Next / previous tab |
+
+### File Tree (when focused)
+
+| Shortcut | Action |
+|----------|--------|
+| N | Create file |
+| Shift+N | Create directory |
+| R | Rename |
+| D | Delete |
+| Ctrl+Shift+G | Toggle gitignored files |
+| Ctrl+I | Toggle icons |
+
+### Terminal
+
+| Shortcut | Action |
+|----------|--------|
+| Shift+PageUp / Shift+PageDown | Scroll up / down |
+| Shift+Home / Shift+End | Scroll to top / bottom |
 
 ## LSP (Language Server Protocol)
 
