@@ -25,6 +25,7 @@ pub struct SshConnectParams {
     pub cols: u16,
     pub rows: u16,
     pub tab_id: usize,
+    pub connect_timeout_secs: u64,
 }
 
 /// SSH client handler required by russh.
@@ -68,10 +69,14 @@ async fn run_ssh_session(
     let config = Arc::new(russh::client::Config::default());
     let handler = SshClientHandler;
 
-    let mut session =
-        russh::client::connect(config, (params.hostname.as_str(), params.port), handler)
-            .await
-            .context("Failed to connect to SSH server")?;
+    let timeout = std::time::Duration::from_secs(params.connect_timeout_secs);
+    let mut session = tokio::time::timeout(
+        timeout,
+        russh::client::connect(config, (params.hostname.as_str(), params.port), handler),
+    )
+    .await
+    .context("SSH connection timed out")?
+    .context("Failed to connect to SSH server")?;
 
     // Try authentication methods in order.
     let authenticated = try_auth(&mut session, &params, event_tx, input_rx).await?;

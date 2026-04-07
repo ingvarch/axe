@@ -443,6 +443,9 @@ impl TerminalManager {
                     if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
                         if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
                             tab.state = SshConnectionState::Disconnected(msg.clone());
+                            let error_msg =
+                                format!("\r\n\x1b[31mError: {msg}\x1b[0m\r\n\r\nPress any key to close this tab.\r\n");
+                            tab.process_output(error_msg.as_bytes());
                             log::warn!("SSH error (tab_id={tab_id}): {msg}");
                         }
                     }

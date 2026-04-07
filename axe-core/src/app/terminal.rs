@@ -110,6 +110,7 @@ impl AppState {
             cols: self.last_terminal_cols,
             rows: self.last_terminal_rows,
             tab_id: 0, // Will be overwritten by manager.
+            connect_timeout_secs: self.config.ssh.connect_timeout,
         };
 
         if let Some(ref mut mgr) = self.terminal_manager {
@@ -131,6 +132,18 @@ impl AppState {
                 Err(e) => log::warn!("Failed to create SSH tab: {e}"),
             }
         }
+    }
+
+    /// Returns whether the active terminal tab is a disconnected SSH tab.
+    pub(super) fn is_active_ssh_tab_disconnected(&self) -> bool {
+        let Some(ref mgr) = self.terminal_manager else {
+            return false;
+        };
+        matches!(
+            mgr.active_tab(),
+            Some(axe_terminal::ManagedTab::Ssh(ref tab))
+                if matches!(tab.state, axe_terminal::ssh_tab::SshConnectionState::Disconnected(_))
+        )
     }
 
     /// Sends a password to an SSH tab for authentication.

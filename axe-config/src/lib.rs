@@ -150,11 +150,23 @@ impl Default for UiConfig {
 }
 
 /// SSH remote host configurations.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SshConfig {
+    /// Connection timeout in seconds (default: 10).
+    #[serde(default = "default_ssh_connect_timeout")]
+    pub connect_timeout: u64,
     /// Configured SSH hosts.
     #[serde(default)]
     pub hosts: Vec<SshHostEntry>,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout: default_ssh_connect_timeout(),
+            hosts: Vec::new(),
+        }
+    }
 }
 
 /// Configuration for a single SSH host.
@@ -319,6 +331,9 @@ fn default_sort_order() -> String {
 }
 fn default_ssh_port() -> u16 {
     22
+}
+fn default_ssh_connect_timeout() -> u64 {
+    10
 }
 
 impl AppConfig {
@@ -703,6 +718,7 @@ args = ["--stdio"]
     fn default_config_has_empty_ssh_hosts() {
         let config = AppConfig::default();
         assert!(config.ssh.hosts.is_empty());
+        assert_eq!(config.ssh.connect_timeout, 10);
     }
 
     #[test]
@@ -742,5 +758,16 @@ user = "admin"
 "#;
         let config = AppConfig::load_from_str(toml_str).expect("should parse empty SSH section");
         assert!(config.ssh.hosts.is_empty());
+        assert_eq!(config.ssh.connect_timeout, 10);
+    }
+
+    #[test]
+    fn parse_ssh_connect_timeout_from_toml() {
+        let toml_str = r#"
+[ssh]
+connect_timeout = 30
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse SSH timeout");
+        assert_eq!(config.ssh.connect_timeout, 30);
     }
 }

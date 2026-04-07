@@ -549,6 +549,11 @@ impl AppState {
         // splits a mouse escape, the leading Esc would be consumed while `[<65;...M` would
         // leak into the PTY as visible text.
         if matches!(self.focus, FocusTarget::Terminal(_)) && !self.show_help {
+            // If the active SSH tab is disconnected, any key closes it.
+            if self.is_active_ssh_tab_disconnected() {
+                self.close_terminal_tab();
+                return;
+            }
             if let Some(cmd) = self.keymap.resolve(&key) {
                 if cmd == Command::CloseOverlay {
                     // Esc with no overlay open -- forward to PTY.
