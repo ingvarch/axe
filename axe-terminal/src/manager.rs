@@ -14,8 +14,136 @@ use log;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Direction, Point};
 use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::Term;
 
+use crate::PtyEventListener;
+
+use crate::ssh_tab::{SshConnectionState, SshTerminalTab};
 use crate::tab::TerminalTab;
+
+/// Result of a hit test on the terminal tab bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarHit {
+    /// A click on a tab at the given index.
+    Tab(usize),
+    /// A click on the [+] button.
+    PlusButton,
+}
+
+/// A terminal tab that can be either a local PTY or a remote SSH session.
+pub enum ManagedTab {
+    /// A local terminal tab backed by a PTY.
+    Local(TerminalTab),
+    /// A remote terminal tab backed by an SSH connection.
+    Ssh(SshTerminalTab),
+}
+
+impl ManagedTab {
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Local(tab) => tab.title(),
+            Self::Ssh(tab) => tab.title(),
+        }
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.write(data),
+            Self::Ssh(tab) => tab.write(data),
+        }
+    }
+
+    pub fn process_output(&mut self, data: &[u8]) {
+        match self {
+            Self::Local(tab) => tab.process_output(data),
+            Self::Ssh(tab) => tab.process_output(data),
+        }
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.resize(cols, rows),
+            Self::Ssh(tab) => tab.resize(cols, rows),
+        }
+    }
+
+    pub fn term(&self) -> &Term<PtyEventListener> {
+        match self {
+            Self::Local(tab) => tab.term(),
+            Self::Ssh(tab) => tab.term(),
+        }
+    }
+
+    pub fn term_mut(&mut self) -> &mut Term<PtyEventListener> {
+        match self {
+            Self::Local(tab) => tab.term_mut(),
+            Self::Ssh(tab) => tab.term_mut(),
+        }
+    }
+
+    pub fn kill(&mut self) -> Result<()> {
+        match self {
+            Self::Local(tab) => tab.kill(),
+            Self::Ssh(tab) => tab.kill(),
+        }
+    }
+
+    pub fn scroll(&mut self, scroll: Scroll) {
+        match self {
+            Self::Local(tab) => tab.scroll(scroll),
+            Self::Ssh(tab) => tab.scroll(scroll),
+        }
+    }
+
+    pub fn display_offset(&self) -> usize {
+        match self {
+            Self::Local(tab) => tab.display_offset(),
+            Self::Ssh(tab) => tab.display_offset(),
+        }
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        match self {
+            Self::Local(tab) => tab.is_alive(),
+            Self::Ssh(tab) => tab.is_alive(),
+        }
+    }
+
+    pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Direction) {
+        match self {
+            Self::Local(tab) => tab.start_selection(ty, point, side),
+            Self::Ssh(tab) => tab.start_selection(ty, point, side),
+        }
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Direction) {
+        match self {
+            Self::Local(tab) => tab.update_selection(point, side),
+            Self::Ssh(tab) => tab.update_selection(point, side),
+        }
+    }
+
+    pub fn selection_to_string(&self) -> Option<String> {
+        match self {
+            Self::Local(tab) => tab.selection_to_string(),
+            Self::Ssh(tab) => tab.selection_to_string(),
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        match self {
+            Self::Local(tab) => tab.clear_selection(),
+            Self::Ssh(tab) => tab.clear_selection(),
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        match self {
+            Self::Local(tab) => tab.has_selection(),
+            Self::Ssh(tab) => tab.has_selection(),
+        }
+    }
+}
 
 /// Size of the read buffer for the background PTY reader thread.
 const PTY_READ_BUF_SIZE: usize = 4096;
@@ -32,11 +160,17 @@ pub enum TermEvent {
     Output(usize, Vec<u8>),
     /// The child process for the given tab has exited.
     ChildExited(usize),
+    /// SSH connection established successfully.
+    SshConnected(usize),
+    /// SSH authentication requires a password (agent + key auth failed).
+    SshNeedsPassword(usize),
+    /// SSH connection or auth error.
+    SshError(usize, String),
 }
 
 /// Manages terminal tabs and their background I/O threads.
 pub struct TerminalManager {
-    tabs: Vec<TerminalTab>,
+    tabs: Vec<ManagedTab>,
     active: usize,
     event_rx: Receiver<TermEvent>,
     event_tx: Sender<TermEvent>,
@@ -94,7 +228,7 @@ impl TerminalManager {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
-        self.tabs.push(tab);
+        self.tabs.push(ManagedTab::Local(tab));
         self.tab_ids.push(tab_id);
 
         let tx = self.event_tx.clone();
@@ -124,6 +258,42 @@ impl TerminalManager {
         let idx = self.spawn_tab_with_shell(cols, rows, cwd, shell)?;
         self.active = idx;
         Ok(())
+    }
+
+    /// Spawns an SSH terminal tab and starts the async connection task.
+    ///
+    /// Returns the index of the new tab. The tab starts in `Connecting` state.
+    pub fn spawn_ssh_tab(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        params: crate::ssh_connect::SshConnectParams,
+    ) -> Result<usize> {
+        if self.tabs.len() >= MAX_TERMINAL_TABS {
+            anyhow::bail!("Maximum of {MAX_TERMINAL_TABS} terminal tabs reached");
+        }
+
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let connect_params = crate::ssh_connect::SshConnectParams { tab_id, ..params };
+
+        let (tab, input_rx) = SshTerminalTab::new(
+            cols,
+            rows,
+            &connect_params.user,
+            &connect_params.hostname,
+            connect_params.port,
+        );
+
+        self.tabs.push(ManagedTab::Ssh(tab));
+        self.tab_ids.push(tab_id);
+
+        let tx = self.event_tx.clone();
+        crate::ssh_connect::spawn_ssh_task(connect_params, tx, input_rx);
+
+        let idx = self.tabs.len() - 1;
+        Ok(idx)
     }
 
     /// Closes the tab at the given index, killing its child process.
@@ -187,17 +357,39 @@ impl TerminalManager {
         self.tabs.iter().map(|t| t.title()).collect()
     }
 
+    /// Returns whether the tab limit has been reached.
+    pub fn is_at_tab_limit(&self) -> bool {
+        self.tabs.len() >= MAX_TERMINAL_TABS
+    }
+
     /// Returns the tab index at the given x offset within the tab bar, if any.
     ///
     /// Tab labels are formatted as `[N:title]` separated by spaces.
     pub fn tab_at_x_offset(&self, x: usize) -> Option<usize> {
+        match self.tab_bar_hit_at_x(x) {
+            Some(TabBarHit::Tab(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// Hit-tests the tab bar at the given x offset.
+    ///
+    /// Returns `Tab(i)` for a tab click, `PlusButton` for the `[+]` button,
+    /// or `None` if the click is outside all elements.
+    pub fn tab_bar_hit_at_x(&self, x: usize) -> Option<TabBarHit> {
         let mut pos = 0;
         for (i, tab) in self.tabs.iter().enumerate() {
             let label_width = format!("[{}:{}]", i + 1, tab.title()).len();
             if x >= pos && x < pos + label_width {
-                return Some(i);
+                return Some(TabBarHit::Tab(i));
             }
             pos += label_width + 1; // +1 for space separator
+        }
+        // [+] button follows after tabs: " [+]"
+        let plus_start = pos;
+        let plus_end = plus_start + "[+]".len();
+        if x >= plus_start && x < plus_end {
+            return Some(TabBarHit::PlusButton);
         }
         None
     }
@@ -231,6 +423,33 @@ impl TerminalManager {
                         }
                     }
                 }
+                TermEvent::SshConnected(tab_id) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::Connected;
+                            log::info!("SSH connected (tab_id={tab_id})");
+                        }
+                    }
+                }
+                TermEvent::SshNeedsPassword(tab_id) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::NeedsPassword;
+                            log::info!("SSH needs password (tab_id={tab_id})");
+                        }
+                    }
+                }
+                TermEvent::SshError(tab_id, ref msg) => {
+                    if let Some(idx) = self.tab_ids.iter().position(|&id| id == tab_id) {
+                        if let Some(ManagedTab::Ssh(ref mut tab)) = self.tabs.get_mut(idx) {
+                            tab.state = SshConnectionState::Disconnected(msg.clone());
+                            let error_msg =
+                                format!("\r\n\x1b[31mError: {msg}\x1b[0m\r\n\r\nPress any key to close this tab.\r\n");
+                            tab.process_output(error_msg.as_bytes());
+                            log::warn!("SSH error (tab_id={tab_id}): {msg}");
+                        }
+                    }
+                }
             }
         }
 
@@ -249,8 +468,13 @@ impl TerminalManager {
         Ok(())
     }
 
+    /// Returns a reference to the tabs list.
+    pub fn tabs_ref(&self) -> &[ManagedTab] {
+        &self.tabs
+    }
+
     /// Returns a reference to the currently active tab, if any.
-    pub fn active_tab(&self) -> Option<&TerminalTab> {
+    pub fn active_tab(&self) -> Option<&ManagedTab> {
         self.tabs.get(self.active)
     }
 
@@ -919,5 +1143,60 @@ mod tests {
         mgr.update_selection_active(Point::new(Line(0), Column(5)), Direction::Right);
         mgr.clear_selection_active();
         assert_eq!(mgr.copy_selection_active(), None);
+    }
+
+    #[test]
+    fn is_at_tab_limit_false_when_under() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+        assert!(!mgr.is_at_tab_limit());
+    }
+
+    #[test]
+    fn is_at_tab_limit_true_when_at_max() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        for _ in 0..MAX_TERMINAL_TABS {
+            mgr.spawn_tab(80, 24, &cwd).unwrap();
+        }
+        assert!(mgr.is_at_tab_limit());
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_tab() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        assert_eq!(mgr.tab_bar_hit_at_x(0), Some(TabBarHit::Tab(0)));
+        assert_eq!(mgr.tab_bar_hit_at_x(1), Some(TabBarHit::Tab(0)));
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_plus_button() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        // [+] starts after the tab label + space
+        let label_len = format!("[1:{}]", mgr.tabs[0].title()).len();
+        let plus_start = label_len + 1; // +1 for space separator
+        assert_eq!(
+            mgr.tab_bar_hit_at_x(plus_start),
+            Some(TabBarHit::PlusButton)
+        );
+    }
+
+    #[test]
+    fn tab_bar_hit_at_x_returns_none_outside() {
+        let mut mgr = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        mgr.spawn_tab(80, 24, &cwd).unwrap();
+
+        let label_len = format!("[1:{}]", mgr.tabs[0].title()).len();
+        // Past [+] button: label + space + "[+]" = label_len + 1 + 3
+        let past_end = label_len + 1 + 3;
+        assert_eq!(mgr.tab_bar_hit_at_x(past_end), None);
     }
 }

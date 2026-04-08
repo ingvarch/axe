@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use alacritty_terminal::index::{Column, Line, Point};
 use crossterm::event::KeyEvent;
 
-use super::{AppState, FocusTarget};
+use super::{AppState, FocusTarget, PasswordDialog};
 
 impl AppState {
     /// Polls terminal output from the PTY background thread and feeds it to the terminal.
@@ -45,6 +45,20 @@ impl AppState {
                     }
                 }
             }
+
+            // Check if any SSH tab needs a password and show the dialog.
+            if self.password_dialog.is_none() {
+                for (idx, tab) in mgr.tabs_ref().iter().enumerate() {
+                    if let axe_terminal::ManagedTab::Ssh(ref ssh_tab) = tab {
+                        if ssh_tab.state == axe_terminal::ssh_tab::SshConnectionState::NeedsPassword
+                        {
+                            self.password_dialog =
+                                Some(PasswordDialog::new(ssh_tab.title().to_string(), idx));
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -80,6 +94,77 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Spawns an SSH terminal tab for the given host and focuses it.
+    pub(super) fn spawn_ssh_tab(&mut self, host: crate::ssh_host::SshHost) {
+        if !self.show_terminal {
+            self.show_terminal = true;
+        }
+
+        let params = axe_terminal::ssh_connect::SshConnectParams {
+            hostname: host.hostname.clone(),
+            port: host.port,
+            user: host.user.clone(),
+            identity_file: host.identity_file.clone(),
+            cols: self.last_terminal_cols,
+            rows: self.last_terminal_rows,
+            tab_id: 0, // Will be overwritten by manager.
+            connect_timeout_secs: self.config.ssh.connect_timeout,
+        };
+
+        if let Some(ref mut mgr) = self.terminal_manager {
+            match mgr.spawn_ssh_tab(self.last_terminal_cols, self.last_terminal_rows, params) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                }
+                Err(e) => log::warn!("Failed to create SSH tab: {e}"),
+            }
+        } else {
+            let mut mgr = axe_terminal::TerminalManager::new();
+            match mgr.spawn_ssh_tab(self.last_terminal_cols, self.last_terminal_rows, params) {
+                Ok(idx) => {
+                    mgr.activate_tab(idx);
+                    self.focus = FocusTarget::Terminal(idx);
+                    self.terminal_manager = Some(mgr);
+                }
+                Err(e) => log::warn!("Failed to create SSH tab: {e}"),
+            }
+        }
+    }
+
+    /// Returns whether the active terminal tab is a disconnected SSH tab.
+    pub(super) fn is_active_ssh_tab_disconnected(&self) -> bool {
+        let Some(ref mgr) = self.terminal_manager else {
+            return false;
+        };
+        matches!(
+            mgr.active_tab(),
+            Some(axe_terminal::ManagedTab::Ssh(ref tab))
+                if matches!(tab.state, axe_terminal::ssh_tab::SshConnectionState::Disconnected(_))
+        )
+    }
+
+    /// Sends a password to an SSH tab for authentication.
+    pub(super) fn send_ssh_password(&mut self, tab_idx: usize, password: String) {
+        if let Some(ref mut mgr) = self.terminal_manager {
+            if let Some(axe_terminal::ManagedTab::Ssh(ref tab)) = mgr.tabs_ref().get(tab_idx) {
+                tab.send_password(password);
+            }
+        }
+    }
+
+    /// Opens the SSH Host Finder overlay by parsing SSH configs and creating the finder.
+    pub(super) fn open_ssh_host_finder(&mut self) {
+        let ssh_config_path = crate::ssh_host::default_ssh_config_path();
+        let ssh_hosts = ssh_config_path
+            .as_deref()
+            .map(crate::ssh_host::parse_ssh_config)
+            .unwrap_or_default();
+        let axe_hosts = crate::ssh_host::hosts_from_axe_config(&self.config);
+        let merged = crate::ssh_host::merge_hosts(ssh_hosts, axe_hosts);
+        self.ssh_host_finder = Some(crate::ssh_host_finder::SshHostFinder::new(merged));
     }
 
     /// Creates a new terminal tab and focuses it.
@@ -201,11 +286,11 @@ impl AppState {
         }
     }
 
-    /// Checks if a click landed on the terminal tab bar and returns the tab index.
+    /// Checks if a click landed on the terminal tab bar and returns the hit target.
     ///
     /// The tab bar is the first row inside the terminal panel border.
     /// Returns `None` if the click is outside the tab bar or if there's no terminal manager.
-    pub(super) fn tab_bar_hit(&self, col: u16, row: u16) -> Option<usize> {
+    pub(super) fn tab_bar_hit(&self, col: u16, row: u16) -> Option<axe_terminal::TabBarHit> {
         let mgr = self.terminal_manager.as_ref()?;
         if !mgr.has_tabs() {
             return None;
@@ -214,7 +299,7 @@ impl AppState {
         if row != ty || col < tx || col >= tx + tw {
             return None;
         }
-        mgr.tab_at_x_offset((col - tx) as usize)
+        mgr.tab_bar_hit_at_x((col - tx) as usize)
     }
 
     // IMPACT ANALYSIS — screen_to_terminal_point

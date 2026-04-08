@@ -6,7 +6,10 @@ use ratatui::Frame;
 
 use axe_core::completion::{self, CompletionState};
 use axe_core::project_search::{DisplayItem, SearchField};
-use axe_core::{AppState, CommandPalette, FileFinder, GoToLineDialog, ProjectSearch};
+use axe_core::ssh_host_finder::SshHostFinder;
+use axe_core::{
+    AppState, CommandPalette, FileFinder, GoToLineDialog, PasswordDialog, ProjectSearch,
+};
 use axe_editor::EditorBuffer;
 
 use crate::editor_panel::{DIAGNOSTIC_GUTTER_WIDTH, DIFF_GUTTER_WIDTH, GUTTER_PADDING};
@@ -326,6 +329,15 @@ pub(crate) const HELP_TERMINAL: HelpSection = HelpSection {
     ],
 };
 
+pub(crate) const HELP_SSH: HelpSection = HelpSection {
+    title: "SSH",
+    entries: &[HelpEntry {
+        fallback_key: None,
+        primary_key: "Ctrl+Shift+S",
+        description: "SSH Host Finder",
+    }],
+};
+
 pub(crate) const HELP_CLOSE: HelpSection = HelpSection {
     title: "",
     entries: &[
@@ -348,6 +360,7 @@ pub(crate) const HELP_SECTIONS: &[&HelpSection] = &[
     &HELP_TABS,
     &HELP_EDITOR,
     &HELP_TERMINAL,
+    &HELP_SSH,
     &HELP_CLOSE,
 ];
 
@@ -1867,6 +1880,304 @@ pub(crate) fn render_go_to_line(dialog: &GoToLineDialog, frame: &mut Frame, them
         let footer_line = Line::from(Span::styled(
             footer_text,
             Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: inner.y + inner.height.saturating_sub(1),
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+/// Width of the SSH host finder overlay as a percentage of screen width.
+const SSH_FINDER_WIDTH_PCT: u16 = 60;
+/// Height of the SSH host finder overlay as a percentage of screen height.
+const SSH_FINDER_HEIGHT_PCT: u16 = 50;
+
+/// Renders the SSH host finder overlay.
+pub(crate) fn render_ssh_host_finder(finder: &SshHostFinder, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = (area.width * SSH_FINDER_WIDTH_PCT / 100)
+        .max(FILE_FINDER_MIN_WIDTH)
+        .min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * SSH_FINDER_HEIGHT_PCT / 100)
+        .max(FILE_FINDER_MIN_HEIGHT)
+        .min(area.height.saturating_sub(4));
+
+    // Center the overlay.
+    let [_, center_v, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_height),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(area);
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_width),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(center_v);
+
+    // Clear background and draw border.
+    frame.render_widget(Clear, center);
+    let block = Block::default()
+        .title(" SSH Connect ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(
+            Style::default()
+                .fg(theme.panel_border_active)
+                .bg(theme.overlay_bg),
+        );
+    let inner = block.inner(center);
+    frame.render_widget(block, center);
+
+    // Input line.
+    if inner.height > 0 {
+        let cursor_char = if finder.query.is_empty() { "_" } else { "|" };
+        let input_line = Line::from(vec![
+            Span::styled(
+                " > ",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(&finder.query, Style::default().fg(theme.foreground)),
+            Span::styled(
+                cursor_char,
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        let input_area = Rect { height: 1, ..inner };
+        frame.render_widget(Paragraph::new(input_line), input_area);
+
+        // Separator.
+        let sep = Line::from(Span::styled(
+            "\u{2500}".repeat(inner.width as usize),
+            Style::default().fg(theme.panel_border),
+        ));
+        let sep_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(sep), sep_area);
+    }
+
+    // Results list.
+    let results_start_y = inner.y + 2;
+    let results_height = inner.height.saturating_sub(3); // input + sep + footer
+    let max_visible = results_height as usize;
+
+    // Adjust scroll offset to keep selection visible.
+    let scroll_offset = if finder.selected < finder.scroll_offset {
+        finder.selected
+    } else if finder.selected >= finder.scroll_offset + max_visible {
+        finder
+            .selected
+            .saturating_sub(max_visible.saturating_sub(1))
+    } else {
+        finder.scroll_offset
+    };
+
+    for (i, filtered_item) in finder
+        .filtered
+        .iter()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .enumerate()
+    {
+        let item = &finder.items[filtered_item.index];
+        let is_selected = scroll_offset + i == finder.selected;
+        let row_y = results_start_y + i as u16;
+
+        let row_area = Rect {
+            y: row_y,
+            height: 1,
+            ..inner
+        };
+
+        let prefix = if is_selected { " > " } else { "   " };
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default()
+                .fg(if is_selected {
+                    theme.panel_border_active
+                } else {
+                    theme.foreground
+                })
+                .add_modifier(if is_selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )];
+
+        let bg = if is_selected {
+            theme.tree_selection_bg
+        } else {
+            theme.overlay_bg
+        };
+
+        // Render display_name with matched character highlighting.
+        for (char_idx, ch) in item.display_name.chars().enumerate() {
+            let is_match = filtered_item.match_indices.contains(&(char_idx as u32));
+            let style = if is_match {
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground).bg(bg)
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+
+        // Show connection details after the name.
+        let detail = format!("  {}@{}:{}", item.user, item.hostname, item.port);
+        spans.push(Span::styled(
+            detail,
+            Style::default()
+                .fg(theme.panel_border)
+                .bg(bg)
+                .add_modifier(Modifier::DIM),
+        ));
+
+        // Fill remaining width for selected row.
+        if is_selected {
+            let used_width = prefix.len()
+                + item.display_name.chars().count()
+                + format!("  {}@{}:{}", item.user, item.hostname, item.port).len();
+            let remaining = (inner.width as usize).saturating_sub(used_width);
+            if remaining > 0 {
+                spans.push(Span::styled(" ".repeat(remaining), Style::default().bg(bg)));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+    }
+
+    // Footer: host count.
+    if inner.height > 2 {
+        let footer_y = inner.y + inner.height - 1;
+        let count_text = if finder.query.is_empty() {
+            format!(" {} hosts", finder.items.len())
+        } else {
+            format!(" {} / {} hosts", finder.filtered.len(), finder.items.len())
+        };
+        let footer_line = Line::from(Span::styled(
+            count_text,
+            Style::default().fg(theme.panel_border),
+        ));
+        let footer_area = Rect {
+            y: footer_y,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+/// Renders the SSH password input dialog.
+pub(crate) fn render_password_dialog(dialog: &PasswordDialog, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+
+    let overlay_width = 50u16.min(area.width.saturating_sub(4));
+    let overlay_height = 5u16.min(area.height.saturating_sub(4));
+
+    // Center the overlay.
+    let [_, center_v, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_height),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(area);
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(overlay_width),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(center_v);
+
+    // Clear background and draw border.
+    frame.render_widget(Clear, center);
+    let block = Block::default()
+        .title(" SSH Authentication ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(
+            Style::default()
+                .fg(theme.panel_border_active)
+                .bg(theme.overlay_bg),
+        );
+    let inner = block.inner(center);
+    frame.render_widget(block, center);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    // Host info line.
+    let host_line = Line::from(vec![
+        Span::styled(
+            " Password for ",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled(
+            &dialog.host_display,
+            Style::default()
+                .fg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let host_area = Rect { height: 1, ..inner };
+    frame.render_widget(Paragraph::new(host_line), host_area);
+
+    // Password input line (masked with dots).
+    if inner.height > 1 {
+        let masked = "\u{2022}".repeat(dialog.input.len());
+        let input_line = Line::from(vec![
+            Span::styled(
+                " > ",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(masked, Style::default().fg(theme.foreground)),
+            Span::styled(
+                "|",
+                Style::default()
+                    .fg(theme.panel_border_active)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        let input_area = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(input_line), input_area);
+    }
+
+    // Footer hint.
+    if inner.height > 2 {
+        let footer_line = Line::from(Span::styled(
+            " Enter to submit, Esc to cancel",
+            Style::default()
+                .fg(theme.panel_border)
+                .add_modifier(Modifier::DIM),
         ));
         let footer_area = Rect {
             y: inner.y + inner.height.saturating_sub(1),

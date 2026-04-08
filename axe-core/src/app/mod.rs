@@ -101,6 +101,8 @@ pub struct AppState {
     pub command_palette: Option<crate::command_palette::CommandPalette>,
     /// Active project-wide search overlay state, if open.
     pub project_search: Option<crate::project_search::ProjectSearch>,
+    /// Active SSH host finder overlay state, if open.
+    pub ssh_host_finder: Option<crate::ssh_host_finder::SshHostFinder>,
     /// Last tree click time and node index, for double-click detection.
     last_tree_click: Option<(Instant, usize)>,
     /// Whether an editor scrollbar drag is currently in progress.
@@ -130,6 +132,8 @@ pub struct AppState {
     pub location_list: Option<crate::location_list::LocationList>,
     /// Active Go to Line dialog, if open.
     pub go_to_line: Option<GoToLineDialog>,
+    /// Active SSH password dialog, if open.
+    pub password_dialog: Option<PasswordDialog>,
     /// Active hover tooltip, if showing.
     pub hover_info: Option<crate::hover::HoverInfo>,
     /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
@@ -191,7 +195,9 @@ impl AppState {
             file_finder: None,
             command_palette: None,
             project_search: None,
+            ssh_host_finder: None,
             go_to_line: None,
+            password_dialog: None,
             editor_selecting: false,
             scrollbar_dragging: false,
             editor_scrollbar_area: None,

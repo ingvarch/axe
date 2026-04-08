@@ -27,6 +27,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Project-wide search** -- Ctrl+Shift+F with regex, case sensitivity, include/exclude filters
 - **Multiple editor tabs** -- open and switch between files
 - **Multiple terminal tabs** -- run several shells side by side
+- **SSH terminals** -- native SSH connections via russh, Ctrl+Shift+S
 - **Configurable** -- TOML-based config, custom keybindings, themes
 - **Mouse support** -- click, drag panel borders, select text
 
@@ -115,6 +116,57 @@ axe /path/to/dir # Open specific directory
 |----------|--------|
 | Shift+PageUp / Shift+PageDown | Scroll up / down |
 | Shift+Home / Shift+End | Scroll to top / bottom |
+
+### SSH
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Shift+S | Open SSH Host Finder |
+
+## SSH Terminal
+
+Axe supports native SSH terminal tabs for remote development via the `russh` crate.
+
+### Usage
+
+1. Press `Ctrl+Shift+S` (or find "SSH: Connect to Host" in the Command Palette)
+2. Select a host from the fuzzy finder
+3. If key-based auth fails, a password dialog appears
+4. A new terminal tab opens with a remote shell
+
+### Host Sources
+
+Axe reads hosts from two sources:
+
+- `~/.ssh/config` -- parsed automatically
+- `~/.config/axe/config.toml` -- optional additional hosts
+
+When the same host name appears in both sources, both entries are shown with labels: `prod (ssh config)` / `prod (axe.toml)`.
+
+### Configuration
+
+Add SSH hosts in your config file:
+
+```toml
+[[ssh.hosts]]
+name = "production"
+hostname = "192.168.1.10"
+user = "deploy"
+port = 22
+identity_file = "~/.ssh/id_prod"
+
+[[ssh.hosts]]
+name = "staging"
+hostname = "staging.example.com"
+user = "admin"
+```
+
+### Authentication
+
+Authentication is attempted in order:
+
+1. SSH key files (from config `identity_file` or default `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`)
+2. Password (interactive dialog)
 
 ## LSP (Language Server Protocol)
 

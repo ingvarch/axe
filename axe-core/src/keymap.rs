@@ -188,6 +188,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "show_hover" => Some(Command::ShowHover),
         "format_document" => Some(Command::FormatDocument),
         "go_to_line" => Some(Command::GoToLine),
+        "open_ssh_host_finder" => Some(Command::OpenSshHostFinder),
         _ => None,
     }
 }
@@ -430,6 +431,18 @@ impl KeymapResolver {
             KeyModifiers::NONE,
             KeyCode::F(2),
             Command::OpenProjectSearch,
+        );
+        // Ctrl+Shift+S: SSH Host Finder (without Kitty protocol = uppercase 'S').
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('S'),
+            Command::OpenSshHostFinder,
+        );
+        // Ctrl+Shift+S: SSH Host Finder (with Kitty protocol = lowercase 's' + SHIFT).
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('s'),
+            Command::OpenSshHostFinder,
         );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal

@@ -52,6 +52,32 @@ impl AppState {
             return;
         }
 
+        // SSH password dialog intercepts all keys when open.
+        if let Some(ref mut dialog) = self.password_dialog {
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel: close the SSH tab that was waiting for password.
+                    let tab_idx = dialog.tab_index;
+                    self.password_dialog = None;
+                    if let Some(ref mut mgr) = self.terminal_manager {
+                        if let Err(e) = mgr.close_tab(tab_idx) {
+                            log::warn!("Failed to close SSH tab on password cancel: {e}");
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    let password = dialog.input.clone();
+                    let tab_idx = dialog.tab_index;
+                    self.password_dialog = None;
+                    self.send_ssh_password(tab_idx, password);
+                }
+                KeyCode::Backspace => dialog.input_backspace(),
+                KeyCode::Char(c) => dialog.input_char(c),
+                _ => {}
+            }
+            return;
+        }
+
         // Go to Line dialog intercepts all keys when open.
         if let Some(ref mut dialog) = self.go_to_line {
             match key.code {
@@ -98,6 +124,33 @@ impl AppState {
                 KeyCode::Down => palette.move_down(),
                 KeyCode::Backspace => palette.input_backspace(),
                 KeyCode::Char(c) => palette.input_char(c),
+                _ => {}
+            }
+            return;
+        }
+
+        // SSH host finder overlay intercepts all keys when open.
+        if let Some(ref mut finder) = self.ssh_host_finder {
+            match key.code {
+                KeyCode::Esc => {
+                    self.ssh_host_finder = None;
+                }
+                KeyCode::Enter => {
+                    if let Some(host) = finder.selected_host().cloned() {
+                        self.ssh_host_finder = None;
+                        self.spawn_ssh_tab(host);
+                    }
+                }
+                KeyCode::Up => finder.move_up(),
+                KeyCode::Down => finder.move_down(),
+                KeyCode::PageUp => {
+                    finder.move_page_up(crate::ssh_host_finder::SSH_FINDER_PAGE_SIZE)
+                }
+                KeyCode::PageDown => {
+                    finder.move_page_down(crate::ssh_host_finder::SSH_FINDER_PAGE_SIZE)
+                }
+                KeyCode::Backspace => finder.input_backspace(),
+                KeyCode::Char(c) => finder.input_char(c),
                 _ => {}
             }
             return;
@@ -219,6 +272,10 @@ impl AppState {
                 }
                 KeyCode::Up => finder.move_up(),
                 KeyCode::Down => finder.move_down(),
+                KeyCode::PageUp => finder.move_page_up(crate::file_finder::FILE_FINDER_PAGE_SIZE),
+                KeyCode::PageDown => {
+                    finder.move_page_down(crate::file_finder::FILE_FINDER_PAGE_SIZE)
+                }
                 KeyCode::Backspace => finder.input_backspace(),
                 KeyCode::Char(c) => finder.input_char(c),
                 _ => {}
@@ -492,6 +549,11 @@ impl AppState {
         // splits a mouse escape, the leading Esc would be consumed while `[<65;...M` would
         // leak into the PTY as visible text.
         if matches!(self.focus, FocusTarget::Terminal(_)) && !self.show_help {
+            // If the active SSH tab is disconnected, any key closes it.
+            if self.is_active_ssh_tab_disconnected() {
+                self.close_terminal_tab();
+                return;
+            }
             if let Some(cmd) = self.keymap.resolve(&key) {
                 if cmd == Command::CloseOverlay {
                     // Esc with no overlay open -- forward to PTY.
@@ -542,8 +604,19 @@ impl AppState {
 
                 // Tab bar click takes priority -- its row overlaps with border tolerance.
                 if self.show_terminal {
-                    if let Some(tab_idx) = self.tab_bar_hit(col, row) {
-                        self.activate_terminal_tab(tab_idx);
+                    if let Some(hit) = self.tab_bar_hit(col, row) {
+                        match hit {
+                            axe_terminal::TabBarHit::Tab(idx) => {
+                                self.activate_terminal_tab(idx);
+                            }
+                            axe_terminal::TabBarHit::PlusButton => {
+                                if let Some(ref mgr) = self.terminal_manager {
+                                    if !mgr.is_at_tab_limit() {
+                                        self.execute(Command::NewTerminalTab);
+                                    }
+                                }
+                            }
+                        }
                         return;
                     }
                 }

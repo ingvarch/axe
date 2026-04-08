@@ -11,10 +11,12 @@ pub mod location_list;
 pub mod project_search;
 pub mod search;
 pub mod session;
+pub mod ssh_host;
+pub mod ssh_host_finder;
 
 pub use app::{
     AppState, ConfirmButton, ConfirmDialog, DragBorder, FocusTarget, GoToLineDialog,
-    MouseDragState, ResizeModeState,
+    MouseDragState, PasswordDialog, ResizeModeState,
 };
 pub use axe_tree::FileTree;
 pub use command::Command;

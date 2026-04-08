@@ -23,9 +23,18 @@ use crate::event_listener::{PtyEvent, PtyEventListener};
 use crate::pty;
 
 /// Dimensions adapter for creating and resizing a `Term`.
-struct TermSize {
+pub(crate) struct TermSize {
     cols: usize,
     rows: usize,
+}
+
+impl TermSize {
+    pub(crate) fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            cols: cols as usize,
+            rows: rows as usize,
+        }
+    }
 }
 
 impl Dimensions for TermSize {

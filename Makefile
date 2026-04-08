@@ -1,7 +1,7 @@
 BINARY := axe
 INSTALL_PATH := /usr/local/bin/$(BINARY)
 
-.PHONY: build install clean fmt clippy test check
+.PHONY: build install clean fmt clippy test deny check
 
 build:
 	cargo build --release
@@ -21,5 +21,8 @@ clippy:
 
 test:
 	cargo test --workspace
+
+deny:
+	cargo deny check
 
 check: fmt clippy test
