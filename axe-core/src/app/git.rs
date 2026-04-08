@@ -20,6 +20,9 @@ impl AppState {
             self.git_branch = crate::git::current_branch(root);
         }
         self.last_git_branch_check = Some(Instant::now());
+        // Periodic diff refresh as a safety net: catches git operations
+        // that may not trigger filesystem events (e.g. HEAD changes).
+        self.refresh_active_buffer_diff_hunks();
     }
 
     /// Refreshes the set of modified files for the tree panel.
@@ -31,11 +34,16 @@ impl AppState {
     }
 
     /// Recalculates git diff hunks for the active buffer.
+    ///
+    /// Compares the HEAD version of the file against the current buffer content
+    /// (not disk), so diff markers reflect what the user sees in the editor even
+    /// when there are unsaved changes (e.g. after a hunk revert).
     pub(super) fn refresh_active_buffer_diff_hunks(&mut self) {
         if let Some(ref root) = self.project_root {
             if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                 if let Some(path) = buf.path().map(|p| p.to_path_buf()) {
-                    let hunks = crate::git::compute_diff_hunks(root, &path);
+                    let content = buf.content_string();
+                    let hunks = crate::git::compute_diff_hunks_from_content(root, &path, &content);
                     buf.set_diff_hunks(hunks);
                 }
             }

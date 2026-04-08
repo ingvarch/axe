@@ -157,6 +157,129 @@ fn resolve_relative_path(file_path: &Path, workdir: &Path) -> Option<std::path::
         .map(|p| p.to_path_buf())
 }
 
+/// Computes diff hunks between the HEAD version and the provided buffer content.
+///
+/// Unlike `compute_diff_hunks` which reads from disk, this compares HEAD to
+/// in-memory buffer content. This ensures diff markers reflect what the user
+/// sees in the editor, even when the buffer has unsaved changes (e.g. after
+/// a hunk revert).
+///
+/// Returns an empty `Vec` if the file is not tracked by git, the repo cannot
+/// be found, or the content matches HEAD.
+pub fn compute_diff_hunks_from_content(
+    project_root: &Path,
+    file_path: &Path,
+    content: &str,
+) -> Vec<DiffHunk> {
+    let repo = match Repository::discover(project_root) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    let workdir = match repo.workdir() {
+        Some(w) => w,
+        None => return Vec::new(),
+    };
+
+    let rel_path = resolve_relative_path(file_path, workdir);
+    let rel_path = match rel_path {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    // Get HEAD blob for this file.
+    let head_blob = match head_tree
+        .get_path(&rel_path)
+        .ok()
+        .and_then(|entry| repo.find_blob(entry.id()).ok())
+    {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+
+    // Create a temporary blob from the buffer content for diffing.
+    let new_oid = match repo.blob(content.as_bytes()) {
+        Ok(oid) => oid,
+        Err(_) => return Vec::new(),
+    };
+    let new_blob = match repo.find_blob(new_oid) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+
+    let rel_str = rel_path.to_str().unwrap_or("");
+    let mut opts = DiffOptions::new();
+    opts.context_lines(0);
+
+    let mut hunks_with_old_range: Vec<(DiffHunk, usize, usize)> = Vec::new();
+
+    let result = repo.diff_blobs(
+        Some(&head_blob),
+        Some(rel_str),
+        Some(&new_blob),
+        Some(rel_str),
+        Some(&mut opts),
+        None,
+        None,
+        Some(&mut |_delta, hunk| {
+            let new_start = hunk.new_start().saturating_sub(1) as usize;
+            let new_lines = hunk.new_lines() as usize;
+            let old_lines = hunk.old_lines() as usize;
+            let old_start = hunk.old_start().saturating_sub(1) as usize;
+
+            let kind = if old_lines == 0 {
+                DiffHunkKind::Added
+            } else if new_lines == 0 {
+                DiffHunkKind::Deleted
+            } else {
+                DiffHunkKind::Modified
+            };
+
+            hunks_with_old_range.push((
+                DiffHunk {
+                    start_line: new_start,
+                    line_count: new_lines,
+                    kind,
+                    old_lines: Vec::new(),
+                },
+                old_start,
+                old_lines,
+            ));
+            true
+        }),
+        None,
+    );
+
+    if result.is_err() {
+        return Vec::new();
+    }
+
+    // Extract old lines from the HEAD blob content.
+    let head_text = match std::str::from_utf8(head_blob.content()) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let head_lines: Vec<String> = head_text.lines().map(String::from).collect();
+
+    hunks_with_old_range
+        .into_iter()
+        .map(|(mut hunk, old_start, old_count)| {
+            if old_count > 0 {
+                let end = (old_start + old_count).min(head_lines.len());
+                if old_start < head_lines.len() {
+                    hunk.old_lines = head_lines[old_start..end].to_vec();
+                }
+            }
+            hunk
+        })
+        .collect()
+}
+
 /// Returns the set of absolute file paths that have uncommitted changes.
 ///
 /// Includes modified, new (untracked), deleted, and renamed files.
@@ -633,5 +756,94 @@ mod tests {
             result.is_empty(),
             "file directly under root should produce no dirty dirs"
         );
+    }
+
+    // --- compute_diff_hunks_from_content tests ---
+
+    #[test]
+    fn diff_from_content_unchanged_returns_empty() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\nline 3\n");
+
+        // Buffer content matches HEAD — no hunks expected.
+        let hunks =
+            compute_diff_hunks_from_content(dir, &dir.join("test.txt"), "line 1\nline 2\nline 3\n");
+        assert!(hunks.is_empty(), "unchanged content should have no hunks");
+    }
+
+    #[test]
+    fn diff_from_content_modified_line() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\nline 3\n");
+
+        let hunks = compute_diff_hunks_from_content(
+            dir,
+            &dir.join("test.txt"),
+            "line 1\nmodified\nline 3\n",
+        );
+        assert!(!hunks.is_empty(), "should detect modified line");
+        let modified = hunks
+            .iter()
+            .find(|h| h.kind == DiffHunkKind::Modified)
+            .expect("should have a Modified hunk");
+        assert_eq!(modified.old_lines, vec!["line 2"]);
+    }
+
+    #[test]
+    fn diff_from_content_added_lines() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\n");
+
+        let hunks = compute_diff_hunks_from_content(
+            dir,
+            &dir.join("test.txt"),
+            "line 1\nline 2\nnew line\n",
+        );
+        assert!(!hunks.is_empty(), "should detect added lines");
+        assert!(
+            hunks.iter().any(|h| h.kind == DiffHunkKind::Added),
+            "should have Added hunk"
+        );
+    }
+
+    #[test]
+    fn diff_from_content_deleted_lines() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\nline 3\n");
+
+        let hunks = compute_diff_hunks_from_content(dir, &dir.join("test.txt"), "line 1\nline 3\n");
+        assert!(!hunks.is_empty(), "should detect deleted lines");
+        let deleted = hunks
+            .iter()
+            .find(|h| h.kind == DiffHunkKind::Deleted)
+            .expect("should have a Deleted hunk");
+        assert_eq!(deleted.old_lines, vec!["line 2"]);
+    }
+
+    #[test]
+    fn diff_from_content_non_git_returns_empty() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "content\n").expect("write failed");
+
+        let hunks = compute_diff_hunks_from_content(tmp.path(), &file, "different\n");
+        assert!(hunks.is_empty(), "non-git dir should return empty hunks");
+    }
+
+    #[test]
+    fn diff_from_content_untracked_file_returns_empty() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "tracked.txt", "hello\n");
+
+        let untracked = dir.join("untracked.txt");
+        std::fs::write(&untracked, "content\n").expect("write failed");
+
+        let hunks = compute_diff_hunks_from_content(dir, &untracked, "different\n");
+        assert!(hunks.is_empty(), "untracked file should have no hunks");
     }
 }
