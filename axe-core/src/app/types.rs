@@ -338,6 +338,38 @@ mod go_to_line_tests {
     }
 }
 
+/// Which button is focused in the diff popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffPopupButton {
+    /// Revert the hunk to its original content.
+    Revert,
+    /// Close the popup without reverting.
+    #[default]
+    Close,
+}
+
+/// Popup showing the original (HEAD) vs current content for a git diff hunk.
+///
+/// Allows the user to revert the hunk to its original state.
+/// Default focus is on [Close] (safe default).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffPopup {
+    /// Index of the hunk in the buffer's `diff_hunks` list.
+    pub hunk_index: usize,
+    /// 0-based start line of the hunk in the current buffer.
+    pub start_line: usize,
+    /// Number of lines affected in the current buffer.
+    pub line_count: usize,
+    /// The type of change (Added, Modified, Deleted).
+    pub kind: axe_editor::diff::DiffHunkKind,
+    /// Original lines from HEAD (before the change).
+    pub old_lines: Vec<String>,
+    /// Current lines in the buffer (after the change).
+    pub new_lines: Vec<String>,
+    /// Currently focused button.
+    pub selected: DiffPopupButton,
+}
+
 /// Dialog for entering an SSH password.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasswordDialog {

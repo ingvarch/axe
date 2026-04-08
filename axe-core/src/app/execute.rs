@@ -740,6 +740,15 @@ impl AppState {
             Command::OpenSshHostFinder => {
                 self.open_ssh_host_finder();
             }
+            Command::ShowDiffHunk => {
+                self.show_diff_hunk();
+            }
+            Command::RevertDiffHunk => {
+                self.revert_diff_hunk();
+            }
+            Command::CloseDiffPopup => {
+                self.diff_popup = None;
+            }
         }
         // Auto-promote preview buffer if user started editing it.
         self.buffer_manager.auto_promote_if_modified();

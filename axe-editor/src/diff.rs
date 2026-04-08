@@ -19,6 +19,10 @@ pub struct DiffHunk {
     pub line_count: usize,
     /// Type of change.
     pub kind: DiffHunkKind,
+    /// Original lines from HEAD for this hunk (content before the change).
+    /// Empty for `Added` hunks. Contains the removed/replaced lines for
+    /// `Deleted` and `Modified` hunks.
+    pub old_lines: Vec<String>,
 }
 
 /// Returns the `DiffHunkKind` for a given line, or `None` if unchanged.
@@ -57,6 +61,7 @@ mod tests {
             start_line: 5,
             line_count: 3,
             kind: DiffHunkKind::Added,
+            old_lines: Vec::new(),
         }];
         assert_eq!(diff_kind_for_line(&hunks, 5), Some(DiffHunkKind::Added));
         assert_eq!(diff_kind_for_line(&hunks, 6), Some(DiffHunkKind::Added));
@@ -69,6 +74,7 @@ mod tests {
             start_line: 2,
             line_count: 1,
             kind: DiffHunkKind::Modified,
+            old_lines: Vec::new(),
         }];
         assert_eq!(diff_kind_for_line(&hunks, 2), Some(DiffHunkKind::Modified));
     }
@@ -79,6 +85,7 @@ mod tests {
             start_line: 3,
             line_count: 0,
             kind: DiffHunkKind::Deleted,
+            old_lines: Vec::new(),
         }];
         assert_eq!(diff_kind_for_line(&hunks, 3), Some(DiffHunkKind::Deleted));
     }
@@ -90,11 +97,13 @@ mod tests {
                 start_line: 2,
                 line_count: 2,
                 kind: DiffHunkKind::Added,
+                old_lines: Vec::new(),
             },
             DiffHunk {
                 start_line: 10,
                 line_count: 1,
                 kind: DiffHunkKind::Modified,
+                old_lines: Vec::new(),
             },
         ];
         assert_eq!(diff_kind_for_line(&hunks, 0), None);
@@ -111,16 +120,19 @@ mod tests {
                 start_line: 0,
                 line_count: 2,
                 kind: DiffHunkKind::Added,
+                old_lines: Vec::new(),
             },
             DiffHunk {
                 start_line: 5,
                 line_count: 0,
                 kind: DiffHunkKind::Deleted,
+                old_lines: Vec::new(),
             },
             DiffHunk {
                 start_line: 8,
                 line_count: 3,
                 kind: DiffHunkKind::Modified,
+                old_lines: Vec::new(),
             },
         ];
         assert_eq!(diff_kind_for_line(&hunks, 0), Some(DiffHunkKind::Added));

@@ -9,7 +9,7 @@ use axe_tree::NodeKind;
 
 use super::layout::{MAX_PANEL_PCT, MIN_PANEL_PCT};
 use super::types::DOUBLE_CLICK_THRESHOLD;
-use super::{AppState, ConfirmButton, DragBorder, FocusTarget};
+use super::{AppState, ConfirmButton, DiffPopupButton, DragBorder, FocusTarget};
 use crate::command::Command;
 
 /// Number of lines to scroll per mouse wheel tick.
@@ -47,6 +47,25 @@ impl AppState {
                         self.execute(cmd);
                     }
                 }
+                _ => {} // Consume all other keys
+            }
+            return;
+        }
+
+        // Diff popup intercepts all keys when open.
+        if let Some(ref mut popup) = self.diff_popup {
+            match key.code {
+                KeyCode::Left => popup.selected = DiffPopupButton::Revert,
+                KeyCode::Right => popup.selected = DiffPopupButton::Close,
+                KeyCode::Enter => {
+                    let cmd = match popup.selected {
+                        DiffPopupButton::Revert => Command::RevertDiffHunk,
+                        DiffPopupButton::Close => Command::CloseDiffPopup,
+                    };
+                    self.execute(cmd);
+                }
+                KeyCode::Char('r') => self.execute(Command::RevertDiffHunk),
+                KeyCode::Esc => self.diff_popup = None,
                 _ => {} // Consume all other keys
             }
             return;
@@ -721,6 +740,13 @@ impl AppState {
                 // Siblings: mouse_drag.border (mutually exclusive, checked first),
                 //           editor_inner_area must be kept in sync by main.rs each frame.
                 // Risk: editor_selecting flag must be cleared on Up to avoid stale drag state.
+
+                // Check if click is on the diff gutter column.
+                if let Some(buffer_line) = self.screen_to_diff_gutter_line(col, row) {
+                    self.show_diff_hunk_at_line(buffer_line);
+                    self.focus = FocusTarget::Editor;
+                    return;
+                }
 
                 // Check if click is in editor content area -- multi-click detection.
                 if let Some((erow, ecol)) = self.screen_to_editor_pos(col, row) {

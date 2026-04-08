@@ -234,6 +234,12 @@ pub enum Command {
     GoToLine,
     /// Open the SSH Host Finder overlay (Ctrl+Shift+S).
     OpenSshHostFinder,
+    /// Show the diff popup for the hunk at the cursor position.
+    ShowDiffHunk,
+    /// Revert the hunk currently displayed in the diff popup.
+    RevertDiffHunk,
+    /// Close the diff popup without reverting.
+    CloseDiffPopup,
 }
 
 #[cfg(test)]
@@ -377,6 +383,9 @@ mod tests {
             Command::ShowHover,
             Command::FormatDocument,
             Command::GoToLine,
+            Command::ShowDiffHunk,
+            Command::RevertDiffHunk,
+            Command::CloseDiffPopup,
         ];
 
         for (i, a) in variants.iter().enumerate() {

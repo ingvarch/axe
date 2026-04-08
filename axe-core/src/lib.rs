@@ -15,8 +15,8 @@ pub mod ssh_host;
 pub mod ssh_host_finder;
 
 pub use app::{
-    AppState, ConfirmButton, ConfirmDialog, DragBorder, FocusTarget, GoToLineDialog,
-    MouseDragState, PasswordDialog, ResizeModeState,
+    AppState, ConfirmButton, ConfirmDialog, DiffPopup, DiffPopupButton, DragBorder, FocusTarget,
+    GoToLineDialog, MouseDragState, PasswordDialog, ResizeModeState,
 };
 pub use axe_tree::FileTree;
 pub use command::Command;

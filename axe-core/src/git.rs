@@ -70,8 +70,10 @@ pub fn compute_diff_hunks(project_root: &Path, file_path: &Path) -> Vec<DiffHunk
         Err(_) => return Vec::new(),
     };
 
-    // Extract hunks from the diff.
-    let mut hunks = Vec::new();
+    // Extract hunk metadata (positions and kinds) along with old-side ranges.
+    // We collect (old_start_0based, old_count) alongside each DiffHunk so we can
+    // later extract the original lines from the HEAD blob.
+    let mut hunks_with_old_range: Vec<(DiffHunk, usize, usize)> = Vec::new();
     let result = diff.foreach(
         &mut |_delta, _progress| true,
         None,
@@ -79,6 +81,7 @@ pub fn compute_diff_hunks(project_root: &Path, file_path: &Path) -> Vec<DiffHunk
             let new_start = hunk.new_start().saturating_sub(1) as usize; // 1-based to 0-based
             let new_lines = hunk.new_lines() as usize;
             let old_lines = hunk.old_lines() as usize;
+            let old_start = hunk.old_start().saturating_sub(1) as usize; // 1-based to 0-based
 
             let kind = if old_lines == 0 {
                 DiffHunkKind::Added
@@ -88,11 +91,16 @@ pub fn compute_diff_hunks(project_root: &Path, file_path: &Path) -> Vec<DiffHunk
                 DiffHunkKind::Modified
             };
 
-            hunks.push(DiffHunk {
-                start_line: new_start,
-                line_count: new_lines,
-                kind,
-            });
+            hunks_with_old_range.push((
+                DiffHunk {
+                    start_line: new_start,
+                    line_count: new_lines,
+                    kind,
+                    old_lines: Vec::new(),
+                },
+                old_start,
+                old_lines,
+            ));
             true
         }),
         None,
@@ -102,7 +110,37 @@ pub fn compute_diff_hunks(project_root: &Path, file_path: &Path) -> Vec<DiffHunk
         return Vec::new();
     }
 
-    hunks
+    // Read the HEAD version of the file to extract original lines per hunk.
+    let head_lines = read_head_file_lines(&repo, &head_tree, &rel_path);
+
+    hunks_with_old_range
+        .into_iter()
+        .map(|(mut hunk, old_start, old_count)| {
+            if old_count > 0 {
+                if let Some(lines) = &head_lines {
+                    let end = (old_start + old_count).min(lines.len());
+                    if old_start < lines.len() {
+                        hunk.old_lines = lines[old_start..end].to_vec();
+                    }
+                }
+            }
+            hunk
+        })
+        .collect()
+}
+
+/// Reads the HEAD version of a file and returns its lines.
+///
+/// Returns `None` if the blob cannot be read (e.g., binary file or missing entry).
+fn read_head_file_lines(
+    repo: &Repository,
+    head_tree: &git2::Tree<'_>,
+    rel_path: &Path,
+) -> Option<Vec<String>> {
+    let entry = head_tree.get_path(rel_path).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    let content = std::str::from_utf8(blob.content()).ok()?;
+    Some(content.lines().map(String::from).collect())
 }
 
 /// Resolves a file path to a relative path within the workdir.
@@ -390,6 +428,65 @@ mod tests {
         assert!(
             hunks.iter().any(|h| h.kind == DiffHunkKind::Deleted),
             "should have Deleted hunk"
+        );
+    }
+
+    #[test]
+    fn diff_modified_old_lines_captured() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\nline 3\n");
+        std::fs::write(dir.join("test.txt"), "line 1\nmodified\nline 3\n").expect("write failed");
+
+        let hunks = compute_diff_hunks(dir, &dir.join("test.txt"));
+        let modified = hunks
+            .iter()
+            .find(|h| h.kind == DiffHunkKind::Modified)
+            .expect("should have a Modified hunk");
+        assert_eq!(
+            modified.old_lines,
+            vec!["line 2"],
+            "old_lines should contain the original line"
+        );
+    }
+
+    #[test]
+    fn diff_deleted_old_lines_captured() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\nline 3\n");
+        std::fs::write(dir.join("test.txt"), "line 1\nline 3\n").expect("write failed");
+
+        let hunks = compute_diff_hunks(dir, &dir.join("test.txt"));
+        let deleted = hunks
+            .iter()
+            .find(|h| h.kind == DiffHunkKind::Deleted)
+            .expect("should have a Deleted hunk");
+        assert_eq!(
+            deleted.old_lines,
+            vec!["line 2"],
+            "old_lines should contain the deleted line"
+        );
+    }
+
+    #[test]
+    fn diff_added_old_lines_empty() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let dir = tmp.path();
+
+        init_repo_with_file(dir, "test.txt", "line 1\nline 2\n");
+        std::fs::write(dir.join("test.txt"), "line 1\nline 2\nnew line\n").expect("write failed");
+
+        let hunks = compute_diff_hunks(dir, &dir.join("test.txt"));
+        let added = hunks
+            .iter()
+            .find(|h| h.kind == DiffHunkKind::Added)
+            .expect("should have an Added hunk");
+        assert!(
+            added.old_lines.is_empty(),
+            "Added hunks should have no old_lines"
         );
     }
 

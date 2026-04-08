@@ -295,6 +295,11 @@ pub(crate) const HELP_EDITOR: HelpSection = HelpSection {
             primary_key: "Ctrl+Shift+I",
             description: "Format document",
         },
+        HelpEntry {
+            fallback_key: Some("F5"),
+            primary_key: "Ctrl+Shift+D",
+            description: "Show diff hunk",
+        },
     ],
 };
 
@@ -1308,6 +1313,186 @@ pub(crate) fn render_hover_tooltip(
         let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
         frame.render_widget(Paragraph::new(line), line_area);
     }
+}
+
+/// Minimum width for the diff popup.
+const DIFF_POPUP_MIN_WIDTH: u16 = 30;
+/// Maximum width for the diff popup.
+const DIFF_POPUP_MAX_WIDTH: u16 = 80;
+/// Maximum height for the diff popup.
+const DIFF_POPUP_MAX_HEIGHT: u16 = 20;
+/// Padding inside button brackets in the diff popup.
+const DIFF_BUTTON_PADDING: usize = 1;
+
+/// Renders the diff hunk popup positioned near the changed lines.
+///
+/// Shows the original (HEAD) and current content with diff coloring,
+/// plus [Revert] / [Close] buttons.
+pub(crate) fn render_diff_popup(
+    popup: &axe_core::DiffPopup,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    use axe_core::DiffPopupButton;
+    use axe_editor::diff::DiffHunkKind;
+
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    // Build display lines: old lines with "-" prefix, new lines with "+" prefix.
+    let mut display_lines: Vec<(String, Style)> = Vec::new();
+
+    // For deleted and modified hunks, show the original lines.
+    if matches!(popup.kind, DiffHunkKind::Deleted | DiffHunkKind::Modified) {
+        for line in &popup.old_lines {
+            let text = format!("- {line}");
+            let style = Style::default().fg(theme.diff_deleted).bg(theme.overlay_bg);
+            display_lines.push((text, style));
+        }
+    }
+
+    // For added and modified hunks, show the current lines.
+    if matches!(popup.kind, DiffHunkKind::Added | DiffHunkKind::Modified) {
+        for line in &popup.new_lines {
+            let text = format!("+ {line}");
+            let style = Style::default().fg(theme.diff_added).bg(theme.overlay_bg);
+            display_lines.push((text, style));
+        }
+    }
+
+    if display_lines.is_empty() {
+        return;
+    }
+
+    // Calculate popup dimensions.
+    let max_line_width = display_lines
+        .iter()
+        .map(|(text, _)| text.len() as u16)
+        .max()
+        .unwrap_or(0);
+    let button_row_width: u16 = 24; // "  [ Revert ]  [ Close ]  "
+    let content_width = max_line_width.max(button_row_width);
+
+    let popup_width = (content_width + 4) // +4 for borders + padding
+        .clamp(DIFF_POPUP_MIN_WIDTH, DIFF_POPUP_MAX_WIDTH)
+        .min(editor_w + 4);
+
+    // Height: border(2) + diff lines + gap(1) + button row(1)
+    let content_height = display_lines.len() as u16 + 2; // +2 for gap + buttons
+    let popup_height = (content_height + 2) // +2 for borders
+        .min(DIFF_POPUP_MAX_HEIGHT)
+        .min(editor_h);
+
+    // Position: near the hunk start line.
+    let hunk_screen_row = popup.start_line.saturating_sub(buffer.scroll_row) as u16;
+
+    // Prefer below the hunk; if not enough space, place above.
+    let space_below = editor_h.saturating_sub(hunk_screen_row + popup.line_count.max(1) as u16);
+    let below_y = editor_y + hunk_screen_row + popup.line_count.max(1) as u16;
+    let above_y = editor_y
+        .saturating_add(hunk_screen_row)
+        .saturating_sub(popup_height);
+
+    let popup_y = if space_below >= popup_height {
+        below_y
+    } else {
+        above_y
+    };
+
+    // X: align with editor left edge (include gutter area).
+    let gutter_w = crate::editor_panel::gutter_width(buffer.line_count());
+    let popup_x = editor_x.saturating_sub(gutter_w);
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let title = match popup.kind {
+        DiffHunkKind::Added => " Added Lines ",
+        DiffHunkKind::Modified => " Modified Lines ",
+        DiffHunkKind::Deleted => " Deleted Lines ",
+    };
+
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme.overlay_border)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.overlay_border))
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let inner_width = inner.width as usize;
+    let available_lines = inner.height.saturating_sub(2) as usize; // reserve 2 for gap + buttons
+
+    // Render diff lines.
+    for (i, (text, style)) in display_lines.iter().take(available_lines).enumerate() {
+        let display_text = if text.len() > inner_width {
+            &text[..inner_width]
+        } else {
+            text.as_str()
+        };
+
+        // Pad to full width.
+        let padded = format!("{display_text:<width$}", width = inner_width);
+        let line = Line::from(Span::styled(padded, *style));
+        let line_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), line_area);
+    }
+
+    // Button row at the bottom of the inner area.
+    let button_y = inner.y + inner.height.saturating_sub(1);
+    let revert_label = " Revert ";
+    let close_label = " Close ";
+
+    let (revert_style, close_style) = match popup.selected {
+        DiffPopupButton::Revert => (
+            Style::default()
+                .fg(theme.overlay_bg)
+                .bg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.foreground).bg(theme.overlay_bg),
+        ),
+        DiffPopupButton::Close => (
+            Style::default().fg(theme.foreground).bg(theme.overlay_bg),
+            Style::default()
+                .fg(theme.overlay_bg)
+                .bg(theme.panel_border_active)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let button_line = Line::from(vec![
+        Span::styled(
+            format!("{:>pad$}", "[", pad = DIFF_BUTTON_PADDING),
+            Style::default().bg(theme.overlay_bg),
+        ),
+        Span::styled(revert_label, revert_style),
+        Span::styled(
+            " ]  [ ",
+            Style::default().fg(theme.foreground).bg(theme.overlay_bg),
+        ),
+        Span::styled(close_label, close_style),
+        Span::styled(
+            format!("{:<pad$}", "]", pad = DIFF_BUTTON_PADDING),
+            Style::default().bg(theme.overlay_bg),
+        ),
+    ]);
+
+    let button_area = Rect::new(inner.x, button_y, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(button_line).alignment(Alignment::Center),
+        button_area,
+    );
 }
 
 /// Width percentage for the location list overlay.

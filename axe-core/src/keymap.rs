@@ -189,6 +189,9 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "format_document" => Some(Command::FormatDocument),
         "go_to_line" => Some(Command::GoToLine),
         "open_ssh_host_finder" => Some(Command::OpenSshHostFinder),
+        "show_diff_hunk" => Some(Command::ShowDiffHunk),
+        "revert_diff_hunk" => Some(Command::RevertDiffHunk),
+        "close_diff_popup" => Some(Command::CloseDiffPopup),
         _ => None,
     }
 }
@@ -516,6 +519,19 @@ impl KeymapResolver {
             Command::ShowHover,
         );
         resolver.bind(KeyModifiers::NONE, KeyCode::F(4), Command::ShowHover);
+
+        // Show diff hunk popup (Ctrl+Shift+D / F5).
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('D'),
+            Command::ShowDiffHunk,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('d'),
+            Command::ShowDiffHunk,
+        );
+        resolver.bind(KeyModifiers::NONE, KeyCode::F(5), Command::ShowDiffHunk);
 
         // Format document.
         resolver.bind(

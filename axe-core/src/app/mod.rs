@@ -1,4 +1,5 @@
 mod clipboard;
+mod diff_popup;
 mod editor;
 mod execute;
 mod git;
@@ -37,6 +38,8 @@ pub struct AppState {
     pub show_help: bool,
     /// Active confirmation dialog, if any.
     pub confirm_dialog: Option<ConfirmDialog>,
+    /// Active diff hunk popup, if any.
+    pub diff_popup: Option<DiffPopup>,
     pub resize_mode: ResizeModeState,
     pub mouse_drag: MouseDragState,
     /// Which panel is currently zoomed to full screen, if any.
@@ -174,6 +177,7 @@ impl AppState {
             show_terminal: true,
             show_help: false,
             confirm_dialog: None,
+            diff_popup: None,
             resize_mode: ResizeModeState::default(),
             mouse_drag: MouseDragState::default(),
             zoomed_panel: None,
