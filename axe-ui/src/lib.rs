@@ -582,7 +582,14 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         match zoomed {
             FocusTarget::Tree => {
                 if let Some(ref tree) = app.file_tree {
-                    render_tree_content(tree, inner, frame, theme, &app.git_modified_files);
+                    render_tree_content(
+                        tree,
+                        inner,
+                        frame,
+                        theme,
+                        &app.git_modified_files,
+                        &app.git_dirty_dirs,
+                    );
                 }
             }
             FocusTarget::Terminal(_) => {
@@ -635,7 +642,14 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
         let tree_inner = tree_block.inner(tree_area);
         frame.render_widget(tree_block, tree_area);
         if let Some(ref tree) = app.file_tree {
-            render_tree_content(tree, tree_inner, frame, theme, &app.git_modified_files);
+            render_tree_content(
+                tree,
+                tree_inner,
+                frame,
+                theme,
+                &app.git_modified_files,
+                &app.git_dirty_dirs,
+            );
         }
 
         render_right_panels(app, frame, right_area, &layout_mgr, theme, resize_active);

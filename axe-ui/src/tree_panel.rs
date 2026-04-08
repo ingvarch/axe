@@ -155,6 +155,7 @@ pub(crate) fn render_tree_content(
     frame: &mut Frame,
     theme: &Theme,
     modified_files: &std::collections::HashSet<std::path::PathBuf>,
+    dirty_dirs: &std::collections::HashSet<std::path::PathBuf>,
 ) {
     let nodes = file_tree.visible_nodes();
     let scroll = file_tree.scroll();
@@ -214,7 +215,7 @@ pub(crate) fn render_tree_content(
                 NodeKind::File { .. } | NodeKind::Symlink { .. } => {
                     modified_files.contains(&node.path)
                 }
-                NodeKind::Directory { .. } => false,
+                NodeKind::Directory { .. } => dirty_dirs.contains(&node.path),
             };
             if is_modified {
                 name_style = name_style.fg(theme.tree_modified_fg);

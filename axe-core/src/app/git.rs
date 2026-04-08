@@ -26,6 +26,7 @@ impl AppState {
     pub(super) fn refresh_git_modified_files(&mut self) {
         if let Some(ref root) = self.project_root {
             self.git_modified_files = crate::git::modified_files(root);
+            self.git_dirty_dirs = crate::git::dirty_parent_dirs(&self.git_modified_files, root);
         }
     }
 

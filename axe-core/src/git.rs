@@ -178,6 +178,28 @@ pub fn modified_files(project_root: &Path) -> HashSet<PathBuf> {
     result
 }
 
+/// Returns the set of ancestor directories that transitively contain at least
+/// one modified file. The project root itself is excluded.
+pub fn dirty_parent_dirs(
+    modified_files: &HashSet<PathBuf>,
+    project_root: &Path,
+) -> HashSet<PathBuf> {
+    let mut dirs = HashSet::new();
+    for file_path in modified_files {
+        let mut ancestor = file_path.parent();
+        while let Some(dir) = ancestor {
+            if dir == project_root || !dir.starts_with(project_root) {
+                break;
+            }
+            if !dirs.insert(dir.to_path_buf()) {
+                break; // already visited — ancestors already added
+            }
+            ancestor = dir.parent();
+        }
+    }
+    dirs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +469,72 @@ mod tests {
         assert!(
             result.iter().any(|p| p.ends_with("test.txt")),
             "should contain the deleted file"
+        );
+    }
+
+    // ── dirty_parent_dirs tests ──────────────────────────────────────
+
+    #[test]
+    fn dirty_parent_dirs_empty() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::new();
+        let result = dirty_parent_dirs(&modified, &root);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dirty_parent_dirs_single_file() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::from([PathBuf::from("/project/src/main.rs")]);
+        let result = dirty_parent_dirs(&modified, &root);
+        assert_eq!(result, HashSet::from([PathBuf::from("/project/src")]));
+    }
+
+    #[test]
+    fn dirty_parent_dirs_nested() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::from([PathBuf::from("/project/src/handlers/auth/login.rs")]);
+        let result = dirty_parent_dirs(&modified, &root);
+        assert_eq!(
+            result,
+            HashSet::from([
+                PathBuf::from("/project/src"),
+                PathBuf::from("/project/src/handlers"),
+                PathBuf::from("/project/src/handlers/auth"),
+            ])
+        );
+    }
+
+    #[test]
+    fn dirty_parent_dirs_excludes_root() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::from([PathBuf::from("/project/src/lib.rs")]);
+        let result = dirty_parent_dirs(&modified, &root);
+        assert!(
+            !result.contains(&PathBuf::from("/project")),
+            "project root must not be in the result"
+        );
+    }
+
+    #[test]
+    fn dirty_parent_dirs_shared_ancestors() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::from([
+            PathBuf::from("/project/src/a.rs"),
+            PathBuf::from("/project/src/b.rs"),
+        ]);
+        let result = dirty_parent_dirs(&modified, &root);
+        assert_eq!(result, HashSet::from([PathBuf::from("/project/src")]));
+    }
+
+    #[test]
+    fn dirty_parent_dirs_file_at_root_level() {
+        let root = PathBuf::from("/project");
+        let modified = HashSet::from([PathBuf::from("/project/Cargo.toml")]);
+        let result = dirty_parent_dirs(&modified, &root);
+        assert!(
+            result.is_empty(),
+            "file directly under root should produce no dirty dirs"
         );
     }
 }

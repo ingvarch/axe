@@ -150,6 +150,8 @@ pub struct AppState {
     last_git_branch_check: Option<Instant>,
     /// Set of absolute file paths with uncommitted changes (modified, new, deleted).
     pub git_modified_files: std::collections::HashSet<std::path::PathBuf>,
+    /// Set of absolute directory paths that transitively contain modified files.
+    pub git_dirty_dirs: std::collections::HashSet<std::path::PathBuf>,
     /// When true, the next frame must call `terminal.clear()` before drawing
     /// to force ratatui to do a full redraw instead of a diff against stale geometry.
     /// Set on resize events, panel toggles, zoom changes, and border drag end.
@@ -219,6 +221,7 @@ impl AppState {
             last_git_branch_check: None,
             file_watcher: None,
             git_modified_files: std::collections::HashSet::new(),
+            git_dirty_dirs: std::collections::HashSet::new(),
             needs_full_redraw: true,
             terminal_output_this_frame: false,
         }
@@ -281,6 +284,7 @@ impl AppState {
 
         let git_branch = crate::git::current_branch(&root);
         let git_modified_files = crate::git::modified_files(&root);
+        let git_dirty_dirs = crate::git::dirty_parent_dirs(&git_modified_files, &root);
 
         Self {
             file_tree,
@@ -294,6 +298,7 @@ impl AppState {
             git_branch,
             last_git_branch_check: Some(Instant::now()),
             git_modified_files,
+            git_dirty_dirs,
             ..Self::new()
         }
     }
