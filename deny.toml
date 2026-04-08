@@ -13,7 +13,10 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # `instant` is unmaintained (RUSTSEC-2024-0384), but it is a transitive
 # dependency of `notify` via `notify-types` and cannot be replaced by us.
-ignore = ["RUSTSEC-2024-0384"]
+# `rsa` has a timing sidechannel (RUSTSEC-2023-0071), but it is a transitive
+# dependency of `russh` via `internal-russh-forked-ssh-key`. No fix available
+# upstream yet. Risk is limited to RSA key operations over network.
+ignore = ["RUSTSEC-2024-0384", "RUSTSEC-2023-0071"]
 
 # Enforce license compliance (project is MIT-licensed)
 [licenses]
@@ -26,8 +29,6 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "OpenSSL",
     "BSL-1.0",
     "CC0-1.0",
     "MPL-2.0",
@@ -38,6 +39,44 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# russh 0.60 uses pre-release (rc) versions of crypto crates alongside stable
+# versions used by other dependencies. These duplicates are unavoidable until
+# russh upgrades to stable releases.
+skip = [
+    { crate = "aead" },
+    { crate = "aes" },
+    { crate = "aes-gcm" },
+    { crate = "bitflags" },
+    { crate = "block-buffer" },
+    { crate = "block-padding" },
+    { crate = "cbc" },
+    { crate = "cfg_aliases" },
+    { crate = "chacha20" },
+    { crate = "cipher" },
+    { crate = "const-oid" },
+    { crate = "cpufeatures" },
+    { crate = "crypto-common" },
+    { crate = "ctr" },
+    { crate = "digest" },
+    { crate = "generic-array" },
+    { crate = "getrandom" },
+    { crate = "ghash" },
+    { crate = "hmac" },
+    { crate = "inout" },
+    { crate = "nix" },
+    { crate = "pbkdf2" },
+    { crate = "pem-rfc7468" },
+    { crate = "polyval" },
+    { crate = "r-efi" },
+    { crate = "rand" },
+    { crate = "rand_core" },
+    { crate = "sha1" },
+    { crate = "sha2" },
+    { crate = "thiserror" },
+    { crate = "thiserror-impl" },
+    { crate = "universal-hash" },
+    { crate = "windows-sys" },
+]
 
 # Restrict dependency sources
 [sources]
