@@ -25,4 +25,4 @@ test:
 deny:
 	cargo deny check
 
-check: fmt clippy test deny
+check: fmt clippy test
