@@ -78,13 +78,18 @@ impl FileWatcher {
         false
     }
 
-    /// Returns `true` if the event kind is relevant for tree refresh.
+    /// Returns `true` if the event kind is relevant for tree or buffer refresh.
+    ///
+    /// Includes data modifications (not just renames) so that external changes
+    /// like `git checkout .` trigger buffer reloads and diff recalculations.
     fn is_relevant(kind: &EventKind) -> bool {
         matches!(
             kind,
             EventKind::Create(_)
                 | EventKind::Remove(_)
-                | EventKind::Modify(notify::event::ModifyKind::Name(_))
+                | EventKind::Modify(
+                    notify::event::ModifyKind::Name(_) | notify::event::ModifyKind::Data(_)
+                )
         )
     }
 }

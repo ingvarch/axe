@@ -20,8 +20,9 @@ impl AppState {
             self.git_branch = crate::git::current_branch(root);
         }
         self.last_git_branch_check = Some(Instant::now());
-        // Periodic diff refresh as a safety net: catches git operations
+        // Periodic refresh as a safety net: catches git operations
         // that may not trigger filesystem events (e.g. HEAD changes).
+        self.buffer_manager.reload_unmodified_buffers();
         self.refresh_active_buffer_diff_hunks();
     }
 

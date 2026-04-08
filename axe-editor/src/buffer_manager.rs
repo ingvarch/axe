@@ -208,6 +208,19 @@ impl BufferManager {
         self.buffers.iter().position(|b| b.is_preview)
     }
 
+    /// Reloads all unmodified buffers whose files changed on disk.
+    ///
+    /// Returns `true` if any buffer was reloaded.
+    pub fn reload_unmodified_buffers(&mut self) -> bool {
+        let mut any_reloaded = false;
+        for buf in &mut self.buffers {
+            if buf.reload_from_disk() {
+                any_reloaded = true;
+            }
+        }
+        any_reloaded
+    }
+
     /// Returns a mutable reference to the buffer with the given file path, if any.
     ///
     /// Uses `std::fs::canonicalize` for path comparison.

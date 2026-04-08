@@ -289,6 +289,70 @@ impl EditorBuffer {
         self.content.to_string()
     }
 
+    /// Reloads buffer content from disk if the file changed externally.
+    ///
+    /// Skips reload if:
+    /// - The buffer has no associated file path
+    /// - The buffer has unsaved user modifications (`modified == true`)
+    /// - The disk content matches the current buffer content
+    ///
+    /// Returns `true` if the buffer was actually reloaded.
+    pub fn reload_from_disk(&mut self) -> bool {
+        // Don't overwrite user's unsaved edits.
+        if self.modified {
+            return false;
+        }
+
+        let path = match self.path {
+            Some(ref p) => p.clone(),
+            None => return false,
+        };
+
+        let raw_bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+
+        let new_rope = match Rope::from_reader(raw_bytes.as_slice()) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+
+        // Skip if content is identical.
+        if self.content == new_rope {
+            return false;
+        }
+
+        self.line_ending = detect_line_ending(&raw_bytes);
+        self.content = new_rope;
+        self.modified = false;
+        self.history = EditHistory::new();
+        self.selection = None;
+        self.diff_hunks.clear();
+
+        // Re-parse syntax highlighting for the new content.
+        if let Some(ref mut hl) = self.highlight {
+            hl.parse_full(&self.content);
+        }
+
+        // Clamp cursor to valid range.
+        let max_row = self.content_line_count().saturating_sub(1);
+        if self.cursor.row > max_row {
+            self.cursor.row = max_row;
+        }
+        let max_col = self.line_length(self.cursor.row);
+        if self.cursor.col > max_col {
+            self.cursor.col = max_col;
+        }
+
+        // Clamp scroll position.
+        if self.scroll_row > max_row {
+            self.scroll_row = max_row;
+        }
+
+        true
+    }
+
     /// Returns the number of content lines (excludes phantom trailing empty line from ropey).
     fn content_line_count(&self) -> usize {
         let total = self.content.len_lines();

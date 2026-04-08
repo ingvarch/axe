@@ -17,7 +17,10 @@ impl AppState {
                 tree.refresh_tree();
             }
             self.refresh_git_modified_files();
-            // Also refresh editor diff hunks — git operations in the terminal
+            // Reload open buffers whose files changed on disk (e.g. after
+            // `git checkout .` in the terminal). Only reloads unmodified buffers.
+            self.buffer_manager.reload_unmodified_buffers();
+            // Refresh editor diff hunks — git operations in the terminal
             // change HEAD, so the active buffer's diff markers must be recalculated.
             self.refresh_active_buffer_diff_hunks();
         }

@@ -1737,3 +1737,72 @@ fn max_line_width_returns_longest_line() {
     buf.insert_text("short\nthis is a longer line\nmed");
     assert_eq!(buf.max_line_width(), 21); // "this is a longer line"
 }
+
+// --- reload_from_disk tests ---
+
+#[test]
+fn reload_from_disk_updates_content() {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(b"original\n").unwrap();
+    tmp.flush().unwrap();
+
+    let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+    assert_eq!(buf.content_string(), "original\n");
+
+    // Externally modify the file.
+    std::fs::write(tmp.path(), "changed\n").unwrap();
+
+    let reloaded = buf.reload_from_disk();
+    assert!(reloaded, "should reload when disk content differs");
+    assert_eq!(buf.content_string(), "changed\n");
+    assert!(!buf.modified, "modified flag should be false after reload");
+}
+
+#[test]
+fn reload_from_disk_no_op_when_content_matches() {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(b"same\n").unwrap();
+    tmp.flush().unwrap();
+
+    let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+    let reloaded = buf.reload_from_disk();
+    assert!(!reloaded, "should not reload when content matches");
+}
+
+#[test]
+fn reload_from_disk_skips_modified_buffer() {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(b"original\n").unwrap();
+    tmp.flush().unwrap();
+
+    let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+    buf.insert_char('x'); // Mark as modified
+    assert!(buf.modified);
+
+    std::fs::write(tmp.path(), "changed\n").unwrap();
+
+    let reloaded = buf.reload_from_disk();
+    assert!(!reloaded, "should not reload a user-modified buffer");
+    // Buffer should still have user's edit, not disk content.
+    assert!(buf.content_string().contains('x'));
+}
+
+#[test]
+fn reload_from_disk_clamps_cursor() {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(b"line 1\nline 2\nline 3\nline 4\n").unwrap();
+    tmp.flush().unwrap();
+
+    let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
+    buf.cursor.row = 3; // On "line 4"
+
+    // Shrink the file to 2 lines.
+    std::fs::write(tmp.path(), "line 1\nline 2\n").unwrap();
+
+    let reloaded = buf.reload_from_disk();
+    assert!(reloaded);
+    assert!(
+        buf.cursor.row < buf.line_count(),
+        "cursor row should be clamped"
+    );
+}
