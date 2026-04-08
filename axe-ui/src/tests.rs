@@ -645,11 +645,12 @@ fn editor_inner_rect_accounts_for_tab_bar() {
     };
     let rect_multi = editor_inner_rect(&app, area);
 
-    // Compare with single buffer.
+    // Compare with single buffer — tab bar is always shown now.
     let (app_single, _tmp2) = app_with_open_file();
     let rect_single = editor_inner_rect(&app_single, area);
 
-    // With multiple buffers, the editor content rect should start 1 row lower.
+    // Both single and multi buffer should have the same layout since
+    // tab bar is always visible when at least one buffer is open.
     assert!(
         rect_multi.is_some() && rect_single.is_some(),
         "expected both rects to be Some"
@@ -657,14 +658,12 @@ fn editor_inner_rect_accounts_for_tab_bar() {
     let multi = rect_multi.unwrap();
     let single = rect_single.unwrap();
     assert_eq!(
-        multi.y,
-        single.y + 1,
-        "expected tab bar to shift editor content down by 1 row"
+        multi.y, single.y,
+        "tab bar should be shown for both single and multi buffer"
     );
     assert_eq!(
-        multi.height,
-        single.height - 1,
-        "expected tab bar to reduce editor content height by 1"
+        multi.height, single.height,
+        "editor content height should be the same"
     );
 }
 

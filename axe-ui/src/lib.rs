@@ -264,9 +264,9 @@ pub fn terminal_outer_rect(app: &AppState, area: Rect) -> Option<Rect> {
 /// bar is not visible (single buffer or editor not shown).
 ///
 /// The tab bar occupies the first row of the editor panel inner area when
-/// multiple buffers are open.
+/// at least one buffer is open.
 pub fn editor_tab_bar_rect(app: &AppState, area: Rect) -> Option<Rect> {
-    if app.buffer_manager.buffer_count() <= 1 {
+    if app.buffer_manager.buffer_count() == 0 {
         return None;
     }
 
@@ -457,8 +457,8 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
             false,
         );
         let mut inner = block.inner(vertical[0]);
-        // Account for tab bar row when multiple buffers are open.
-        if app.buffer_manager.buffer_count() > 1 && inner.height > 2 {
+        // Account for tab bar row when at least one buffer is open.
+        if app.buffer_manager.buffer_count() >= 1 && inner.height > 2 {
             inner.y += 1;
             inner.height = inner.height.saturating_sub(1);
         }
@@ -513,8 +513,8 @@ pub fn editor_inner_rect(app: &AppState, area: Rect) -> Option<Rect> {
         false,
     );
     let mut inner = block.inner(editor_outer);
-    // Account for tab bar row when multiple buffers are open.
-    if app.buffer_manager.buffer_count() > 1 && inner.height > 2 {
+    // Account for tab bar row when at least one buffer is open.
+    if app.buffer_manager.buffer_count() >= 1 && inner.height > 2 {
         inner.y += 1;
         inner.height = inner.height.saturating_sub(1);
     }
@@ -600,14 +600,10 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
             FocusTarget::Editor => {
                 if let Some(buffer) = app.buffer_manager.active_buffer() {
                     let focused = app.focus == FocusTarget::Editor;
-                    let tab_bar = if app.buffer_manager.buffer_count() > 1 {
-                        Some((
-                            app.buffer_manager.buffers(),
-                            app.buffer_manager.active_index(),
-                        ))
-                    } else {
-                        None
-                    };
+                    let tab_bar = Some((
+                        app.buffer_manager.buffers(),
+                        app.buffer_manager.active_index(),
+                    ));
                     render_editor_content(
                         buffer,
                         inner,

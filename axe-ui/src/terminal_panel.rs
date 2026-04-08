@@ -390,14 +390,10 @@ pub(crate) fn render_right_panels(
         frame.render_widget(editor_block, right_split[0]);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
-            let tab_bar = if app.buffer_manager.buffer_count() > 1 {
-                Some((
-                    app.buffer_manager.buffers(),
-                    app.buffer_manager.active_index(),
-                ))
-            } else {
-                None
-            };
+            let tab_bar = Some((
+                app.buffer_manager.buffers(),
+                app.buffer_manager.active_index(),
+            ));
             render_editor_content(
                 buffer,
                 editor_inner,
@@ -435,14 +431,10 @@ pub(crate) fn render_right_panels(
         frame.render_widget(editor_block, area);
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             let focused = app.focus == FocusTarget::Editor;
-            let tab_bar = if app.buffer_manager.buffer_count() > 1 {
-                Some((
-                    app.buffer_manager.buffers(),
-                    app.buffer_manager.active_index(),
-                ))
-            } else {
-                None
-            };
+            let tab_bar = Some((
+                app.buffer_manager.buffers(),
+                app.buffer_manager.active_index(),
+            ));
             render_editor_content(
                 buffer,
                 editor_inner,
