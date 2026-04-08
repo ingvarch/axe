@@ -582,7 +582,11 @@ impl FileTree {
                     .with_context(|| format!("Failed to delete file: {}", path.display()))?;
             }
             self.action = TreeAction::Idle;
+            let saved_idx = node_idx;
             self.refresh_tree();
+            // Position cursor near the deleted item instead of jumping to root.
+            self.selected = saved_idx.min(self.nodes.len().saturating_sub(1));
+            self.adjust_scroll();
         }
         Ok(())
     }
@@ -2342,5 +2346,59 @@ mod tests {
         tree.set_scroll(1000);
         let max_scroll = tree.nodes().len().saturating_sub(3);
         assert_eq!(tree.scroll(), max_scroll);
+    }
+
+    // --- confirm_delete cursor position tests ---
+
+    #[test]
+    fn confirm_delete_cursor_stays_near_deleted_item() {
+        // create_test_dir produces: root, .hidden, alpha.txt, beta/, delta/, gamma.rs
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Find alpha.txt (a middle item) and select it.
+        let alpha_idx = tree
+            .nodes()
+            .iter()
+            .position(|n| n.name == "alpha.txt")
+            .unwrap();
+        tree.select(alpha_idx);
+        assert_eq!(tree.selected_node().unwrap().name, "alpha.txt");
+
+        tree.start_delete();
+        tree.confirm_delete().unwrap();
+
+        // Cursor should stay at the same index (now the next sibling),
+        // NOT jump to 0 (root).
+        assert_ne!(tree.selected(), 0, "cursor should not jump to root");
+        assert_eq!(
+            tree.selected(),
+            alpha_idx,
+            "cursor should stay at the same index after deletion"
+        );
+    }
+
+    #[test]
+    fn confirm_delete_last_item_cursor_moves_up() {
+        let tmp = create_test_dir();
+        let mut tree = FileTree::new(tmp.path().to_path_buf()).unwrap();
+        // Select the last item in the tree.
+        let last_idx = tree.nodes().len() - 1;
+        tree.select(last_idx);
+        let last_name = tree.selected_node().unwrap().name.clone();
+
+        tree.start_delete();
+        tree.confirm_delete().unwrap();
+
+        // Cursor should be at the new last item, not beyond bounds.
+        assert_eq!(
+            tree.selected(),
+            tree.nodes().len() - 1,
+            "cursor should move to the new last item"
+        );
+        // And the deleted item should be gone.
+        assert!(
+            tree.nodes().iter().all(|n| n.name != last_name),
+            "deleted item should not exist in tree"
+        );
     }
 }
