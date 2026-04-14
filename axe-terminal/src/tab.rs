@@ -99,9 +99,39 @@ impl TerminalTab {
             Some(s) if !s.is_empty() => s.to_owned(),
             _ => pty::detect_shell(),
         };
-        let (master, child, reader) =
+        let spawn =
             pty::spawn_shell(&shell, cols, rows, cwd).context("Failed to spawn terminal shell")?;
+        Self::from_spawn_result(cols, rows, cwd, spawn)
+    }
 
+    /// Spawns an arbitrary command in a new PTY and wraps it in a `TerminalTab`.
+    ///
+    /// Unlike [`Self::new_with_shell`], this runs `program` directly with the
+    /// given `args` — used by the AI chat overlay to launch tools like
+    /// `claude`, `codex`, or `aider` inside a terminal tab.
+    pub fn new_with_command(
+        cols: u16,
+        rows: u16,
+        cwd: &Path,
+        program: &str,
+        args: &[String],
+    ) -> Result<(Self, Box<dyn Read + Send>)> {
+        let spawn = pty::spawn_command(program, args, cols, rows, cwd)
+            .with_context(|| format!("Failed to spawn PTY command: {program}"))?;
+        Self::from_spawn_result(cols, rows, cwd, spawn)
+    }
+
+    /// Builds a `TerminalTab` from an already-spawned PTY.
+    ///
+    /// Extracted so that `new_with_shell` and `new_with_command` share the
+    /// Term/processor/cwd-parser wiring without duplication.
+    fn from_spawn_result(
+        cols: u16,
+        rows: u16,
+        cwd: &Path,
+        spawn: pty::SpawnResult,
+    ) -> Result<(Self, Box<dyn Read + Send>)> {
+        let (master, child, reader) = spawn;
         let writer = master.take_writer().context("Failed to take PTY writer")?;
 
         let size = TermSize {
@@ -733,5 +763,49 @@ mod tests {
         );
         let (mut tab, _reader) = result.unwrap();
         assert!(tab.is_alive());
+    }
+
+    #[test]
+    fn new_with_command_runs_program_with_args() {
+        let cwd = std::env::current_dir().unwrap();
+        let result = TerminalTab::new_with_command(
+            80,
+            24,
+            &cwd,
+            "/bin/sh",
+            &["-c".to_string(), "echo bar".to_string()],
+        );
+        assert!(
+            result.is_ok(),
+            "new_with_command should succeed: {:?}",
+            result.err()
+        );
+        let (mut tab, _reader) = result.unwrap();
+        // The child may have already exited since `echo` is short-lived; either
+        // alive-just-spawned or already-reaped is fine — we only care that
+        // spawning itself didn't error and the tab is constructed.
+        let _ = tab.is_alive();
+    }
+
+    #[test]
+    fn new_with_command_title_reflects_cwd_not_program() {
+        let cwd = std::env::current_dir().unwrap();
+        let canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
+        let (tab, _reader) =
+            TerminalTab::new_with_command(80, 24, &canonical, "/bin/sh", &[]).unwrap();
+        assert_eq!(tab.title(), abbreviate_path(&canonical));
+    }
+
+    #[test]
+    fn new_with_command_long_running_is_alive() {
+        // /bin/sleep 10 gives us a process that definitely stays alive for the
+        // duration of the test, unlike /bin/echo which exits instantly.
+        let cwd = std::env::current_dir().unwrap();
+        let result = TerminalTab::new_with_command(80, 24, &cwd, "/bin/sleep", &["10".to_string()]);
+        assert!(result.is_ok());
+        let (mut tab, _reader) = result.unwrap();
+        assert!(tab.is_alive(), "sleep 10 should be alive just after spawn");
+        // Clean up: kill the sleep so the test doesn't leak a process for 10s.
+        let _ = tab.kill();
     }
 }

@@ -1,6 +1,7 @@
 pub mod layout;
 pub mod theme;
 
+mod ai_overlay;
 mod editor_panel;
 mod overlays;
 mod status_bar;
@@ -682,6 +683,10 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
             render_diff_popup(popup, buffer, app, frame, theme);
         }
     }
+
+    // AI chat overlay — drawn before other modal overlays so things like the
+    // "kill current session?" confirm dialog render on top of it.
+    crate::ai_overlay::render_ai_overlay(frame, frame.area(), &app.ai_overlay, theme);
 
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {

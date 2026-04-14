@@ -155,6 +155,15 @@ async fn main() -> Result<()> {
         // Poll terminal PTY output before drawing.
         app.poll_terminal();
 
+        // Resize the AI overlay's PTY to match the inner area of the centered
+        // modal before draining its output — so a resize never races with a
+        // PTY read and the grid always fills the rendered overlay.
+        app.ai_overlay.sync_pty_size(size.width, size.height);
+
+        // Drain AI overlay PTY output — similar to poll_terminal but for the
+        // single AI session living outside the TerminalManager.
+        app.ai_overlay.drain_output();
+
         // Check if PTY output arrived this frame. If so, we'll poison
         // ratatui's front buffer after draw() so the NEXT frame resends
         // all cells (catching any the real terminal missed).

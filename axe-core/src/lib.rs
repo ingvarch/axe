@@ -1,3 +1,4 @@
+pub mod ai_overlay;
 pub mod app;
 pub mod command;
 pub mod command_palette;

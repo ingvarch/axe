@@ -13,6 +13,7 @@ panel layout, theme customization, and how configuration files are resolved.
   - [Tree](#tree)
   - [Terminal](#terminal)
   - [UI](#ui)
+  - [AI](#ai)
 - [Keybindings](#keybindings)
 - [Config Merging](#config-merging)
 - [Theme System](#theme-system)
@@ -148,6 +149,43 @@ border_style = "rounded" # Panel border style: "rounded" or "plain"
   - `"rounded"` -- uses rounded Unicode box-drawing characters.
   - `"plain"` -- uses straight-line box-drawing characters.
 
+### AI
+
+Controls the toggleable AI chat overlay (default hotkey: `Ctrl+Shift+A`).
+
+```toml
+[ai]
+# Agent ID to spawn when the overlay is opened. If omitted, Axe runs the
+# first-run picker on first use and writes the chosen ID back here.
+default = "claude"
+
+# Optional: override a built-in agent or register a custom one.
+# Key is the agent ID; `command`/`args` are how it is launched in the PTY;
+# `display_name` is the label shown in the picker and overlay title.
+[ai.agents.my-agent]
+command = "/opt/bin/my-agent"
+args = ["--experimental"]
+display_name = "My Custom Agent"
+```
+
+**Key details:**
+
+- Axe ships with seven built-in agent IDs: `claude`, `codex`, `gemini`, `qwen`,
+  `aider`, `opencode`, `goose`. Each resolves its `command` field against
+  `$PATH`, so you usually don't need to touch `[ai.agents.*]` at all -- just
+  install the CLI and pick it from the first-run list.
+- Entries in `[ai.agents.<id>]` that match a built-in ID override the built-in;
+  entries with new IDs are appended to the picker.
+- Axe writes the `default` key back through `toml_edit` whenever you pick an
+  agent via the picker. Existing comments and unrelated sections are preserved
+  -- your hand-authored config survives the round-trip.
+- The AI section always lives in the global config (`~/.config/axe/config.toml`)
+  because the choice of default agent is a per-user preference, not a
+  per-project one.
+- Hiding the overlay with the toggle hotkey does not kill the PTY: the session
+  survives until you either quit Axe, run `AI: Kill Current Session` from the
+  command palette, or the agent exits on its own.
+
 ---
 
 ## Keybindings
@@ -215,6 +253,9 @@ Examples: `"ctrl+shift+z"`, `"alt+]"`, `"f12"`, `"esc"`
 | `scroll_terminal_top`        | Scroll terminal to top               |
 | `scroll_terminal_bottom`     | Scroll terminal to bottom            |
 | `activate_terminal_tab:N`    | Switch to terminal tab N (0-based)   |
+| `toggle_ai_overlay`          | Show/hide the AI chat overlay        |
+| `select_ai_agent`            | Open the AI agent picker             |
+| `kill_ai_session`            | Kill the current AI chat session     |
 
 ---
 

@@ -28,6 +28,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Multiple editor tabs** -- open and switch between files
 - **Multiple terminal tabs** -- run several shells side by side
 - **SSH terminals** -- native SSH connections via russh, Ctrl+Shift+S
+- **AI chat overlay** -- Ctrl+Shift+A toggles a modal chat with Claude Code, Codex CLI, Gemini CLI, Qwen, Aider, OpenCode, or Goose; session survives hide/show so the chat history never dies
 - **Configurable** -- TOML-based config, custom keybindings, themes
 - **Mouse support** -- click, drag panel borders, select text
 
@@ -117,11 +118,78 @@ axe /path/to/dir # Open specific directory
 | Shift+PageUp / Shift+PageDown | Scroll up / down |
 | Shift+Home / Shift+End | Scroll to top / bottom |
 
+### AI Chat Overlay
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Shift+A | Toggle AI chat overlay (show / hide — session is preserved) |
+
+Agent switching and killing run from the command palette: open it with `Ctrl+Shift+P` and type `AI:` to see `AI: Select Agent` and `AI: Kill Current Session`.
+
 ### SSH
 
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+Shift+S | Open SSH Host Finder |
+
+## AI Chat Overlay
+
+Axe ships with a toggleable AI chat overlay that embeds a live PTY running any terminal-native AI coding agent you already have installed. The overlay is a centered modal, and hiding it with the toggle hotkey does **not** kill the underlying process — your chat history, in-flight requests, and authenticated session all survive the next show.
+
+### Quick start
+
+1. Install at least one supported CLI agent (see the list below).
+2. Launch Axe and press `Ctrl+Shift+A`.
+3. On first launch, pick an agent from the list. Axe scans your `$PATH`, shows only agents it actually finds, and saves your choice as the default in `~/.config/axe/config.toml`.
+4. Press `Ctrl+Shift+A` again to hide the overlay without killing the session, and once more to bring it back in the same state.
+
+### Built-in agents
+
+Axe recognizes these out of the box by the binary name it expects on `$PATH`:
+
+| ID       | Binary     | Project                                       |
+|----------|------------|-----------------------------------------------|
+| claude   | `claude`   | Claude Code (Anthropic)                       |
+| codex    | `codex`    | Codex CLI (OpenAI)                            |
+| gemini   | `gemini`   | Gemini CLI (Google)                           |
+| qwen     | `qwen`     | Qwen Code (Alibaba)                           |
+| aider    | `aider`    | Aider                                         |
+| opencode | `opencode` | OpenCode                                      |
+| goose    | `goose`    | Goose (Block)                                 |
+
+If you install more than one, Axe will show them all in the first-run picker and keep the picker around for quick switching.
+
+### Switching or killing the agent
+
+Open the command palette with `Ctrl+Shift+P` and filter by `AI:`:
+
+- `AI: Toggle Chat Overlay` -- same as pressing `Ctrl+Shift+A`
+- `AI: Select Agent` -- opens the picker even when a session is already running; confirms before killing the old one
+- `AI: Kill Current Session` -- drop the PTY without picking a replacement
+
+Inside the overlay, `Esc` is always forwarded to the PTY (so Claude Code's `/rewind`, Aider's cancel, etc. all work). Only `Ctrl+Shift+A` and the `AI:` palette commands escape back to Axe.
+
+### Adding a custom agent
+
+Any CLI tool that runs interactively on a TTY can be registered by ID in your config. User entries override the built-in table when the ID matches, otherwise they are added on top:
+
+```toml
+[ai]
+default = "my-agent"
+
+[ai.agents.my-agent]
+command = "/opt/bin/my-agent"
+args = ["--experimental"]
+display_name = "My Custom Agent"
+```
+
+The file is written back by Axe whenever you pick a new default through the picker; existing comments and unrelated sections are preserved via `toml_edit`.
+
+### Lifecycle details
+
+- When the agent's child process exits on its own (e.g. you typed `/exit` inside Claude Code), the next `Ctrl+Shift+A` detects the dead PTY and respawns the same agent fresh.
+- Sessions are not persisted across Axe restarts -- quitting Axe kills the child. This is intentional; reattach across launches is out of scope.
+- The PTY is resized on every frame to match the inner area of the 80%×80% centered modal, so the chat always fills the overlay exactly.
 
 ## SSH Terminal
 
@@ -229,6 +297,9 @@ scrollback_lines = 10000
 
 [ui]
 theme = "axe-dark"
+
+[ai]
+default = "claude"
 
 [keybindings]
 "ctrl+q" = "request_quit"

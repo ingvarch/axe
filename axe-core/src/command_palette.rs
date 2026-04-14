@@ -75,6 +75,9 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Edit: Format Document", Command::FormatDocument),
         ("Edit: Go to Line", Command::GoToLine),
         ("SSH: Connect to Host", Command::OpenSshHostFinder),
+        ("AI: Toggle Chat Overlay", Command::ToggleAiOverlay),
+        ("AI: Select Agent", Command::SelectAiAgent),
+        ("AI: Kill Current Session", Command::KillAiSession),
     ];
 
     entries
@@ -228,7 +231,48 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 35, "Expected 35 palette commands");
+        assert_eq!(p.items.len(), 38, "Expected 38 palette commands");
+    }
+
+    #[test]
+    fn palette_contains_ai_commands() {
+        let p = palette();
+        let commands: Vec<&Command> = p.items.iter().map(|i| &i.command).collect();
+        assert!(
+            commands.contains(&&Command::ToggleAiOverlay),
+            "palette must expose ToggleAiOverlay"
+        );
+        assert!(
+            commands.contains(&&Command::SelectAiAgent),
+            "palette must expose SelectAiAgent"
+        );
+        assert!(
+            commands.contains(&&Command::KillAiSession),
+            "palette must expose KillAiSession"
+        );
+    }
+
+    #[test]
+    fn palette_fuzzy_finds_ai_agent() {
+        // Regression: the user could not find "select ai agent" in the palette
+        // because the command was missing from build_palette_items. Make sure
+        // typing a partial query surfaces the entry.
+        let mut p = palette();
+        p.query = "ai agent".to_string();
+        p.update_matches();
+        assert!(
+            !p.filtered.is_empty(),
+            "'ai agent' query should match at least one command"
+        );
+        let matched_names: Vec<&str> = p
+            .filtered
+            .iter()
+            .map(|fi| p.items[fi.index].display_name.as_str())
+            .collect();
+        assert!(
+            matched_names.iter().any(|n| n.contains("Select Agent")),
+            "'ai agent' query should match 'AI: Select Agent', got: {matched_names:?}"
+        );
     }
 
     #[test]

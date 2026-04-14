@@ -192,6 +192,9 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "show_diff_hunk" => Some(Command::ShowDiffHunk),
         "revert_diff_hunk" => Some(Command::RevertDiffHunk),
         "close_diff_popup" => Some(Command::CloseDiffPopup),
+        "toggle_ai_overlay" => Some(Command::ToggleAiOverlay),
+        "select_ai_agent" => Some(Command::SelectAiAgent),
+        "kill_ai_session" => Some(Command::KillAiSession),
         _ => None,
     }
 }
@@ -446,6 +449,18 @@ impl KeymapResolver {
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char('s'),
             Command::OpenSshHostFinder,
+        );
+        // Ctrl+Shift+A: toggle AI chat overlay. Dual bindings (uppercase/lowercase)
+        // to handle terminals with and without Kitty keyboard protocol.
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('A'),
+            Command::ToggleAiOverlay,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('a'),
+            Command::ToggleAiOverlay,
         );
 
         // Unified tab management — same hotkeys work in both Editor and Terminal
@@ -1147,6 +1162,45 @@ mod tests {
             command_from_str("cancel_close_terminal_tab"),
             Some(Command::CancelCloseTerminalTab)
         );
+    }
+
+    #[test]
+    fn command_from_str_toggle_ai_overlay() {
+        assert_eq!(
+            command_from_str("toggle_ai_overlay"),
+            Some(Command::ToggleAiOverlay)
+        );
+    }
+
+    #[test]
+    fn command_from_str_select_ai_agent() {
+        assert_eq!(
+            command_from_str("select_ai_agent"),
+            Some(Command::SelectAiAgent)
+        );
+    }
+
+    #[test]
+    fn command_from_str_kill_ai_session() {
+        assert_eq!(
+            command_from_str("kill_ai_session"),
+            Some(Command::KillAiSession)
+        );
+    }
+
+    #[test]
+    fn default_bindings_ctrl_shift_a_toggles_ai_overlay() {
+        let resolver = KeymapResolver::with_defaults();
+        let uppercase = crossterm::event::KeyEvent::new(
+            KeyCode::Char('A'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&uppercase), Some(Command::ToggleAiOverlay));
+        let lowercase = crossterm::event::KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(resolver.resolve(&lowercase), Some(Command::ToggleAiOverlay));
     }
 
     #[test]

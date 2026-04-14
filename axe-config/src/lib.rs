@@ -35,6 +35,9 @@ pub struct AppConfig {
     /// User entries override built-in defaults from `default_lsp_configs()`.
     #[serde(default)]
     pub lsp: HashMap<String, LspServerConfig>,
+    /// AI chat overlay configuration — default agent and user-defined agents.
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 impl Default for AppConfig {
@@ -197,6 +200,37 @@ pub struct LspServerConfig {
     /// Optional initialization options sent to the server.
     #[serde(default)]
     pub init_options: Option<serde_json::Value>,
+}
+
+/// AI chat overlay configuration.
+///
+/// Controls the default AI agent for the overlay (`Ctrl+Shift+A` by default)
+/// and lets users define custom agents beyond the built-in registry.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AiConfig {
+    /// ID of the default agent to spawn when the overlay is opened.
+    ///
+    /// `None` means "not chosen yet" — the overlay will run the first-run picker.
+    #[serde(default)]
+    pub default: Option<String>,
+    /// User-defined or overridden agents, keyed by agent ID.
+    ///
+    /// Entries override built-in agents when the ID matches; unknown IDs add
+    /// new agents on top of the built-in registry.
+    #[serde(default)]
+    pub agents: HashMap<String, AiAgentConfig>,
+}
+
+/// A single AI agent entry in user config.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AiAgentConfig {
+    /// Binary to spawn (resolved against `$PATH` or given as absolute path).
+    pub command: String,
+    /// Arguments to pass to the binary.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Human-readable name shown in the picker and overlay header.
+    pub display_name: String,
 }
 
 /// Returns built-in LSP server configurations for common languages.
@@ -390,6 +424,94 @@ impl AppConfig {
     pub fn load_from_str(toml_str: &str) -> Result<Self> {
         let config: Self = toml::from_str(toml_str)?;
         Ok(config)
+    }
+
+    /// Writes the `[ai]` section to `path`, preserving any existing comments,
+    /// formatting, and unrelated sections in the file.
+    ///
+    /// Uses `toml_edit` rather than `toml` so hand-authored comments survive a
+    /// round-trip — this is the main reason the AI settings live here instead
+    /// of being re-serialized from the whole `AppConfig`.
+    ///
+    /// The write is atomic: content is written to a sibling temp file and then
+    /// renamed over the target, so readers never see a half-written config.
+    /// Missing parent directories are created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read/parsed, the parent directory
+    /// cannot be created, or the atomic rename fails.
+    pub fn save_ai_section(ai: &AiConfig, path: &Path) -> Result<()> {
+        use anyhow::Context;
+        use std::fs;
+        use std::io::Write;
+        use toml_edit::{Array, DocumentMut, Item, Table, Value};
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+        }
+
+        let existing = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).with_context(|| format!("Failed to read {path:?}")),
+        };
+
+        let mut doc: DocumentMut = existing
+            .parse()
+            .with_context(|| format!("Existing config at {path:?} is not valid TOML"))?;
+
+        // Remove any existing [ai] section wholesale — we own it.
+        doc.remove("ai");
+
+        let mut ai_table = Table::new();
+        ai_table.set_implicit(false);
+        if let Some(default) = &ai.default {
+            ai_table.insert("default", Item::Value(Value::from(default.as_str())));
+        }
+
+        if !ai.agents.is_empty() {
+            let mut agents_table = Table::new();
+            agents_table.set_implicit(true);
+            // Sort keys for deterministic output — matters for diff-friendly configs.
+            let mut keys: Vec<&String> = ai.agents.keys().collect();
+            keys.sort();
+            for key in keys {
+                let agent = &ai.agents[key];
+                let mut entry = Table::new();
+                entry.insert("command", Item::Value(Value::from(agent.command.as_str())));
+                if !agent.args.is_empty() {
+                    let mut arr = Array::new();
+                    for a in &agent.args {
+                        arr.push(a.as_str());
+                    }
+                    entry.insert("args", Item::Value(Value::Array(arr)));
+                }
+                entry.insert(
+                    "display_name",
+                    Item::Value(Value::from(agent.display_name.as_str())),
+                );
+                agents_table.insert(key, Item::Table(entry));
+            }
+            ai_table.insert("agents", Item::Table(agents_table));
+        }
+
+        doc.insert("ai", Item::Table(ai_table));
+
+        let serialized = doc.to_string();
+
+        // Atomic write: tempfile in the same directory, then rename.
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Config path has no parent: {path:?}"))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            .with_context(|| format!("Failed to create temp file in {parent:?}"))?;
+        tmp.write_all(serialized.as_bytes())
+            .with_context(|| format!("Failed to write temp config in {parent:?}"))?;
+        tmp.persist(path)
+            .with_context(|| format!("Failed to rename temp config over {path:?}"))?;
+        Ok(())
     }
 
     /// Loads config from a file path.
@@ -769,5 +891,204 @@ connect_timeout = 30
 "#;
         let config = AppConfig::load_from_str(toml_str).expect("should parse SSH timeout");
         assert_eq!(config.ssh.connect_timeout, 30);
+    }
+
+    // --- AiConfig tests ---
+
+    #[test]
+    fn ai_config_default_is_empty() {
+        let config = AppConfig::default();
+        assert!(config.ai.default.is_none());
+        assert!(config.ai.agents.is_empty());
+    }
+
+    #[test]
+    fn parse_empty_toml_has_none_ai_default() {
+        let config = AppConfig::load_from_str("").expect("empty TOML should parse");
+        assert!(config.ai.default.is_none());
+    }
+
+    #[test]
+    fn parse_ai_default_from_toml() {
+        let toml_str = r#"
+[ai]
+default = "claude"
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse [ai]");
+        assert_eq!(config.ai.default.as_deref(), Some("claude"));
+        assert!(config.ai.agents.is_empty());
+    }
+
+    #[test]
+    fn parse_ai_custom_agent() {
+        let toml_str = r#"
+[ai]
+default = "my-agent"
+
+[ai.agents.my-agent]
+command = "/opt/bin/my-agent"
+args = ["--experimental"]
+display_name = "My Custom Agent"
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse custom agent");
+        assert_eq!(config.ai.default.as_deref(), Some("my-agent"));
+        let agent = config
+            .ai
+            .agents
+            .get("my-agent")
+            .expect("my-agent should be present");
+        assert_eq!(agent.command, "/opt/bin/my-agent");
+        assert_eq!(agent.args, vec!["--experimental".to_string()]);
+        assert_eq!(agent.display_name, "My Custom Agent");
+    }
+
+    #[test]
+    fn parse_ai_custom_agent_default_args() {
+        let toml_str = r#"
+[ai.agents.claude]
+command = "claude"
+display_name = "Claude Code"
+"#;
+        let config = AppConfig::load_from_str(toml_str).expect("should parse");
+        let agent = config.ai.agents.get("claude").expect("claude present");
+        assert!(agent.args.is_empty(), "args should default to empty");
+    }
+
+    // --- save_ai_section tests ---
+
+    #[test]
+    fn save_ai_section_to_empty_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let ai = AiConfig {
+            default: Some("claude".to_string()),
+            agents: HashMap::new(),
+        };
+
+        AppConfig::save_ai_section(&ai, &path).expect("save should succeed");
+
+        let content = std::fs::read_to_string(&path).expect("file should exist");
+        let parsed = AppConfig::load_from_str(&content).expect("saved file should reparse");
+        assert_eq!(parsed.ai.default.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn save_ai_section_creates_parent_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nested").join("axe").join("config.toml");
+        let ai = AiConfig {
+            default: Some("claude".to_string()),
+            agents: HashMap::new(),
+        };
+
+        AppConfig::save_ai_section(&ai, &path).expect("save should create parent dir");
+
+        assert!(path.exists(), "file should exist after save");
+    }
+
+    #[test]
+    fn save_ai_section_preserves_comments_and_other_sections() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let original = r#"# This is my axe config.
+# I love my setup.
+
+[editor]
+tab_size = 2  # two spaces for me
+
+[ui]
+theme = "axe-light"
+"#;
+        std::fs::write(&path, original).expect("write original");
+
+        let ai = AiConfig {
+            default: Some("claude".to_string()),
+            agents: HashMap::new(),
+        };
+        AppConfig::save_ai_section(&ai, &path).expect("save");
+
+        let after = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            after.contains("# This is my axe config."),
+            "top-level comment must survive: {after}"
+        );
+        assert!(
+            after.contains("# I love my setup."),
+            "second comment must survive"
+        );
+        assert!(
+            after.contains("# two spaces for me"),
+            "inline comment must survive"
+        );
+        assert!(
+            after.contains("tab_size = 2"),
+            "editor settings must survive"
+        );
+        assert!(
+            after.contains("theme = \"axe-light\""),
+            "ui settings must survive"
+        );
+
+        // And the AI section must now be present.
+        let reparsed = AppConfig::load_from_str(&after).expect("reparse");
+        assert_eq!(reparsed.ai.default.as_deref(), Some("claude"));
+        assert_eq!(reparsed.editor.tab_size, 2);
+        assert_eq!(reparsed.ui.theme, "axe-light");
+    }
+
+    #[test]
+    fn save_ai_section_overwrites_existing_ai_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let original = r#"[ai]
+default = "gemini"
+
+[ai.agents.gemini]
+command = "gemini"
+display_name = "Gemini CLI"
+"#;
+        std::fs::write(&path, original).expect("write original");
+
+        let ai = AiConfig {
+            default: Some("claude".to_string()),
+            agents: HashMap::new(),
+        };
+        AppConfig::save_ai_section(&ai, &path).expect("save");
+
+        let reparsed =
+            AppConfig::load_from_str(&std::fs::read_to_string(&path).expect("read")).expect("ok");
+        assert_eq!(reparsed.ai.default.as_deref(), Some("claude"));
+        assert!(
+            reparsed.ai.agents.is_empty(),
+            "old [ai.agents.gemini] should be gone"
+        );
+    }
+
+    #[test]
+    fn save_ai_section_writes_custom_agents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let mut agents = HashMap::new();
+        agents.insert(
+            "my-agent".to_string(),
+            AiAgentConfig {
+                command: "/opt/my-agent".to_string(),
+                args: vec!["--flag".to_string()],
+                display_name: "My Agent".to_string(),
+            },
+        );
+        let ai = AiConfig {
+            default: Some("my-agent".to_string()),
+            agents,
+        };
+
+        AppConfig::save_ai_section(&ai, &path).expect("save");
+
+        let reparsed =
+            AppConfig::load_from_str(&std::fs::read_to_string(&path).expect("read")).expect("ok");
+        let agent = reparsed.ai.agents.get("my-agent").expect("my-agent");
+        assert_eq!(agent.command, "/opt/my-agent");
+        assert_eq!(agent.args, vec!["--flag".to_string()]);
+        assert_eq!(agent.display_name, "My Agent");
     }
 }

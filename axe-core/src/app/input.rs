@@ -52,6 +52,31 @@ impl AppState {
             return;
         }
 
+        // AI overlay picker: intercept keys before anything else once it's open.
+        // Arrow keys move the selection, Enter confirms, Esc cancels, Ctrl+Shift+A
+        // also dismisses it (so the toggle hotkey consistently hides the overlay).
+        if self.ai_overlay.picker.is_some() {
+            self.handle_ai_picker_key(key);
+            return;
+        }
+
+        // AI overlay visible with a live session: forward every keystroke into
+        // the PTY as raw bytes, EXCEPT the toggle/kill/select hotkeys which the
+        // keymap still needs to resolve so users can hide/replace the overlay.
+        if self.ai_overlay.visible && self.ai_overlay.session.is_some() {
+            if let Some(cmd) = self.keymap.resolve(&key) {
+                if matches!(
+                    cmd,
+                    Command::ToggleAiOverlay | Command::SelectAiAgent | Command::KillAiSession
+                ) {
+                    self.execute(cmd);
+                    return;
+                }
+            }
+            self.forward_key_to_ai_session(key);
+            return;
+        }
+
         // Diff popup intercepts all keys when open.
         if let Some(ref mut popup) = self.diff_popup {
             match key.code {
@@ -1050,5 +1075,71 @@ impl AppState {
         }
 
         FocusTarget::Editor
+    }
+
+    /// Handles a key inside the AI agent picker (first-run or switch-agent).
+    fn handle_ai_picker_key(&mut self, key: KeyEvent) {
+        let Some(picker) = self.ai_overlay.picker.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Up => picker.move_up(),
+            KeyCode::Down => picker.move_down(),
+            KeyCode::Esc => {
+                self.ai_overlay.picker = None;
+            }
+            KeyCode::Enter => {
+                if let Some(agent) = picker.selected_agent().cloned() {
+                    self.ai_overlay.picker = None;
+                    self.start_ai_session(&agent);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Forwards a key event to the AI session's PTY as raw bytes.
+    ///
+    /// Mirrors the terminal panel's key-to-bytes mapping: printable characters
+    /// go as UTF-8, Enter → `\r`, Esc → `\x1b`, Backspace → `\x7f`, Tab → `\t`,
+    /// and arrow/home/end keys become the usual xterm escape sequences. This
+    /// is intentionally a small, self-contained translation — we don't
+    /// piggyback on the full terminal input module because AI CLIs don't need
+    /// Kitty protocol encoding or modifier-key exotica.
+    fn forward_key_to_ai_session(&mut self, key: KeyEvent) {
+        let Some(session) = self.ai_overlay.session.as_mut() else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        let bytes: Vec<u8> = match key.code {
+            KeyCode::Char(c) => {
+                if ctrl && c.is_ascii_alphabetic() {
+                    vec![(c.to_ascii_lowercase() as u8) & 0x1f]
+                } else {
+                    let mut buf = [0u8; 4];
+                    c.encode_utf8(&mut buf).as_bytes().to_vec()
+                }
+            }
+            KeyCode::Enter => b"\r".to_vec(),
+            KeyCode::Esc => b"\x1b".to_vec(),
+            KeyCode::Backspace => b"\x7f".to_vec(),
+            KeyCode::Tab => b"\t".to_vec(),
+            KeyCode::BackTab => b"\x1b[Z".to_vec(),
+            KeyCode::Up => b"\x1b[A".to_vec(),
+            KeyCode::Down => b"\x1b[B".to_vec(),
+            KeyCode::Right => b"\x1b[C".to_vec(),
+            KeyCode::Left => b"\x1b[D".to_vec(),
+            KeyCode::Home => b"\x1b[H".to_vec(),
+            KeyCode::End => b"\x1b[F".to_vec(),
+            KeyCode::PageUp => b"\x1b[5~".to_vec(),
+            KeyCode::PageDown => b"\x1b[6~".to_vec(),
+            KeyCode::Delete => b"\x1b[3~".to_vec(),
+            _ => return,
+        };
+
+        if let Err(e) = session.tab.write(&bytes) {
+            log::warn!("Failed to forward key to AI session: {e}");
+        }
     }
 }

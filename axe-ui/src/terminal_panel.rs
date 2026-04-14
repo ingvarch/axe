@@ -24,7 +24,7 @@ pub(crate) const TERMINAL_SCROLLBAR_WIDTH: u16 = 1;
 // Siblings: Theme colors — terminal colors are independent from theme.
 
 /// Converts an alacritty_terminal ANSI color to a ratatui color.
-fn convert_ansi_color(color: &AnsiColor) -> ratatui::style::Color {
+pub(crate) fn convert_ansi_color(color: &AnsiColor) -> ratatui::style::Color {
     use ratatui::style::Color;
     match color {
         AnsiColor::Named(named) => match named {
@@ -56,7 +56,7 @@ fn convert_ansi_color(color: &AnsiColor) -> ratatui::style::Color {
 }
 
 /// Converts alacritty cell flags to ratatui style modifiers.
-fn cell_flags_to_modifier(flags: CellFlags) -> Modifier {
+pub(crate) fn cell_flags_to_modifier(flags: CellFlags) -> Modifier {
     let mut modifier = Modifier::empty();
     if flags.contains(CellFlags::BOLD) {
         modifier |= Modifier::BOLD;

@@ -240,6 +240,12 @@ pub enum Command {
     RevertDiffHunk,
     /// Close the diff popup without reverting.
     CloseDiffPopup,
+    /// Toggle the AI chat overlay (show/hide). Hidden state preserves the session.
+    ToggleAiOverlay,
+    /// Open the AI agent picker — pick or switch the active AI CLI.
+    SelectAiAgent,
+    /// Kill the current AI session (with confirmation).
+    KillAiSession,
 }
 
 #[cfg(test)]

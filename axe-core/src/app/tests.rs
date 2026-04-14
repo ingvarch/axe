@@ -4111,3 +4111,210 @@ fn equalize_layout_sets_needs_full_redraw() {
         "equalize_layout should set needs_full_redraw"
     );
 }
+
+// --- AI overlay input routing tests ---
+
+fn fake_ai_agent(
+    id: &str,
+    command: &str,
+    args: &[&str],
+) -> crate::ai_overlay::registry::ResolvedAgent {
+    crate::ai_overlay::registry::ResolvedAgent {
+        id: id.to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
+        display: id.to_string(),
+    }
+}
+
+fn cat_ai_agent() -> crate::ai_overlay::registry::ResolvedAgent {
+    fake_ai_agent("cat", "/bin/cat", &[])
+}
+
+#[test]
+fn ai_overlay_starts_hidden_on_new_app_state() {
+    let app = AppState::new();
+    assert!(!app.ai_overlay.visible);
+    assert!(app.ai_overlay.session.is_none());
+    assert!(app.ai_overlay.picker.is_none());
+}
+
+#[test]
+fn toggle_ai_overlay_without_agents_shows_status_message() {
+    // AppState::new() has empty config.ai; detect_available(&[]) is also empty
+    // after merging, so the non-test built-in list is used — which may or may
+    // not resolve depending on the test machine. We explicitly override config
+    // to have zero agents via an empty user config AND zero builtins is not
+    // possible, so we just verify the function does not panic and the overlay
+    // does not spawn a session when the default is unset.
+    let mut app = AppState::new();
+    // Force: if the machine happens to have a real agent installed, we'd spawn
+    // it. Pre-seed a bogus default so the picker path is taken instead.
+    app.config.ai.default = None;
+
+    app.execute(Command::ToggleAiOverlay);
+    // After execute: either a picker is open (agents detected) or a status
+    // message exists (none detected). Either way we must NOT have started a
+    // session without the user picking something.
+    if app.ai_overlay.session.is_none() && app.ai_overlay.picker.is_none() {
+        // Nothing detected at all — must have surfaced a status message.
+        assert!(
+            app.status_message.is_some(),
+            "expected status message when no agents available"
+        );
+    }
+}
+
+#[test]
+fn toggle_ai_overlay_with_live_session_hides_without_killing() {
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn cat");
+    app.ai_overlay.visible = true;
+
+    app.execute(Command::ToggleAiOverlay);
+
+    assert!(!app.ai_overlay.visible, "overlay should be hidden");
+    assert!(
+        app.ai_overlay.session_is_alive(),
+        "session must survive toggle-hide"
+    );
+}
+
+#[test]
+fn toggle_ai_overlay_hidden_with_live_session_just_shows() {
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn");
+    app.ai_overlay.visible = false;
+
+    app.execute(Command::ToggleAiOverlay);
+
+    assert!(app.ai_overlay.visible);
+    assert!(app.ai_overlay.session_is_alive());
+}
+
+#[test]
+fn kill_ai_session_command_drops_session_and_hides() {
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn");
+    app.ai_overlay.visible = true;
+
+    app.execute(Command::KillAiSession);
+
+    assert!(app.ai_overlay.session.is_none());
+    assert!(!app.ai_overlay.visible);
+}
+
+#[test]
+fn esc_with_visible_ai_session_goes_to_pty_not_keymap() {
+    // Regression: Esc must NOT trigger CloseOverlay when an AI session has
+    // focus — the user needs Esc to reach claude/codex for /rewind etc.
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn");
+    app.ai_overlay.visible = true;
+
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    app.handle_key_event(esc);
+
+    // Overlay must still be visible and session still alive — Esc must not
+    // have been consumed as "close overlay".
+    assert!(
+        app.ai_overlay.visible,
+        "Esc must not close AI overlay (should go to PTY)"
+    );
+    assert!(app.ai_overlay.session_is_alive());
+}
+
+#[test]
+fn ctrl_shift_a_with_visible_session_hides_but_keeps_session() {
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn");
+    app.ai_overlay.visible = true;
+
+    let toggle = KeyEvent::new(
+        KeyCode::Char('A'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    app.handle_key_event(toggle);
+
+    assert!(!app.ai_overlay.visible, "should be hidden");
+    assert!(
+        app.ai_overlay.session_is_alive(),
+        "session should survive toggle"
+    );
+}
+
+#[test]
+fn picker_enter_starts_session_with_chosen_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new();
+    // Redirect config persistence to a temp file so the test doesn't clobber
+    // the user's real ~/.config/axe/config.toml.
+    app.ai_config_path_override = Some(dir.path().join("config.toml"));
+    let picker = crate::ai_overlay::AgentPicker::new(vec![cat_ai_agent()]);
+    app.ai_overlay.picker = Some(picker);
+    app.ai_overlay.visible = true;
+
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    app.handle_key_event(enter);
+
+    assert!(app.ai_overlay.picker.is_none());
+    assert!(app.ai_overlay.session.is_some());
+    assert!(app.ai_overlay.session_is_alive());
+    // The agent id should now also be the saved default in the in-memory config.
+    assert_eq!(app.config.ai.default.as_deref(), Some("cat"));
+    // And the override file should have been written.
+    let content = std::fs::read_to_string(dir.path().join("config.toml")).expect("read");
+    assert!(content.contains("default = \"cat\""));
+}
+
+#[test]
+fn picker_esc_cancels_without_spawning() {
+    let mut app = AppState::new();
+    app.ai_overlay.picker = Some(crate::ai_overlay::AgentPicker::new(vec![cat_ai_agent()]));
+
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    app.handle_key_event(esc);
+
+    assert!(app.ai_overlay.picker.is_none());
+    assert!(app.ai_overlay.session.is_none());
+}
+
+#[test]
+fn picker_arrow_keys_navigate() {
+    let mut app = AppState::new();
+    app.ai_overlay.picker = Some(crate::ai_overlay::AgentPicker::new(vec![
+        fake_ai_agent("a", "/bin/cat", &[]),
+        fake_ai_agent("b", "/bin/cat", &[]),
+    ]));
+
+    let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    app.handle_key_event(down);
+    assert_eq!(
+        app.ai_overlay.picker.as_ref().unwrap().selected,
+        1,
+        "down should move selection"
+    );
+
+    let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+    app.handle_key_event(up);
+    assert_eq!(
+        app.ai_overlay.picker.as_ref().unwrap().selected,
+        0,
+        "up should move selection back"
+    );
+}

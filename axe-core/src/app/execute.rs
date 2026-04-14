@@ -749,6 +749,9 @@ impl AppState {
             Command::CloseDiffPopup => {
                 self.diff_popup = None;
             }
+            Command::ToggleAiOverlay => self.toggle_ai_overlay(),
+            Command::SelectAiAgent => self.select_ai_agent(),
+            Command::KillAiSession => self.kill_ai_session(),
         }
         // Auto-promote preview buffer if user started editing it.
         self.buffer_manager.auto_promote_if_modified();

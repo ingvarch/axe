@@ -1,3 +1,4 @@
+mod ai_overlay;
 mod clipboard;
 mod diff_popup;
 mod editor;
@@ -155,6 +156,13 @@ pub struct AppState {
     pub git_modified_files: std::collections::HashSet<std::path::PathBuf>,
     /// Set of absolute directory paths that transitively contain modified files.
     pub git_dirty_dirs: std::collections::HashSet<std::path::PathBuf>,
+    /// AI chat overlay state — always present (not `Option`) so the overlay
+    /// can be hidden while its PTY session keeps running.
+    pub ai_overlay: crate::ai_overlay::AiOverlay,
+    /// Override for the global AI config path. Normally `None` (so the real
+    /// user config is used). Tests set this to a tempfile to keep side effects
+    /// out of the user's actual `~/.config/axe/config.toml`.
+    pub(crate) ai_config_path_override: Option<PathBuf>,
     /// When true, the next frame must call `terminal.clear()` before drawing
     /// to force ratatui to do a full redraw instead of a diff against stale geometry.
     /// Set on resize events, panel toggles, zoom changes, and border drag end.
@@ -226,6 +234,8 @@ impl AppState {
             file_watcher: None,
             git_modified_files: std::collections::HashSet::new(),
             git_dirty_dirs: std::collections::HashSet::new(),
+            ai_overlay: crate::ai_overlay::AiOverlay::new(),
+            ai_config_path_override: None,
             needs_full_redraw: true,
             terminal_output_this_frame: false,
         }
