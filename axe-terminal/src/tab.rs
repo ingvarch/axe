@@ -19,6 +19,7 @@ use alacritty_terminal::Term;
 use anyhow::{Context, Result};
 use portable_pty::{Child, MasterPty, PtySize};
 
+use crate::cwd_parser::CwdOscParser;
 use crate::event_listener::{PtyEvent, PtyEventListener};
 use crate::pty;
 
@@ -53,7 +54,17 @@ impl Dimensions for TermSize {
 
 /// A single terminal tab holding a PTY, child process, and VT state.
 pub struct TerminalTab {
-    title: String,
+    /// The live current working directory of the shell, updated by OSC 7 sequences.
+    /// Falls back to the initial spawn cwd when the shell does not emit OSC 7.
+    cwd: PathBuf,
+    /// Cached display name derived from `cwd`. Recomputed whenever `cwd` changes so
+    /// that `title()` can return a stable borrow.
+    display_name: String,
+    /// Secondary parser that extracts OSC 7 cwd notifications from the byte stream.
+    /// `alacritty_terminal` 0.25 does not parse OSC 7, so we run it in parallel.
+    /// Boxed because `vte::Parser` has large internal buffers that would bloat
+    /// `ManagedTab` variants (see `clippy::large_enum_variant`).
+    cwd_parser: Box<CwdOscParser>,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -105,8 +116,13 @@ impl TerminalTab {
         );
         let processor = ansi::Processor::new();
 
+        let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let display_name = abbreviate_path(&canonical_cwd);
+
         let tab = Self {
-            title: abbreviate_path(cwd),
+            cwd: canonical_cwd,
+            display_name,
+            cwd_parser: Box::new(CwdOscParser::new()),
             master,
             writer,
             child,
@@ -132,13 +148,22 @@ impl TerminalTab {
     /// Feeds raw bytes from the PTY into the VT parser, updating the terminal grid.
     ///
     /// After parsing, drains any events emitted by the terminal emulator (e.g., DSR
-    /// cursor position responses) and writes them back to the PTY master.
+    /// cursor position responses) and writes them back to the PTY master. Also feeds
+    /// the same bytes to a secondary OSC 7 parser to track the shell's cwd.
     pub fn process_output(&mut self, data: &[u8]) {
         self.processor.advance(&mut self.term, data);
+        if let Some(new_cwd) = self.cwd_parser.feed(data) {
+            self.display_name = abbreviate_path(&new_cwd);
+            self.cwd = new_cwd;
+        }
         self.drain_pty_events();
     }
 
     /// Drains pending events from the terminal emulator and handles them.
+    ///
+    /// OSC 0/2 title events are intentionally ignored: tab labels are derived exclusively
+    /// from the shell's cwd (via OSC 7 in `process_output`), so that programs like Claude
+    /// Code cannot overwrite the tab label with long, chat-aware strings.
     fn drain_pty_events(&mut self) {
         while let Ok(event) = self.pty_event_rx.try_recv() {
             match event {
@@ -152,8 +177,8 @@ impl TerminalTab {
                         return;
                     }
                 }
-                PtyEvent::Title(s) => {
-                    self.title = s;
+                PtyEvent::Title(_) => {
+                    // Deliberately ignored — see function doc.
                 }
                 PtyEvent::Bell => {
                     // Future: emit event to core for visual/audio bell.
@@ -194,9 +219,13 @@ impl TerminalTab {
         &self.term
     }
 
-    /// Returns the tab title (typically the shell path).
+    /// Returns the tab title — the display name of the shell's current working directory.
+    ///
+    /// This is derived from the cwd tracked via OSC 7. It updates when the shell `cd`s
+    /// (on shells that emit OSC 7 on every prompt, like fish), and stays stable when
+    /// programs push OSC 0/2 window titles.
     pub fn title(&self) -> &str {
-        &self.title
+        &self.display_name
     }
 
     /// Kills the child process.
@@ -273,7 +302,7 @@ impl TerminalTab {
 /// - `/Users/igor/Repos/ingvarch/axe` → `~/R/i/axe`
 /// - `/tmp/build` → `/t/build`
 fn abbreviate_path(path: &Path) -> String {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let home = dirs::home_dir();
 
     let (use_tilde, components): (bool, Vec<String>) = match home {
         Some(ref home_path) => {
@@ -323,7 +352,6 @@ fn abbreviate_path(path: &Path) -> String {
     if use_tilde {
         parts.join("/")
     } else {
-        // Absolute path: prefix with /
         format!("/{}", parts.join("/"))
     }
 }
@@ -352,54 +380,55 @@ mod tests {
 
     #[test]
     fn abbreviate_path_home_dir() {
-        let home = std::env::var("HOME").unwrap();
-        let result = abbreviate_path(Path::new(&home));
-        assert_eq!(result, "~");
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(abbreviate_path(&home), "~");
     }
 
     #[test]
     fn abbreviate_path_one_level_below_home() {
-        let home = std::env::var("HOME").unwrap();
-        let path = PathBuf::from(&home).join("Repos");
-        let result = abbreviate_path(&path);
-        assert_eq!(result, "~/Repos");
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(abbreviate_path(&home.join("Repos")), "~/Repos");
     }
 
     #[test]
     fn abbreviate_path_two_levels_below_home() {
-        let home = std::env::var("HOME").unwrap();
-        let path = PathBuf::from(&home).join("Repos").join("ingvarch");
-        let result = abbreviate_path(&path);
-        assert_eq!(result, "~/R/ingvarch");
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(
+            abbreviate_path(&home.join("Repos").join("ingvarch")),
+            "~/R/ingvarch"
+        );
     }
 
     #[test]
     fn abbreviate_path_three_levels_below_home() {
-        let home = std::env::var("HOME").unwrap();
-        let path = PathBuf::from(&home)
-            .join("Repos")
-            .join("ingvarch")
-            .join("axe");
-        let result = abbreviate_path(&path);
-        assert_eq!(result, "~/R/i/axe");
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(
+            abbreviate_path(&home.join("Repos").join("ingvarch").join("axe")),
+            "~/R/i/axe"
+        );
     }
 
     #[test]
     fn abbreviate_path_outside_home() {
-        let result = abbreviate_path(Path::new("/tmp/build"));
-        assert_eq!(result, "/t/build");
+        assert_eq!(abbreviate_path(Path::new("/tmp/build")), "/t/build");
     }
 
     #[test]
     fn abbreviate_path_root() {
-        let result = abbreviate_path(Path::new("/"));
-        assert_eq!(result, "/");
+        assert_eq!(abbreviate_path(Path::new("/")), "/");
     }
 
     #[test]
     fn abbreviate_path_single_component() {
-        let result = abbreviate_path(Path::new("/usr"));
-        assert_eq!(result, "/usr");
+        assert_eq!(abbreviate_path(Path::new("/usr")), "/usr");
     }
 
     // --- TerminalTab tests ---
@@ -422,9 +451,48 @@ mod tests {
     #[test]
     fn new_tab_title_is_abbreviated_cwd() {
         let cwd = std::env::current_dir().unwrap();
-        let (tab, _reader) = TerminalTab::new(80, 24, &cwd).unwrap();
-        let expected = abbreviate_path(&cwd);
+        let canonical = cwd.canonicalize().unwrap_or(cwd);
+        let (tab, _reader) = TerminalTab::new(80, 24, &canonical).unwrap();
+        let expected = abbreviate_path(&canonical);
         assert_eq!(tab.title(), expected);
+    }
+
+    #[test]
+    fn osc_7_updates_tab_title_to_new_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        let (mut tab, _reader) = TerminalTab::new(80, 24, &cwd).unwrap();
+
+        tab.process_output(b"\x1b]7;file:///tmp/brand_new_dir\x07");
+
+        assert_eq!(
+            tab.title(),
+            abbreviate_path(Path::new("/tmp/brand_new_dir"))
+        );
+    }
+
+    #[test]
+    fn osc_2_window_title_does_not_change_tab_title() {
+        let cwd = std::env::current_dir().unwrap();
+        let canonical = cwd.canonicalize().unwrap_or(cwd);
+        let (mut tab, _reader) = TerminalTab::new(80, 24, &canonical).unwrap();
+        let before = tab.title().to_string();
+
+        // Claude Code-style long OSC 2 payload with chat name.
+        tab.process_output(b"\x1b]2;Claude Code - very long chat name - axe\x07");
+
+        assert_eq!(tab.title(), before);
+    }
+
+    #[test]
+    fn osc_0_window_title_does_not_change_tab_title() {
+        let cwd = std::env::current_dir().unwrap();
+        let canonical = cwd.canonicalize().unwrap_or(cwd);
+        let (mut tab, _reader) = TerminalTab::new(80, 24, &canonical).unwrap();
+        let before = tab.title().to_string();
+
+        tab.process_output(b"\x1b]0;fish\x07");
+
+        assert_eq!(tab.title(), before);
     }
 
     #[test]

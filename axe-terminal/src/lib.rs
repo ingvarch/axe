@@ -1,3 +1,4 @@
+mod cwd_parser;
 pub mod event_listener;
 pub mod input;
 pub mod manager;
