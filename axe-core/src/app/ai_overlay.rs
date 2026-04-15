@@ -33,10 +33,12 @@ impl AppState {
             return;
         }
 
-        // Visible == false below this point.
-        if self.ai_overlay.session.is_some() && !self.ai_overlay.session_is_alive() {
-            self.ai_overlay.kill_session();
-        }
+        // Visible == false below this point. Defensive cleanup: if the child
+        // died while the overlay was hidden, drop it so the spawn path below
+        // opens a fresh session. The main render loop normally reaps this
+        // eagerly via `reap_dead_ai_session`, but a toggle that lands in the
+        // same tick as the child's death still has to handle it here.
+        self.reap_dead_ai_session();
 
         if self.ai_overlay.session.is_some() {
             self.ai_overlay.visible = true;
@@ -96,6 +98,27 @@ impl AppState {
     /// Handles `Command::KillAiSession`. Drops the current session (killing
     /// its child process) and hides the overlay.
     pub fn kill_ai_session(&mut self) {
+        self.close_ai_overlay();
+    }
+
+    /// Auto-closes the overlay when the agent child process has exited
+    /// (e.g. the user typed `/exit` inside claude/codex).
+    ///
+    /// Called from the main render loop every frame after PTY output is
+    /// drained. The behavior is identical to `kill_ai_session`: drop the
+    /// dead session, hide the overlay, reset selection state. The next
+    /// toggle will spawn a fresh chat via the normal `toggle_ai_overlay`
+    /// flow. No-op when the session is alive or absent.
+    pub fn reap_dead_ai_session(&mut self) {
+        if self.ai_overlay.session.is_some() && !self.ai_overlay.session_is_alive() {
+            self.close_ai_overlay();
+        }
+    }
+
+    /// Shared cleanup: kill the PTY session, hide the overlay, reset any
+    /// pending mouse selection state. Used by both explicit kill and the
+    /// auto-reaper so the two paths cannot drift.
+    fn close_ai_overlay(&mut self) {
         self.ai_overlay.kill_session();
         self.ai_overlay.visible = false;
         self.reset_ai_overlay_selection_state();

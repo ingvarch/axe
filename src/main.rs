@@ -210,6 +210,11 @@ async fn main() -> Result<()> {
         // single AI session living outside the TerminalManager.
         app.ai_overlay.drain_output();
 
+        // If the agent's child process exited (e.g. user typed `/exit` inside
+        // claude/codex), auto-close the overlay so the next toggle spawns a
+        // fresh chat instead of leaving a frozen terminal on screen.
+        app.reap_dead_ai_session();
+
         // Check if PTY output arrived this frame. If so, we'll poison
         // ratatui's front buffer after draw() so the NEXT frame resends
         // all cells (catching any the real terminal missed).

@@ -4251,6 +4251,66 @@ fn toggle_ai_overlay_hidden_with_live_session_just_shows() {
 }
 
 #[test]
+fn reap_dead_ai_session_closes_overlay_when_child_exits() {
+    // /exit → child dies → reaper must hide overlay and drop session.
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(
+            &fake_ai_agent("exit-agent", "/bin/sh", &["-c", "exit 0"]),
+            &cwd,
+        )
+        .expect("spawn exit-agent");
+    app.ai_overlay.visible = true;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && app.ai_overlay.session_is_alive() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !app.ai_overlay.session_is_alive(),
+        "child process should have exited by now"
+    );
+
+    app.reap_dead_ai_session();
+
+    assert!(
+        app.ai_overlay.session.is_none(),
+        "dead session should be dropped"
+    );
+    assert!(
+        !app.ai_overlay.visible,
+        "overlay should be hidden after reap"
+    );
+}
+
+#[test]
+fn reap_dead_ai_session_is_noop_on_live_session() {
+    let mut app = AppState::new();
+    let cwd = std::env::current_dir().unwrap();
+    app.ai_overlay
+        .start_session(&cat_ai_agent(), &cwd)
+        .expect("spawn cat");
+    app.ai_overlay.visible = true;
+
+    app.reap_dead_ai_session();
+
+    assert!(
+        app.ai_overlay.session_is_alive(),
+        "live session must be preserved"
+    );
+    assert!(app.ai_overlay.visible, "overlay must stay visible");
+}
+
+#[test]
+fn reap_dead_ai_session_is_noop_without_session() {
+    let mut app = AppState::new();
+    app.reap_dead_ai_session(); // must not panic
+    assert!(app.ai_overlay.session.is_none());
+    assert!(!app.ai_overlay.visible);
+}
+
+#[test]
 fn kill_ai_session_command_drops_session_and_hides() {
     let mut app = AppState::new();
     let cwd = std::env::current_dir().unwrap();
