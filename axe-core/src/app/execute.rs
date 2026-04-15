@@ -310,6 +310,14 @@ impl AppState {
                 }
                 // Dismiss hover on any cursor movement.
                 self.hover_info = None;
+                // Dismiss signature help when the cursor leaves the call's line.
+                if let Some(ref sig) = self.signature_help {
+                    if let Some(buf) = self.buffer_manager.active_buffer() {
+                        if buf.cursor.row != sig.anchor_row {
+                            self.signature_help = None;
+                        }
+                    }
+                }
             }
             // IMPACT ANALYSIS — Editor edit commands
             // Parents: KeyEvent with editor focus -> editor-focus interception -> these commands
@@ -325,6 +333,7 @@ impl AppState {
                 self.notify_lsp_change();
                 self.update_completion_after_edit();
                 self.maybe_auto_trigger_completion(ch);
+                self.maybe_auto_trigger_signature_help(ch);
             }
             Command::EditorBackspace => {
                 let (h, w) = self.editor_viewport();
@@ -726,6 +735,12 @@ impl AppState {
             }
             Command::ShowHover => {
                 self.request_hover();
+            }
+            Command::ShowSignatureHelp => {
+                self.request_signature_help();
+            }
+            Command::DismissSignatureHelp => {
+                self.signature_help = None;
             }
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {

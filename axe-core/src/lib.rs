@@ -13,6 +13,7 @@ pub mod location_list;
 pub mod project_search;
 pub mod search;
 pub mod session;
+pub mod signature_help;
 pub mod ssh_host;
 pub mod ssh_host_finder;
 
@@ -32,6 +33,7 @@ pub use keymap::KeymapResolver;
 pub use location_list::LocationList;
 pub use project_search::ProjectSearch;
 pub use search::{SearchField, SearchState};
+pub use signature_help::{ParameterInfo, Signature, SignatureHelpState};
 
 /// Returns the crate version string from `Cargo.toml`.
 pub fn version() -> &'static str {

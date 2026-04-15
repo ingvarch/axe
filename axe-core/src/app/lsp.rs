@@ -159,6 +159,24 @@ impl AppState {
                 } => {
                     log::warn!("LSP inlay hint error: {}", e.message);
                 }
+                axe_lsp::LspEvent::SignatureHelpResponse { result: Ok(value) } => {
+                    let (row, col) = self
+                        .buffer_manager
+                        .active_buffer()
+                        .map(|buf| (buf.cursor.row, buf.cursor.col))
+                        .unwrap_or((0, 0));
+                    if let Some(state) =
+                        crate::signature_help::parse_signature_help_response(&value, row, col)
+                    {
+                        self.signature_help = Some(state);
+                    } else {
+                        // Empty response — drop any existing popup.
+                        self.signature_help = None;
+                    }
+                }
+                axe_lsp::LspEvent::SignatureHelpResponse { result: Err(e) } => {
+                    log::warn!("LSP signature help error: {}", e.message);
+                }
             }
         }
     }
@@ -379,6 +397,60 @@ impl AppState {
                     }
                 }
             }
+        }
+    }
+
+    /// Sends a signature help request to the LSP for the current cursor position.
+    ///
+    /// Does nothing if the active buffer has no path or the language server
+    /// does not advertise signature help support. The response arrives as
+    /// `LspEvent::SignatureHelpResponse` via `poll_lsp()`.
+    pub(super) fn request_signature_help(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Some(buf) = self.buffer_manager.active_buffer() {
+                if let Some(path) = buf.path() {
+                    let path = path.to_path_buf();
+                    let line = buf.cursor.row as u32;
+                    let col = buf.cursor.col as u32;
+                    if let Err(e) = lsp.request_signature_help(&path, line, col) {
+                        log::warn!("LSP signature help request failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns the signature help trigger characters for the active buffer.
+    pub(super) fn signature_help_trigger_chars(&self) -> Vec<char> {
+        let Some(buf) = self.buffer_manager.active_buffer() else {
+            return Vec::new();
+        };
+        let Some(path) = buf.path() else {
+            return Vec::new();
+        };
+        self.lsp_manager
+            .as_ref()
+            .map(|lsp| lsp.signature_help_trigger_chars(path))
+            .unwrap_or_default()
+    }
+
+    /// Auto-triggers or dismisses signature help in response to a typed
+    /// character.
+    ///
+    /// Opens the popup when `ch` matches one of the server's advertised
+    /// signature help trigger characters (typically `(` and `,`). Closes
+    /// the popup when `ch` is a closing delimiter that ends the current
+    /// call or bracket group.
+    pub(super) fn maybe_auto_trigger_signature_help(&mut self, ch: char) {
+        // Closing brackets always dismiss the popup.
+        if matches!(ch, ')' | ']' | '}' | ';') {
+            self.signature_help = None;
+            return;
+        }
+        let triggers = self.signature_help_trigger_chars();
+        if triggers.contains(&ch) {
+            self.request_signature_help();
         }
     }
 

@@ -274,6 +274,14 @@ impl AppState {
             }
         }
 
+        // Esc dismisses signature help first (before closing other overlays).
+        // Signature help otherwise stays visible while the user types so it
+        // can follow the active parameter as commas are added.
+        if key.code == KeyCode::Esc && self.signature_help.is_some() {
+            self.signature_help = None;
+            return;
+        }
+
         // Location list overlay intercepts all keys when open.
         if let Some(ref mut loc_list) = self.location_list {
             match key.code {

@@ -197,6 +197,8 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "kill_ai_session" => Some(Command::KillAiSession),
         "toggle_line_comment" => Some(Command::ToggleLineComment),
         "toggle_block_comment" => Some(Command::ToggleBlockComment),
+        "show_signature_help" => Some(Command::ShowSignatureHelp),
+        "dismiss_signature_help" => Some(Command::DismissSignatureHelp),
         _ => None,
     }
 }
@@ -574,6 +576,13 @@ impl KeymapResolver {
             KeyModifiers::CONTROL,
             KeyCode::Char('_'),
             Command::ToggleLineComment,
+        );
+
+        // Show signature help: Ctrl+Shift+Space (manual trigger; auto-triggered on `(`/`,`).
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char(' '),
+            Command::ShowSignatureHelp,
         );
 
         // Toggle block comment: Shift+Alt+A (VS Code convention).

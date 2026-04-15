@@ -227,6 +227,12 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::SignatureHelp) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::SignatureHelpResponse { result });
+                                }
+                                continue;
+                            }
                             Some(PendingRequestKind::InlayHint { path, version }) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::InlayHintResponse {
@@ -281,6 +287,12 @@ impl LspManager {
                             Some(PendingRequestKind::Formatting) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::FormattingResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::SignatureHelp) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::SignatureHelpResponse { result });
                                 }
                                 continue;
                             }
@@ -479,6 +491,60 @@ impl LspManager {
             PendingRequestKind::Formatting,
         )?;
         Ok(true)
+    }
+
+    /// Sends a `textDocument/signatureHelp` request for the given file position.
+    ///
+    /// Returns `Ok(true)` if the request was sent, `Ok(false)` if no client
+    /// is available or the server does not advertise signature help support.
+    pub fn request_signature_help(
+        &mut self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        if !client.supports_signature_help() {
+            return Ok(false);
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character }
+        });
+
+        client.send_request(
+            "textDocument/signatureHelp",
+            params,
+            PendingRequestKind::SignatureHelp,
+        )?;
+        Ok(true)
+    }
+
+    /// Returns the active server's signature help trigger characters for a
+    /// given file path, or an empty vector if no server handles the file.
+    pub fn signature_help_trigger_chars(&self, path: &Path) -> Vec<char> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Vec::new();
+        };
+        self.clients
+            .get(lang_id)
+            .map(|c| c.signature_help_trigger_chars())
+            .unwrap_or_default()
     }
 
     /// Sends a `textDocument/inlayHint` request for the given file range.

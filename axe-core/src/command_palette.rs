@@ -75,6 +75,7 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Edit: Format Document", Command::FormatDocument),
         ("Edit: Toggle Line Comment", Command::ToggleLineComment),
         ("Edit: Toggle Block Comment", Command::ToggleBlockComment),
+        ("Code: Signature Help", Command::ShowSignatureHelp),
         ("Edit: Go to Line", Command::GoToLine),
         ("SSH: Connect to Host", Command::OpenSshHostFinder),
         ("AI: Toggle Chat Overlay", Command::ToggleAiOverlay),
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 40, "Expected 40 palette commands");
+        assert_eq!(p.items.len(), 41, "Expected 41 palette commands");
     }
 
     #[test]

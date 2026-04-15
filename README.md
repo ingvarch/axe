@@ -23,6 +23,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Syntax highlighting** -- tree-sitter based, 13+ languages out of the box
 - **LSP support** -- diagnostics, completions, go-to-definition, hover
 - **Inlay hints** -- inline LSP type and parameter hints rendered next to the code (rust-analyzer, gopls, pyright, etc.)
+- **Signature help** -- popup showing the function signature and active parameter; auto-triggers on `(` and `,`, manual on Ctrl+Shift+Space
 - **Comment toggling** -- Ctrl+/ for line comments, Shift+Alt+A for block comments; language-aware and single-step undo
 - **Fuzzy file finder** -- Ctrl+P, powered by nucleo
 - **Command palette** -- Ctrl+Shift+P, search and execute any command
@@ -91,6 +92,7 @@ axe /path/to/dir # Open specific directory
 | F12 | Go to definition |
 | Shift+F12 | Find references |
 | Ctrl+Shift+K / F4 | Show hover info |
+| Ctrl+Shift+Space | Show signature help (also auto-triggers on `(`/`,`) |
 | Ctrl+Shift+I | Format document |
 | Ctrl+/ | Toggle line comment on selection or current line |
 | Shift+Alt+A | Toggle block comment on selection |

@@ -1315,6 +1315,172 @@ pub(crate) fn render_hover_tooltip(
     }
 }
 
+/// Maximum width for the signature help popup.
+const SIG_HELP_MAX_WIDTH: u16 = 100;
+/// Maximum height for the signature help popup.
+const SIG_HELP_MAX_HEIGHT: u16 = 6;
+
+/// Renders the signature help popup above the cursor line.
+///
+/// Highlights the active parameter within the signature label and shows
+/// up to two extra lines with the parameter and signature documentation.
+/// Positions above the cursor when possible, falling back to below.
+pub(crate) fn render_signature_help(
+    state: &axe_core::SignatureHelpState,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    let Some(signature) = state.active() else {
+        return;
+    };
+    if signature.label.is_empty() {
+        return;
+    }
+
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    // Gutter width (same math as hover / completion popups).
+    let line_count = buffer.line_count();
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH + DIFF_GUTTER_WIDTH;
+
+    // Active parameter range (char offsets) within the signature label.
+    let active_range = state.active_parameter_range();
+
+    // Build the signature label line with the active parameter highlighted.
+    let active_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.search_active_match_bg)
+        .add_modifier(Modifier::BOLD);
+    let base_style = Style::default().fg(theme.foreground).bg(theme.overlay_bg);
+
+    let label_chars: Vec<char> = signature.label.chars().collect();
+    let mut label_spans: Vec<Span> = Vec::new();
+    if let Some((start, end)) = active_range {
+        let safe_start = start.min(label_chars.len());
+        let safe_end = end.min(label_chars.len()).max(safe_start);
+        if safe_start > 0 {
+            label_spans.push(Span::styled(
+                label_chars[..safe_start].iter().collect::<String>(),
+                base_style,
+            ));
+        }
+        if safe_end > safe_start {
+            label_spans.push(Span::styled(
+                label_chars[safe_start..safe_end].iter().collect::<String>(),
+                active_style,
+            ));
+        }
+        if safe_end < label_chars.len() {
+            label_spans.push(Span::styled(
+                label_chars[safe_end..].iter().collect::<String>(),
+                base_style,
+            ));
+        }
+    } else {
+        label_spans.push(Span::styled(signature.label.clone(), base_style));
+    }
+
+    // Optional context line: signature index / total, plus active param doc.
+    let mut extra_lines: Vec<String> = Vec::new();
+    if state.signatures.len() > 1 {
+        extra_lines.push(format!(
+            "Overload {} of {}",
+            state.active_signature + 1,
+            state.signatures.len()
+        ));
+    }
+    if let Some(param) = signature.parameters.get(state.active_parameter) {
+        if let Some(doc) = &param.documentation {
+            if !doc.is_empty() {
+                extra_lines.push(doc.clone());
+            }
+        }
+    }
+
+    // Popup dimensions: label width + any extra lines, clamped to limits.
+    let label_width = signature.label.chars().count() as u16;
+    let extra_width = extra_lines
+        .iter()
+        .map(|s| s.chars().count() as u16)
+        .max()
+        .unwrap_or(0);
+    let content_width = label_width.max(extra_width);
+    let popup_width = (content_width + 2) // +2 for borders
+        .min(SIG_HELP_MAX_WIDTH)
+        .min(editor_w);
+
+    let content_height = 1 + extra_lines.len() as u16;
+    let popup_height = (content_height + 2) // +2 for borders
+        .min(SIG_HELP_MAX_HEIGHT)
+        .min(editor_h);
+
+    // Position: prefer above cursor line; if no space, place below.
+    let cursor_screen_row = state.anchor_row.saturating_sub(buffer.scroll_row) as u16;
+    let cursor_screen_col = state.anchor_col.saturating_sub(buffer.scroll_col) as u16;
+
+    let popup_x = (editor_x + gutter_width + cursor_screen_col).min(
+        editor_x
+            .saturating_add(editor_w)
+            .saturating_sub(popup_width),
+    );
+
+    let space_above = cursor_screen_row;
+    let above_y = editor_y
+        .saturating_add(cursor_screen_row)
+        .saturating_sub(popup_height);
+    let below_y = editor_y + cursor_screen_row + 1;
+
+    let popup_y = if space_above >= popup_height {
+        above_y
+    } else {
+        below_y
+    };
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground))
+        .border_style(Style::default().fg(theme.overlay_border));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Row 0: signature label with active parameter highlight.
+    if inner.height > 0 {
+        let line_rect = Rect::new(inner.x, inner.y, inner.width, 1);
+        frame.render_widget(Paragraph::new(Line::from(label_spans)), line_rect);
+    }
+
+    // Subsequent rows: context / documentation lines.
+    let dim_style = Style::default()
+        .fg(theme.status_bar_key)
+        .bg(theme.overlay_bg)
+        .add_modifier(Modifier::ITALIC);
+    for (i, text) in extra_lines.iter().enumerate() {
+        let row = (i as u16) + 1;
+        if row >= inner.height {
+            break;
+        }
+        let line_rect = Rect::new(inner.x, inner.y + row, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(text.clone(), dim_style))),
+            line_rect,
+        );
+    }
+}
+
 /// Minimum width for the diff popup.
 const DIFF_POPUP_MIN_WIDTH: u16 = 30;
 /// Maximum width for the diff popup.

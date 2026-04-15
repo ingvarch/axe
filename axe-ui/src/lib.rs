@@ -27,7 +27,8 @@ use layout::LayoutManager;
 use overlays::{
     render_command_palette, render_completion_popup, render_confirm_dialog, render_diff_popup,
     render_file_finder, render_go_to_line, render_help_overlay, render_hover_tooltip,
-    render_location_list, render_password_dialog, render_project_search, render_ssh_host_finder,
+    render_location_list, render_password_dialog, render_project_search, render_signature_help,
+    render_ssh_host_finder,
 };
 use status_bar::build_status_bar;
 use terminal_panel::{adjust_terminal_rect, render_right_panels, render_terminal_content};
@@ -681,6 +682,14 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     if let Some(ref hover) = app.hover_info {
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             render_hover_tooltip(hover, buffer, app, frame, theme);
+        }
+    }
+
+    // Signature help popup (non-modal, drawn above completion so it wins
+    // the z-order when both are open).
+    if let Some(ref sig) = app.signature_help {
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_signature_help(sig, buffer, app, frame, theme);
         }
     }
 

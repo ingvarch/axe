@@ -228,6 +228,10 @@ pub enum Command {
     FindReferences,
     /// Show hover information for the symbol under the cursor.
     ShowHover,
+    /// Request LSP signature help for the current cursor position.
+    ShowSignatureHelp,
+    /// Dismiss the signature help popup without moving the cursor.
+    DismissSignatureHelp,
     /// Format the current document using the LSP formatter.
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
@@ -398,6 +402,8 @@ mod tests {
             Command::CloseDiffPopup,
             Command::ToggleLineComment,
             Command::ToggleBlockComment,
+            Command::ShowSignatureHelp,
+            Command::DismissSignatureHelp,
         ];
 
         for (i, a) in variants.iter().enumerate() {

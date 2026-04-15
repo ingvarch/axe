@@ -140,6 +140,8 @@ pub struct AppState {
     pub password_dialog: Option<PasswordDialog>,
     /// Active hover tooltip, if showing.
     pub hover_info: Option<crate::hover::HoverInfo>,
+    /// Active LSP signature help popup, if open.
+    pub signature_help: Option<crate::signature_help::SignatureHelpState>,
     /// Inlay hints indexed by buffer path, refreshed as the buffer changes.
     pub inlay_hints: crate::inlay::InlayHintStore,
     /// Monotonic content versions for open buffers — bumped on every edit.
@@ -231,6 +233,7 @@ impl AppState {
             completion: None,
             location_list: None,
             hover_info: None,
+            signature_help: None,
             inlay_hints: crate::inlay::InlayHintStore::new(),
             buffer_content_versions: std::collections::HashMap::new(),
             hover_mouse_state: None,

@@ -24,6 +24,7 @@ pub enum PendingRequestKind {
     References,
     Hover,
     Formatting,
+    SignatureHelp,
     InlayHint { path: PathBuf, version: u64 },
 }
 
@@ -60,6 +61,10 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/formatting request.
     FormattingResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/signatureHelp request.
+    SignatureHelpResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server responded to a textDocument/inlayHint request.
@@ -304,6 +309,25 @@ impl LspClient {
             .is_some()
     }
 
+    /// Returns whether the server supports signature help.
+    pub fn supports_signature_help(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.signature_help_provider.as_ref())
+            .is_some()
+    }
+
+    /// Returns the signature help trigger characters advertised by the server,
+    /// or an empty slice if none are configured.
+    pub fn signature_help_trigger_chars(&self) -> Vec<char> {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.signature_help_provider.as_ref())
+            .and_then(|p| p.trigger_characters.as_ref())
+            .map(|chars| chars.iter().filter_map(|s| s.chars().next()).collect())
+            .unwrap_or_default()
+    }
+
     /// Returns the language ID this client handles.
     pub fn language_id(&self) -> &str {
         &self.language_id
@@ -392,6 +416,15 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 "hover": {
                     "dynamicRegistration": false,
                     "contentFormat": ["markdown", "plaintext"],
+                },
+                "signatureHelp": {
+                    "dynamicRegistration": false,
+                    "signatureInformation": {
+                        "documentationFormat": ["markdown", "plaintext"],
+                        "parameterInformation": {
+                            "labelOffsetSupport": true,
+                        },
+                    },
                 },
                 "formatting": {
                     "dynamicRegistration": false,
@@ -782,6 +815,28 @@ mod tests {
         let inlay = &params["capabilities"]["textDocument"]["inlayHint"];
         assert!(inlay.is_object());
         assert_eq!(inlay["dynamicRegistration"], false);
+    }
+
+    #[test]
+    fn initialize_params_includes_signature_help() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let sig = &params["capabilities"]["textDocument"]["signatureHelp"];
+        assert!(sig.is_object());
+        assert_eq!(sig["dynamicRegistration"], false);
+        assert_eq!(
+            sig["signatureInformation"]["parameterInformation"]["labelOffsetSupport"],
+            true
+        );
+    }
+
+    #[test]
+    fn pending_request_kind_signature_help_distinct() {
+        assert_ne!(PendingRequestKind::SignatureHelp, PendingRequestKind::Hover);
+        assert_ne!(
+            PendingRequestKind::SignatureHelp,
+            PendingRequestKind::Completion
+        );
     }
 
     #[test]
