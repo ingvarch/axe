@@ -22,6 +22,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Three-panel layout** -- file tree, code editor, integrated terminal
 - **Syntax highlighting** -- tree-sitter based, 13+ languages out of the box
 - **LSP support** -- diagnostics, completions, go-to-definition, hover
+- **Inlay hints** -- inline LSP type and parameter hints rendered next to the code (rust-analyzer, gopls, pyright, etc.)
 - **Comment toggling** -- Ctrl+/ for line comments, Shift+Alt+A for block comments; language-aware and single-step undo
 - **Fuzzy file finder** -- Ctrl+P, powered by nucleo
 - **Command palette** -- Ctrl+Shift+P, search and execute any command

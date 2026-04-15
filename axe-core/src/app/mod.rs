@@ -140,6 +140,11 @@ pub struct AppState {
     pub password_dialog: Option<PasswordDialog>,
     /// Active hover tooltip, if showing.
     pub hover_info: Option<crate::hover::HoverInfo>,
+    /// Inlay hints indexed by buffer path, refreshed as the buffer changes.
+    pub inlay_hints: crate::inlay::InlayHintStore,
+    /// Monotonic content versions for open buffers — bumped on every edit.
+    /// Used to discard stale `textDocument/inlayHint` responses.
+    pub buffer_content_versions: std::collections::HashMap<PathBuf, u64>,
     /// Mouse hover state for delay-triggered hover: (timestamp, buffer_row, buffer_col).
     hover_mouse_state: Option<(Instant, usize, usize)>,
     /// Whether a format-on-save operation is pending (waiting for LSP formatting response).
@@ -226,6 +231,8 @@ impl AppState {
             completion: None,
             location_list: None,
             hover_info: None,
+            inlay_hints: crate::inlay::InlayHintStore::new(),
+            buffer_content_versions: std::collections::HashMap::new(),
             hover_mouse_state: None,
             pending_format_save: false,
             build_version: String::new(),

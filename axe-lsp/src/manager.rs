@@ -227,6 +227,16 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::InlayHint { path, version }) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::InlayHintResponse {
+                                        path,
+                                        version,
+                                        result,
+                                    });
+                                }
+                                continue;
+                            }
                             None => {}
                         }
                     }
@@ -271,6 +281,16 @@ impl LspManager {
                             Some(PendingRequestKind::Formatting) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::FormattingResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::InlayHint { path, version }) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::InlayHintResponse {
+                                        path,
+                                        version,
+                                        result,
+                                    });
                                 }
                                 continue;
                             }
@@ -457,6 +477,58 @@ impl LspManager {
             "textDocument/formatting",
             params,
             PendingRequestKind::Formatting,
+        )?;
+        Ok(true)
+    }
+
+    /// Sends a `textDocument/inlayHint` request for the given file range.
+    ///
+    /// Returns `Ok(true)` if the request was sent, `Ok(false)` if inlay hints
+    /// are unsupported or no client is available. `version` is passed through
+    /// the response so the caller can drop stale hints after subsequent edits.
+    pub fn request_inlay_hints(
+        &mut self,
+        path: &Path,
+        version: u64,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        if !client.supports_inlay_hints() {
+            return Ok(false);
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "range": {
+                "start": { "line": start_line, "character": start_character },
+                "end": { "line": end_line, "character": end_character },
+            }
+        });
+
+        client.send_request(
+            "textDocument/inlayHint",
+            params,
+            PendingRequestKind::InlayHint {
+                path: path.to_path_buf(),
+                version,
+            },
         )?;
         Ok(true)
     }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 
@@ -11,6 +12,11 @@ use url::Url;
 use crate::transport::{self, JsonRpcError, JsonRpcMessage, RequestId};
 
 /// Identifies the type of a pending LSP request for response routing.
+///
+/// Most kinds are unit variants because the caller implicitly knows the
+/// context (e.g. hover is always for the current cursor). `InlayHint`
+/// carries the target path and the buffer content version so responses
+/// can be routed to the right buffer and stale results can be dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingRequestKind {
     Completion,
@@ -18,6 +24,7 @@ pub enum PendingRequestKind {
     References,
     Hover,
     Formatting,
+    InlayHint { path: PathBuf, version: u64 },
 }
 
 /// Events sent from the LSP reader thread to the main thread.
@@ -53,6 +60,15 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/formatting request.
     FormattingResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/inlayHint request.
+    InlayHintResponse {
+        /// File the hints apply to.
+        path: PathBuf,
+        /// Buffer content version the request was issued against.
+        /// The handler drops the response if the buffer has moved on.
+        version: u64,
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server process crashed or exited unexpectedly.
@@ -280,6 +296,14 @@ impl LspClient {
             .is_some()
     }
 
+    /// Returns whether the server supports inlay hints.
+    pub fn supports_inlay_hints(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.inlay_hint_provider.as_ref())
+            .is_some()
+    }
+
     /// Returns the language ID this client handles.
     pub fn language_id(&self) -> &str {
         &self.language_id
@@ -371,6 +395,10 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 },
                 "formatting": {
                     "dynamicRegistration": false,
+                },
+                "inlayHint": {
+                    "dynamicRegistration": false,
+                    "resolveSupport": { "properties": [] },
                 },
             },
         },
@@ -711,6 +739,10 @@ mod tests {
             PendingRequestKind::References,
             PendingRequestKind::Hover,
             PendingRequestKind::Formatting,
+            PendingRequestKind::InlayHint {
+                path: std::path::PathBuf::from("/tmp/a.rs"),
+                version: 1,
+            },
         ];
         // Each variant should not equal any other variant.
         for (i, a) in variants.iter().enumerate() {
@@ -722,6 +754,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn pending_request_kind_inlay_hint_distinguishes_path_and_version() {
+        let a = PendingRequestKind::InlayHint {
+            path: std::path::PathBuf::from("/tmp/a.rs"),
+            version: 1,
+        };
+        let b = PendingRequestKind::InlayHint {
+            path: std::path::PathBuf::from("/tmp/a.rs"),
+            version: 2,
+        };
+        let c = PendingRequestKind::InlayHint {
+            path: std::path::PathBuf::from("/tmp/b.rs"),
+            version: 1,
+        };
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
+    }
+
+    #[test]
+    fn initialize_params_includes_inlay_hint() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let inlay = &params["capabilities"]["textDocument"]["inlayHint"];
+        assert!(inlay.is_object());
+        assert_eq!(inlay["dynamicRegistration"], false);
     }
 
     #[test]

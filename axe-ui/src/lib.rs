@@ -3,6 +3,7 @@ pub mod theme;
 
 mod ai_overlay;
 mod editor_panel;
+mod inlay;
 mod overlays;
 mod status_bar;
 mod terminal_panel;
@@ -605,6 +606,11 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
                         app.buffer_manager.buffers(),
                         app.buffer_manager.active_index(),
                     ));
+                    let hints: &[axe_core::InlayHint] = buffer
+                        .path()
+                        .and_then(|p| app.inlay_hints.get(p))
+                        .map(|entry| entry.hints.as_slice())
+                        .unwrap_or(&[]);
                     render_editor_content(
                         buffer,
                         inner,
@@ -613,6 +619,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
                         focused,
                         app.search.as_ref(),
                         tab_bar,
+                        hints,
                     );
                 } else {
                     render_startup_screen(inner, frame, theme, &app.build_version);

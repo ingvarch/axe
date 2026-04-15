@@ -71,6 +71,7 @@ pub struct EditorColors {
     pub diagnostic_warning: Option<String>,
     pub diagnostic_info: Option<String>,
     pub diagnostic_hint: Option<String>,
+    pub inlay_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

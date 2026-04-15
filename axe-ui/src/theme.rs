@@ -108,6 +108,8 @@ pub struct Theme {
     pub diagnostic_info: Color,
     /// Diagnostic hint color (grey).
     pub diagnostic_hint: Color,
+    /// Foreground color for LSP inlay hints (dim, italic).
+    pub inlay_hint: Color,
 }
 
 impl Theme {
@@ -198,6 +200,7 @@ impl Theme {
             ),
             diagnostic_info: color_or(&tf.editor.diagnostic_info, defaults.diagnostic_info),
             diagnostic_hint: color_or(&tf.editor.diagnostic_hint, defaults.diagnostic_hint),
+            inlay_hint: color_or(&tf.editor.inlay_hint, defaults.inlay_hint),
         }
     }
 
@@ -277,6 +280,7 @@ impl Default for Theme {
             diagnostic_warning: Color::Rgb(229, 192, 123), // #e5c07b — yellow
             diagnostic_info: Color::Rgb(97, 175, 239),   // #61afef — blue
             diagnostic_hint: Color::Rgb(130, 137, 151),  // #828997 — grey
+            inlay_hint: Color::Rgb(100, 108, 124),       // #646c7c — dim bluish grey
         }
     }
 }

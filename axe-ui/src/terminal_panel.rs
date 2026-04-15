@@ -394,6 +394,11 @@ pub(crate) fn render_right_panels(
                 app.buffer_manager.buffers(),
                 app.buffer_manager.active_index(),
             ));
+            let hints: &[axe_core::InlayHint] = buffer
+                .path()
+                .and_then(|p| app.inlay_hints.get(p))
+                .map(|entry| entry.hints.as_slice())
+                .unwrap_or(&[]);
             render_editor_content(
                 buffer,
                 editor_inner,
@@ -402,6 +407,7 @@ pub(crate) fn render_right_panels(
                 focused,
                 app.search.as_ref(),
                 tab_bar,
+                hints,
             );
         } else {
             render_startup_screen(editor_inner, frame, theme, &app.build_version);
@@ -435,6 +441,11 @@ pub(crate) fn render_right_panels(
                 app.buffer_manager.buffers(),
                 app.buffer_manager.active_index(),
             ));
+            let hints: &[axe_core::InlayHint] = buffer
+                .path()
+                .and_then(|p| app.inlay_hints.get(p))
+                .map(|entry| entry.hints.as_slice())
+                .unwrap_or(&[]);
             render_editor_content(
                 buffer,
                 editor_inner,
@@ -443,6 +454,7 @@ pub(crate) fn render_right_panels(
                 focused,
                 app.search.as_ref(),
                 tab_bar,
+                hints,
             );
         } else {
             render_startup_screen(editor_inner, frame, theme, &app.build_version);

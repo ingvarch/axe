@@ -245,6 +245,9 @@ impl AppState {
                             }
                         }
                     }
+                    // Seed content version and request initial inlay hints.
+                    let version = self.bump_content_version(&path);
+                    self.request_inlay_hints_for(&path, version);
                     // Compute initial git diff hunks.
                     self.refresh_active_buffer_diff_hunks();
                 }

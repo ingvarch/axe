@@ -5,10 +5,11 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use axe_core::search::SearchField;
-use axe_core::{AppState, SearchState};
+use axe_core::{AppState, InlayHint, SearchState};
 use axe_editor::diagnostic::{diagnostics_for_line, most_severe_for_line, DiagnosticSeverity};
 use axe_editor::EditorBuffer;
 
+use crate::inlay::{format_inlay_label, hint_shift_before, paint_line_with_hints, VisualCell};
 use crate::theme::Theme;
 
 /// Minimum gutter padding (1 space each side of the line number).
@@ -552,6 +553,7 @@ pub(crate) fn render_scrollbar(
 // Siblings: render_terminal_content (similar pattern, independent).
 /// Renders the file content with line numbers, scroll offset, cursor, and
 /// current-line highlighting inside the editor panel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_editor_content(
     buffer: &EditorBuffer,
     area: Rect,
@@ -560,6 +562,7 @@ pub(crate) fn render_editor_content(
     editor_focused: bool,
     search: Option<&SearchState>,
     tab_bar: Option<(&[EditorBuffer], usize)>,
+    inlay_hints: &[InlayHint],
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -851,7 +854,26 @@ pub(crate) fn render_editor_content(
                         .filter(|(hs, he, _)| he > hs)
                         .collect();
 
-                if highlights.is_empty() && diag_underlines.is_empty() {
+                // Collect inlay hints for this line, converting their logical
+                // column to the scrolled display column used by the renderer.
+                // Hints past the viewport are dropped.
+                let line_hint_positions: Vec<(usize, String)> = inlay_hints
+                    .iter()
+                    .filter(|h| h.row == file_line)
+                    .filter_map(|h| {
+                        let display_col =
+                            char_to_display_col(c2d, h.col).saturating_sub(scroll_col);
+                        if display_col > content_w as usize {
+                            return None;
+                        }
+                        Some((display_col, format_inlay_label(h)))
+                    })
+                    .collect();
+
+                if highlights.is_empty()
+                    && diag_underlines.is_empty()
+                    && line_hint_positions.is_empty()
+                {
                     // No highlights or diagnostics — render normally.
                     let padded = if is_cursor_line {
                         format!("{:<width$}", display, width = content_w as usize)
@@ -887,16 +909,57 @@ pub(crate) fn render_editor_content(
                     }
                 }
 
+                // Inlay hints: merge virtual cells into the rendered line via
+                // the pure `paint_line_with_hints` helper. Each hint cell
+                // inherits a dim/italic style from the theme. Char cells keep
+                // the per-character styles we just computed.
+                let hint_style = Style::default()
+                    .fg(theme.inlay_hint)
+                    .bg(base_bg)
+                    .add_modifier(Modifier::ITALIC);
+
+                let (final_chars, final_styles): (Vec<char>, Vec<Style>) =
+                    if line_hint_positions.is_empty() {
+                        (chars, char_styles)
+                    } else {
+                        let padded_str: String = chars.iter().collect();
+                        let visuals = paint_line_with_hints(&padded_str, &line_hint_positions);
+                        let mut merged_chars = Vec::with_capacity(visuals.len());
+                        let mut merged_styles = Vec::with_capacity(visuals.len());
+                        let mut char_idx = 0usize;
+                        for cell in &visuals {
+                            match cell {
+                                VisualCell::Char(c) => {
+                                    merged_chars.push(*c);
+                                    merged_styles.push(char_styles[char_idx]);
+                                    char_idx += 1;
+                                }
+                                VisualCell::Hint(c) => {
+                                    merged_chars.push(*c);
+                                    merged_styles.push(hint_style);
+                                }
+                            }
+                        }
+                        // Clip to content_w in case hints extended the line.
+                        if merged_chars.len() > content_w as usize {
+                            merged_chars.truncate(content_w as usize);
+                            merged_styles.truncate(content_w as usize);
+                        }
+                        (merged_chars, merged_styles)
+                    };
+
+                let final_len = final_chars.len();
+
                 // Compress consecutive same-style chars into spans.
                 let mut spans = Vec::new();
                 let mut run_start = 0;
-                while run_start < len {
-                    let run_style = char_styles[run_start];
+                while run_start < final_len {
+                    let run_style = final_styles[run_start];
                     let mut run_end = run_start + 1;
-                    while run_end < len && char_styles[run_end] == run_style {
+                    while run_end < final_len && final_styles[run_end] == run_style {
                         run_end += 1;
                     }
-                    let s: String = chars[run_start..run_end].iter().collect();
+                    let s: String = final_chars[run_start..run_end].iter().collect();
                     spans.push(Span::styled(s, run_style));
                     run_start = run_end;
                 }
@@ -923,7 +986,8 @@ pub(crate) fn render_editor_content(
     }
 
     // Render cursor by directly modifying the frame buffer cell at the cursor position.
-    // Convert char-based cursor and scroll positions to display columns via tab expansion.
+    // Convert char-based cursor and scroll positions to display columns via tab expansion,
+    // then shift right by any inlay hint cells that appear before the cursor on that line.
     if editor_focused {
         let screen_row = cursor_row.saturating_sub(scroll_row);
         let cursor_display_col = if let Some(cursor_line) = buffer.line_at(cursor_row) {
@@ -931,7 +995,25 @@ pub(crate) fn render_editor_content(
             let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
             let expanded = expand_tabs(trimmed, tab_size);
             let scroll_col = char_to_display_col(&expanded.char_to_col, scroll_col_char);
-            char_to_display_col(&expanded.char_to_col, cursor_col_char).saturating_sub(scroll_col)
+            let base = char_to_display_col(&expanded.char_to_col, cursor_col_char)
+                .saturating_sub(scroll_col);
+
+            // Build the same hint positions the renderer used for this row and
+            // shift the cursor past any hint cells preceding it.
+            let cursor_line_hints: Vec<(usize, String)> = inlay_hints
+                .iter()
+                .filter(|h| h.row == cursor_row)
+                .map(|h| {
+                    let display_col = char_to_display_col(&expanded.char_to_col, h.col)
+                        .saturating_sub(scroll_col);
+                    (display_col, format_inlay_label(h))
+                })
+                .collect();
+            // A hint anchored exactly at the cursor column appears BEFORE the
+            // cursor's character, so it shifts the cursor; use `< base + 1`
+            // semantics via the helper which accepts `<= display_col`.
+            let shift = hint_shift_before(&cursor_line_hints, base.saturating_sub(1));
+            base + shift
         } else {
             cursor_col_char.saturating_sub(scroll_col_char)
         };

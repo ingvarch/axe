@@ -132,6 +132,33 @@ impl AppState {
                         self.save_active_buffer(); // Save anyway on error.
                     }
                 }
+                axe_lsp::LspEvent::InlayHintResponse {
+                    path,
+                    version,
+                    result: Ok(value),
+                } => {
+                    // Drop stale responses: if the buffer has moved on since
+                    // the request was sent, the hint positions no longer line
+                    // up with the text.
+                    let current = self
+                        .buffer_content_versions
+                        .get(&path)
+                        .copied()
+                        .unwrap_or(0);
+                    if version < current {
+                        continue;
+                    }
+                    let hints = crate::inlay::parse_inlay_hint_response(&value);
+                    self.inlay_hints
+                        .set(path, crate::inlay::InlayHintEntry { version, hints });
+                }
+                axe_lsp::LspEvent::InlayHintResponse {
+                    path: _,
+                    version: _,
+                    result: Err(e),
+                } => {
+                    log::warn!("LSP inlay hint error: {}", e.message);
+                }
             }
         }
     }
@@ -139,16 +166,64 @@ impl AppState {
     /// Notifies the LSP manager that the active buffer content changed.
     ///
     /// Called after every edit command (insert, delete, paste, undo, redo, etc.).
+    /// Also bumps the per-buffer content version and re-requests inlay hints
+    /// so the display stays in sync with the text.
     pub(super) fn notify_lsp_change(&mut self) {
+        let Some(path) = self
+            .buffer_manager
+            .active_buffer()
+            .and_then(|buf| buf.path())
+            .map(|p| p.to_path_buf())
+        else {
+            return;
+        };
+
+        let text = self
+            .buffer_manager
+            .active_buffer()
+            .map(|buf| buf.content_string())
+            .unwrap_or_default();
+
+        let version = self.bump_content_version(&path);
+
         if let Some(ref mut lsp) = self.lsp_manager {
-            if let Some(buf) = self.buffer_manager.active_buffer() {
-                if let Some(path) = buf.path() {
-                    let text = buf.content_string();
-                    let path = path.to_path_buf();
-                    if let Err(e) = lsp.file_changed(&path, &text) {
-                        log::warn!("LSP didChange failed: {e}");
-                    }
-                }
+            if let Err(e) = lsp.file_changed(&path, &text) {
+                log::warn!("LSP didChange failed: {e}");
+            }
+        }
+
+        self.request_inlay_hints_for(&path, version);
+    }
+
+    /// Increments and returns the content version for the given buffer path.
+    ///
+    /// Used as a monotonic counter to discard stale inlay-hint (and future
+    /// versioned) responses for a buffer whose contents have since changed.
+    pub(super) fn bump_content_version(&mut self, path: &std::path::Path) -> u64 {
+        let entry = self
+            .buffer_content_versions
+            .entry(path.to_path_buf())
+            .or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    /// Sends a `textDocument/inlayHint` request covering the whole document.
+    ///
+    /// Called after didOpen and after didChange. Silently no-ops if the server
+    /// is not running or does not advertise the capability.
+    pub(super) fn request_inlay_hints_for(&mut self, path: &std::path::Path, version: u64) {
+        let line_count = match self.buffer_manager.active_buffer() {
+            Some(buf) if buf.path() == Some(path) => buf.line_count(),
+            _ => return,
+        };
+        if line_count == 0 {
+            return;
+        }
+        let end_line = line_count.saturating_sub(1) as u32;
+        if let Some(ref mut lsp) = self.lsp_manager {
+            if let Err(e) = lsp.request_inlay_hints(path, version, 0, 0, end_line + 1, 0) {
+                log::warn!("LSP inlay hint request failed: {e}");
             }
         }
     }
