@@ -78,6 +78,18 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
         ("Code: Signature Help", Command::ShowSignatureHelp),
         ("Code: Rename Symbol", Command::StartRename),
         ("Code: Quick Fix / Code Actions", Command::ShowCodeActions),
+        (
+            "Edit: Add Cursor at Next Occurrence",
+            Command::AddCursorAtNextOccurrence,
+        ),
+        (
+            "Edit: Select All Occurrences",
+            Command::SelectAllOccurrences,
+        ),
+        (
+            "Edit: Clear Secondary Cursors",
+            Command::ClearSecondaryCursors,
+        ),
         ("Edit: Go to Line", Command::GoToLine),
         ("SSH: Connect to Host", Command::OpenSshHostFinder),
         ("AI: Toggle Chat Overlay", Command::ToggleAiOverlay),
@@ -236,7 +248,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 43, "Expected 43 palette commands");
+        assert_eq!(p.items.len(), 46, "Expected 46 palette commands");
     }
 
     #[test]

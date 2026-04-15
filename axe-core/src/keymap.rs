@@ -201,6 +201,9 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "dismiss_signature_help" => Some(Command::DismissSignatureHelp),
         "start_rename" => Some(Command::StartRename),
         "show_code_actions" => Some(Command::ShowCodeActions),
+        "add_cursor_at_next_occurrence" => Some(Command::AddCursorAtNextOccurrence),
+        "select_all_occurrences" => Some(Command::SelectAllOccurrences),
+        "clear_secondary_cursors" => Some(Command::ClearSecondaryCursors),
         _ => None,
     }
 }
@@ -601,6 +604,31 @@ impl KeymapResolver {
             Command::ShowCodeActions,
         );
         resolver.bind(KeyModifiers::ALT, KeyCode::Enter, Command::ShowCodeActions);
+
+        // Multi-cursor: Ctrl+D adds a cursor at the next occurrence of the
+        // current word / selection (VS Code convention).
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('d'),
+            Command::AddCursorAtNextOccurrence,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('D'),
+            Command::AddCursorAtNextOccurrence,
+        );
+        // Select every occurrence: Ctrl+Alt+L.
+        // (VS Code uses Ctrl+Shift+L, which Axe reserves for FocusTerminal.)
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyCode::Char('l'),
+            Command::SelectAllOccurrences,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyCode::Char('L'),
+            Command::SelectAllOccurrences,
+        );
 
         // Toggle block comment: Shift+Alt+A (VS Code convention).
         // Ctrl+Shift+/ is reserved as a Ctrl+Space fallback for completion.

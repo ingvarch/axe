@@ -52,6 +52,111 @@ impl AppState {
         self.refresh_git_modified_files();
     }
 
+    /// Implements `Ctrl+D` — adds a secondary cursor at the next occurrence
+    /// of the current selection / word under the cursor.
+    ///
+    /// Semantics, matching VS Code:
+    /// - If the primary cursor has no selection, select the word at the
+    ///   cursor and stop. The next `Ctrl+D` will then find matches.
+    /// - If the primary cursor already has a selection, use its text as
+    ///   the needle and search forward from the last added cursor for
+    ///   the next match. Add that match as a new cursor with a selection.
+    pub(super) fn add_cursor_at_next_occurrence(&mut self) {
+        let Some(buf) = self.buffer_manager.active_buffer_mut() else {
+            return;
+        };
+
+        // First press: no selection yet — select the word under the cursor.
+        if !buf.has_selection() {
+            buf.select_word_at_cursor();
+            return;
+        }
+
+        // Pull the needle from the selection.
+        let Some(needle) = buf.selected_text() else {
+            return;
+        };
+        if needle.is_empty() {
+            return;
+        }
+
+        // Find the "last" cursor to search after: use the maximum-position
+        // cursor so Ctrl+D walks the file forward.
+        let cursors = buf.all_cursors();
+        let last = cursors
+            .last()
+            .cloned()
+            .unwrap_or_else(|| buf.cursor().clone());
+        let start_row = last.row;
+        let start_col = last.col;
+
+        let found = crate::search::find_next_occurrence(buf, &needle, start_row, start_col, true);
+        let Some(m) = found else {
+            self.set_status_message("No more occurrences".to_string());
+            return;
+        };
+
+        // Skip any match whose position already has a cursor.
+        if cursors
+            .iter()
+            .any(|c| c.row == m.row && (c.col == m.col_start || c.col == m.col_end))
+        {
+            // Try the next match after it.
+            let maybe_next =
+                crate::search::find_next_occurrence(buf, &needle, m.row, m.col_end, true);
+            if let Some(next) = maybe_next {
+                self.add_cursor_from_match(&next);
+            }
+            return;
+        }
+
+        self.add_cursor_from_match(&m);
+    }
+
+    /// Implements `Ctrl+Shift+L` — adds a cursor at every occurrence of the
+    /// current selection / word under the cursor.
+    pub(super) fn select_all_occurrences(&mut self) {
+        let Some(buf) = self.buffer_manager.active_buffer_mut() else {
+            return;
+        };
+
+        // Seed the selection if there isn't one yet.
+        if !buf.has_selection() {
+            buf.select_word_at_cursor();
+        }
+        let Some(needle) = buf.selected_text() else {
+            return;
+        };
+        if needle.is_empty() {
+            return;
+        }
+
+        let matches = crate::search::find_all_occurrences(buf, &needle, true);
+        for m in &matches {
+            self.add_cursor_from_match(m);
+        }
+    }
+
+    /// Adds a secondary cursor whose selection spans the given match.
+    fn add_cursor_from_match(&mut self, m: &crate::search::SearchMatch) {
+        let Some(buf) = self.buffer_manager.active_buffer_mut() else {
+            return;
+        };
+        // Primary stays at its current selection; secondary cursor anchored
+        // at the match with its own selection spanning `col_start..col_end`.
+        buf.add_secondary_cursor(
+            axe_editor::CursorState {
+                row: m.row,
+                col: m.col_end,
+                desired_col: m.col_end,
+            },
+            Some(axe_editor::Selection {
+                anchor_row: m.row,
+                anchor_col: m.col_start,
+            }),
+        );
+    }
+
     /// Applies the currently selected completion item, replacing the typed prefix.
     pub(super) fn apply_completion(&mut self) {
         let Some(ref comp) = self.completion else {

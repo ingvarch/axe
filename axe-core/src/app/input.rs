@@ -322,6 +322,20 @@ impl AppState {
             return;
         }
 
+        // Esc drops secondary cursors before falling through to other
+        // escape behaviour (e.g. clearing a selection or closing overlays).
+        if key.code == KeyCode::Esc
+            && self
+                .buffer_manager
+                .active_buffer()
+                .is_some_and(|b| b.has_multiple_cursors())
+        {
+            if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                buf.clear_secondary_cursors();
+            }
+            return;
+        }
+
         // Location list overlay intercepts all keys when open.
         if let Some(ref mut loc_list) = self.location_list {
             match key.code {
@@ -823,12 +837,28 @@ impl AppState {
 
                 // Check if click is in editor content area -- multi-click detection.
                 if let Some((erow, ecol)) = self.screen_to_editor_pos(col, row) {
+                    // Alt+Click adds a secondary cursor at the click position
+                    // without touching the existing selection/primary cursor.
+                    if mouse.modifiers.contains(KeyModifiers::ALT) {
+                        self.execute(Command::AddCursorAtPosition {
+                            row: erow,
+                            col: ecol,
+                        });
+                        self.focus = FocusTarget::Editor;
+                        return;
+                    }
+
                     let now = Instant::now();
                     let click_count =
                         self.editor_click_state
                             .register(now, erow, ecol, DOUBLE_CLICK_THRESHOLD);
 
                     if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                        // Plain click drops any multi-cursor state from a
+                        // prior Ctrl+D/Alt+Click session.
+                        if buf.has_multiple_cursors() {
+                            buf.clear_secondary_cursors();
+                        }
                         match click_count {
                             1 => {
                                 // Single click: position cursor, clear selection.

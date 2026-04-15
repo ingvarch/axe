@@ -657,7 +657,6 @@ pub(crate) fn render_editor_content(
     let scroll_row = buffer.scroll_row;
     let scroll_col_char = buffer.scroll_col;
     let cursor_row = buffer.cursor().row;
-    let cursor_col_char = buffer.cursor().col;
     let tab_size = buffer.tab_size();
 
     // Width available for line numbers (total gutter - diagnostic column - diff column - trailing space).
@@ -724,14 +723,23 @@ pub(crate) fn render_editor_content(
     let gutter_paragraph = Paragraph::new(gutter_lines).style(gutter_style);
     frame.render_widget(gutter_paragraph, gutter_area);
 
-    // Compute normalized selection range (if any).
-    let sel_range = buffer.selection().and_then(|sel| {
-        if sel.is_empty(cursor_row, cursor_col_char) {
-            None
-        } else {
-            Some(sel.normalized(cursor_row, cursor_col_char))
-        }
-    });
+    // Compute normalized selection ranges for every cursor that has one.
+    // Single-cursor case: exactly one entry (or none if no selection).
+    // Multi-cursor case: one entry per cursor with an active selection.
+    let sel_ranges: Vec<(usize, usize, usize, usize)> = buffer
+        .all_cursors()
+        .iter()
+        .zip(buffer.all_selections().iter())
+        .filter_map(|(cur, sel)| {
+            sel.as_ref().and_then(|s| {
+                if s.is_empty(cur.row, cur.col) {
+                    None
+                } else {
+                    Some(s.normalized(cur.row, cur.col))
+                }
+            })
+        })
+        .collect();
 
     // Render file content with scroll offset, current-line background,
     // syntax highlighting, selection highlight, and search match highlighting.
@@ -822,8 +830,10 @@ pub(crate) fn render_editor_content(
                     }
                 }
 
-                // Selection highlight (highest priority — override bg).
-                if let Some((sr, sc, er, ec)) = sel_range {
+                // Selection highlights (highest priority — override bg).
+                // Iterate over every cursor's selection so multi-cursor mode
+                // paints each highlighted range on this line.
+                for &(sr, sc, er, ec) in &sel_ranges {
                     if file_line >= sr && file_line <= er {
                         let line_sel_start = if file_line == sr {
                             char_to_display_col(c2d, sc).saturating_sub(scroll_col)
@@ -985,47 +995,50 @@ pub(crate) fn render_editor_content(
         );
     }
 
-    // Render cursor by directly modifying the frame buffer cell at the cursor position.
-    // Convert char-based cursor and scroll positions to display columns via tab expansion,
-    // then shift right by any inlay hint cells that appear before the cursor on that line.
+    // Render cursors by directly modifying the frame buffer cells at each
+    // cursor position. Converts char-based cursor and scroll positions to
+    // display columns via tab expansion, then shifts right by any inlay
+    // hint cells that appear before the cursor on that line.
     if editor_focused {
-        let screen_row = cursor_row.saturating_sub(scroll_row);
-        let cursor_display_col = if let Some(cursor_line) = buffer.line_at(cursor_row) {
-            let line_text: String = cursor_line.chars().collect();
-            let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
-            let expanded = expand_tabs(trimmed, tab_size);
-            let scroll_col = char_to_display_col(&expanded.char_to_col, scroll_col_char);
-            let base = char_to_display_col(&expanded.char_to_col, cursor_col_char)
-                .saturating_sub(scroll_col);
+        for cursor in buffer.all_cursors() {
+            let screen_row = cursor.row.saturating_sub(scroll_row);
+            if screen_row >= visible_lines {
+                continue;
+            }
+            let cursor_display_col = if let Some(cursor_line) = buffer.line_at(cursor.row) {
+                let line_text: String = cursor_line.chars().collect();
+                let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
+                let expanded = expand_tabs(trimmed, tab_size);
+                let scroll_col = char_to_display_col(&expanded.char_to_col, scroll_col_char);
+                let base = char_to_display_col(&expanded.char_to_col, cursor.col)
+                    .saturating_sub(scroll_col);
 
-            // Build the same hint positions the renderer used for this row and
-            // shift the cursor past any hint cells preceding it.
-            let cursor_line_hints: Vec<(usize, String)> = inlay_hints
-                .iter()
-                .filter(|h| h.row == cursor_row)
-                .map(|h| {
-                    let display_col = char_to_display_col(&expanded.char_to_col, h.col)
-                        .saturating_sub(scroll_col);
-                    (display_col, format_inlay_label(h))
-                })
-                .collect();
-            // A hint anchored exactly at the cursor column appears BEFORE the
-            // cursor's character, so it shifts the cursor; use `< base + 1`
-            // semantics via the helper which accepts `<= display_col`.
-            let shift = hint_shift_before(&cursor_line_hints, base.saturating_sub(1));
-            base + shift
-        } else {
-            cursor_col_char.saturating_sub(scroll_col_char)
-        };
-        let screen_col = cursor_display_col;
-        if screen_row < visible_lines && screen_col < content_w as usize {
-            let cx = content_area.x + screen_col as u16;
-            let cy = content_area.y + screen_row as u16;
-            if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
-                let fg = cell.fg;
-                let bg = cell.bg;
-                cell.set_fg(bg);
-                cell.set_bg(fg);
+                // Build the same hint positions the renderer used for this
+                // row and shift the cursor past any hint cells preceding it.
+                let cursor_line_hints: Vec<(usize, String)> = inlay_hints
+                    .iter()
+                    .filter(|h| h.row == cursor.row)
+                    .map(|h| {
+                        let display_col = char_to_display_col(&expanded.char_to_col, h.col)
+                            .saturating_sub(scroll_col);
+                        (display_col, format_inlay_label(h))
+                    })
+                    .collect();
+                let shift = hint_shift_before(&cursor_line_hints, base.saturating_sub(1));
+                base + shift
+            } else {
+                cursor.col.saturating_sub(scroll_col_char)
+            };
+            let screen_col = cursor_display_col;
+            if screen_col < content_w as usize {
+                let cx = content_area.x + screen_col as u16;
+                let cy = content_area.y + screen_row as u16;
+                if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
+                    let fg = cell.fg;
+                    let bg = cell.bg;
+                    cell.set_fg(bg);
+                    cell.set_bg(fg);
+                }
             }
         }
     }

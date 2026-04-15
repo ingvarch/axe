@@ -216,6 +216,12 @@ impl EditorBuffer {
         self.cursors.all().to_vec()
     }
 
+    /// Returns the optional selection attached to each cursor, parallel to
+    /// [`all_cursors`](Self::all_cursors).
+    pub fn all_selections(&self) -> Vec<Option<Selection>> {
+        self.cursors.all_selections().to_vec()
+    }
+
     /// Returns the index of the primary cursor inside
     /// [`all_cursors`](Self::all_cursors).
     pub fn primary_cursor_index(&self) -> usize {

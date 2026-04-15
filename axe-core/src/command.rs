@@ -252,6 +252,17 @@ pub enum Command {
     ApplySelectedCodeAction,
     /// Close the code-actions picker without applying.
     CancelCodeActions,
+    /// Add a secondary cursor at the next occurrence of the current word /
+    /// selection. On the first press without a selection, selects the word
+    /// under the cursor (VS Code's Ctrl+D semantics).
+    AddCursorAtNextOccurrence,
+    /// Select every occurrence of the current word / selection, placing a
+    /// cursor at each match.
+    SelectAllOccurrences,
+    /// Add a cursor at the given `(row, col)` position — used by Alt+Click.
+    AddCursorAtPosition { row: usize, col: usize },
+    /// Drop every secondary cursor, leaving only the primary.
+    ClearSecondaryCursors,
     /// Format the current document using the LSP formatter.
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
@@ -434,6 +445,10 @@ mod tests {
             Command::CodeActionsPrev,
             Command::ApplySelectedCodeAction,
             Command::CancelCodeActions,
+            Command::AddCursorAtNextOccurrence,
+            Command::SelectAllOccurrences,
+            Command::AddCursorAtPosition { row: 0, col: 0 },
+            Command::ClearSecondaryCursors,
         ];
 
         for (i, a) in variants.iter().enumerate() {

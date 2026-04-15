@@ -14,6 +14,145 @@ pub struct SearchMatch {
     pub col_end: usize,
 }
 
+/// Finds the next literal match of `needle` in `buffer` starting from the
+/// position `(start_row, start_col)` (inclusive).
+///
+/// Wraps around to the beginning if nothing is found after the starting
+/// position. Returns `None` if the needle never appears in the buffer.
+///
+/// Used by multi-cursor commands like "Add cursor at next occurrence"
+/// (`Ctrl+D`) so they can reuse the existing search primitive without
+/// disturbing the visible search bar state.
+pub fn find_next_occurrence(
+    buffer: &EditorBuffer,
+    needle: &str,
+    start_row: usize,
+    start_col: usize,
+    case_sensitive: bool,
+) -> Option<SearchMatch> {
+    if needle.is_empty() {
+        return None;
+    }
+    let needle_query = if case_sensitive {
+        needle.to_string()
+    } else {
+        needle.to_lowercase()
+    };
+    let line_count = buffer.line_count();
+    if line_count == 0 {
+        return None;
+    }
+
+    // Forward scan from (start_row, start_col), then wrap around and scan
+    // from the beginning up to and including `start_row`.
+
+    // Forward scan from (start_row, start_col).
+    for row in start_row..line_count {
+        let Some(slice) = buffer.line_at(row) else {
+            continue;
+        };
+        let line_text: String = slice.chars().collect();
+        let trimmed = line_text
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+        let haystack = if case_sensitive {
+            trimmed.clone()
+        } else {
+            trimmed.to_lowercase()
+        };
+        let from = if row == start_row { start_col } else { 0 };
+        if from > haystack.len() {
+            continue;
+        }
+        if let Some(pos) = haystack[from..].find(&needle_query) {
+            let col_start = from + pos;
+            let col_end = col_start + needle_query.chars().count();
+            return Some(SearchMatch {
+                row,
+                col_start,
+                col_end,
+            });
+        }
+    }
+
+    // Wrap-around: scan from row 0 up to and including start_row.
+    for row in 0..=start_row.min(line_count.saturating_sub(1)) {
+        let Some(slice) = buffer.line_at(row) else {
+            continue;
+        };
+        let line_text: String = slice.chars().collect();
+        let trimmed = line_text
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+        let haystack = if case_sensitive {
+            trimmed.clone()
+        } else {
+            trimmed.to_lowercase()
+        };
+        let upper = if row == start_row {
+            start_col.min(haystack.len())
+        } else {
+            haystack.len()
+        };
+        if let Some(pos) = haystack[..upper].find(&needle_query) {
+            let col_end = pos + needle_query.chars().count();
+            return Some(SearchMatch {
+                row,
+                col_start: pos,
+                col_end,
+            });
+        }
+    }
+
+    None
+}
+
+/// Finds every literal match of `needle` in `buffer`, in document order.
+pub fn find_all_occurrences(
+    buffer: &EditorBuffer,
+    needle: &str,
+    case_sensitive: bool,
+) -> Vec<SearchMatch> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let needle_query = if case_sensitive {
+        needle.to_string()
+    } else {
+        needle.to_lowercase()
+    };
+    let mut matches = Vec::new();
+    for row in 0..buffer.line_count() {
+        let Some(slice) = buffer.line_at(row) else {
+            continue;
+        };
+        let line_text: String = slice.chars().collect();
+        let trimmed = line_text
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+        let haystack = if case_sensitive {
+            trimmed.clone()
+        } else {
+            trimmed.to_lowercase()
+        };
+        let mut start = 0;
+        while let Some(pos) = haystack[start..].find(&needle_query) {
+            let col_start = start + pos;
+            let col_end = col_start + needle_query.chars().count();
+            matches.push(SearchMatch {
+                row,
+                col_start,
+                col_end,
+            });
+            start = col_start + 1;
+        }
+    }
+    matches
+}
+
 /// Which input field is active in the search/replace bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchField {
@@ -537,5 +676,72 @@ mod tests {
         assert_eq!(search.matches[1].col_start, 0);
         assert_eq!(search.matches[2].row, 2);
         assert_eq!(search.matches[2].col_start, 8);
+    }
+
+    // --- find_next_occurrence / find_all_occurrences tests ---
+
+    #[test]
+    fn find_next_occurrence_basic() {
+        let buf = buffer_with("foo bar foo baz");
+        let m = find_next_occurrence(&buf, "foo", 0, 0, true).unwrap();
+        assert_eq!(m.row, 0);
+        assert_eq!(m.col_start, 0);
+        assert_eq!(m.col_end, 3);
+    }
+
+    #[test]
+    fn find_next_occurrence_skips_position_before_start() {
+        let buf = buffer_with("foo bar foo baz");
+        // Start just after the first "foo".
+        let m = find_next_occurrence(&buf, "foo", 0, 3, true).unwrap();
+        assert_eq!(m.col_start, 8);
+    }
+
+    #[test]
+    fn find_next_occurrence_wraps_around() {
+        let buf = buffer_with("foo bar foo baz");
+        // No more occurrences after col 14 — wraps to the first one.
+        let m = find_next_occurrence(&buf, "foo", 0, 14, true).unwrap();
+        assert_eq!(m.col_start, 0);
+    }
+
+    #[test]
+    fn find_next_occurrence_returns_none_for_missing() {
+        let buf = buffer_with("hello world");
+        assert!(find_next_occurrence(&buf, "xyz", 0, 0, true).is_none());
+    }
+
+    #[test]
+    fn find_next_occurrence_case_insensitive() {
+        let buf = buffer_with("Hello HELLO");
+        let m = find_next_occurrence(&buf, "hello", 0, 0, false).unwrap();
+        assert_eq!(m.col_start, 0);
+        let m2 = find_next_occurrence(&buf, "hello", 0, 5, false).unwrap();
+        assert_eq!(m2.col_start, 6);
+    }
+
+    #[test]
+    fn find_next_occurrence_multi_line() {
+        let buf = buffer_with("alpha\nbravo foo\ncharlie foo\n");
+        let m = find_next_occurrence(&buf, "foo", 0, 0, true).unwrap();
+        assert_eq!(m.row, 1);
+        assert_eq!(m.col_start, 6);
+        let m2 = find_next_occurrence(&buf, "foo", 1, 9, true).unwrap();
+        assert_eq!(m2.row, 2);
+        assert_eq!(m2.col_start, 8);
+    }
+
+    #[test]
+    fn find_all_occurrences_counts_every_match() {
+        let buf = buffer_with("foo foo\nfoo");
+        let all = find_all_occurrences(&buf, "foo", true);
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn find_all_occurrences_empty_needle_returns_empty() {
+        let buf = buffer_with("anything");
+        let all = find_all_occurrences(&buf, "", true);
+        assert!(all.is_empty());
     }
 }

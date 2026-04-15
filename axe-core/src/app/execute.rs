@@ -282,6 +282,13 @@ impl AppState {
             | Command::EditorWordLeft => {
                 let (h, w) = self.editor_viewport();
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    // v1 policy: any cursor movement collapses multi-cursor
+                    // state back to a single primary. This keeps the UX
+                    // contract simple — Ctrl+D + type works; anything else
+                    // drops secondaries.
+                    if buf.has_multiple_cursors() {
+                        buf.clear_secondary_cursors();
+                    }
                     buf.clear_selection();
                     match cmd {
                         Command::EditorUp => buf.move_up(),
@@ -789,6 +796,34 @@ impl AppState {
             }
             Command::CancelCodeActions => {
                 self.code_actions = None;
+            }
+            // IMPACT ANALYSIS — Multi-cursor commands
+            // Parents: KeyEvent → Ctrl+D / Ctrl+Shift+L / Alt+Click / Esc → these commands
+            // Children: EditorBuffer::add_secondary_cursor / clear_secondary_cursors,
+            //           search::find_next_occurrence / find_all_occurrences
+            // Siblings: selection (seeds the word-to-match), completion/hover dismissed
+            Command::AddCursorAtNextOccurrence => {
+                self.add_cursor_at_next_occurrence();
+            }
+            Command::SelectAllOccurrences => {
+                self.select_all_occurrences();
+            }
+            Command::AddCursorAtPosition { row, col } => {
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.add_secondary_cursor(
+                        axe_editor::CursorState {
+                            row,
+                            col,
+                            desired_col: col,
+                        },
+                        None,
+                    );
+                }
+            }
+            Command::ClearSecondaryCursors => {
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.clear_secondary_cursors();
+                }
             }
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {

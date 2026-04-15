@@ -135,6 +135,33 @@ impl Cursors {
         }
     }
 
+    /// Replaces the entire cursor set with the provided lists.
+    ///
+    /// The primary is set to `primary_idx` (or `0` if out of range), and
+    /// the container is renormalised so the invariants hold. Panics if
+    /// `cursors.is_empty()` or the two vectors have different lengths.
+    ///
+    /// Used by multi-cursor edit paths that compute fresh positions for
+    /// every cursor in one pass.
+    pub fn replace_with(
+        &mut self,
+        cursors: Vec<CursorState>,
+        selections: Vec<Option<Selection>>,
+        primary_idx: usize,
+    ) {
+        assert!(!cursors.is_empty(), "Cursors must remain non-empty");
+        assert_eq!(
+            cursors.len(),
+            selections.len(),
+            "cursor/selection lists must be parallel"
+        );
+        let primary = primary_idx.min(cursors.len() - 1);
+        self.cursors = cursors;
+        self.selections = selections;
+        self.primary = primary;
+        self.normalize();
+    }
+
     /// Sorts cursors by `(row, col)` and drops duplicates, preserving the
     /// primary cursor's logical identity.
     ///
@@ -348,6 +375,25 @@ mod tests {
         primary.desired_col = 7;
         // Primary identity is preserved (we didn't move it out of sort order).
         assert_eq!(c.primary(), &cur(5, 7));
+    }
+
+    #[test]
+    fn replace_with_swaps_the_whole_set() {
+        let mut c = Cursors::single(cur(0, 0));
+        c.replace_with(
+            vec![cur(1, 0), cur(3, 0), cur(5, 0)],
+            vec![None, None, None],
+            1,
+        );
+        assert_eq!(c.len(), 3);
+        assert_eq!(c.primary(), &cur(3, 0));
+    }
+
+    #[test]
+    fn replace_with_clamps_primary_idx() {
+        let mut c = Cursors::single(cur(0, 0));
+        c.replace_with(vec![cur(0, 0)], vec![None], 42);
+        assert_eq!(c.primary_index(), 0);
     }
 
     #[test]

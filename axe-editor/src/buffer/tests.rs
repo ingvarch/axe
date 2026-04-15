@@ -2074,21 +2074,87 @@ fn primary_cursor_index_tracks_identity_after_sort() {
 }
 
 #[test]
-fn single_cursor_edits_still_only_affect_primary() {
-    // Sanity check: adding secondaries does NOT yet change edit behavior
-    // (that's phase-D). insert_char still inserts at the primary only.
-    let mut buf = buffer_from_str("ab");
-    buf.cursor_mut().col = 1;
+fn multi_cursor_insert_char_applies_to_every_cursor() {
+    let mut buf = buffer_from_str("foo foo foo");
+    buf.cursor_mut().col = 0;
     buf.add_secondary_cursor(
         crate::cursor::CursorState {
             row: 0,
-            col: 2,
-            desired_col: 2,
+            col: 4,
+            desired_col: 4,
+        },
+        None,
+    );
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 8,
+            desired_col: 8,
         },
         None,
     );
     buf.insert_char('X');
-    // Primary insertion at col 1: "aXb"
-    // Secondary at col 2 did NOT receive an insertion yet (phase-D work).
-    assert_eq!(buf.line_text(0), "aXb");
+    // 'X' inserted before each original cursor position; the line becomes
+    // "Xfoo Xfoo Xfoo" and each cursor lands right after its 'X'.
+    assert_eq!(buf.line_text(0), "Xfoo Xfoo Xfoo");
+    assert_eq!(buf.cursor_count(), 3);
+    let positions = buf.all_cursors();
+    // Original cols were 0, 4, 8; each shifted by prior Xs:
+    //   first:   col 0 +1 = 1
+    //   second:  col 4 +1 (own) +1 (earlier) = 6
+    //   third:   col 8 +1 (own) +2 (earlier) = 11
+    assert_eq!(positions[0].col, 1);
+    assert_eq!(positions[1].col, 6);
+    assert_eq!(positions[2].col, 11);
+}
+
+#[test]
+fn multi_cursor_insert_replaces_selections() {
+    let mut buf = buffer_from_str("foo bar baz");
+    // Primary selects "foo", secondary selects "baz".
+    buf.set_selection(Some(crate::selection::Selection {
+        anchor_row: 0,
+        anchor_col: 0,
+    }));
+    buf.cursor_mut().col = 3;
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 11,
+            desired_col: 11,
+        },
+        Some(crate::selection::Selection {
+            anchor_row: 0,
+            anchor_col: 8,
+        }),
+    );
+    buf.insert_char('Z');
+    // Both "foo" and "baz" replaced with 'Z'. Middle "bar" unchanged.
+    assert_eq!(buf.line_text(0), "Z bar Z");
+}
+
+#[test]
+fn multi_cursor_insert_undo_reverts_as_one_step() {
+    let mut buf = buffer_from_str("ab cd ef");
+    buf.cursor_mut().col = 0;
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 3,
+            desired_col: 3,
+        },
+        None,
+    );
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 6,
+            desired_col: 6,
+        },
+        None,
+    );
+    buf.insert_char('!');
+    assert_eq!(buf.line_text(0), "!ab !cd !ef");
+    buf.undo();
+    assert_eq!(buf.line_text(0), "ab cd ef");
 }

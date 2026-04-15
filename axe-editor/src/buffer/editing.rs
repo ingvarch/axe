@@ -1,9 +1,21 @@
 use anyhow::{Context, Result};
 
+use crate::cursor::CursorState;
 use crate::highlight;
 use crate::history::Edit;
+use crate::selection::Selection;
 
 use super::EditorBuffer;
+
+/// One cursor's planned edit inside a multi-cursor operation.
+struct PerCursorEdit {
+    orig_idx: usize,
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+    new_text: String,
+    new_text_chars: usize,
+}
 
 impl EditorBuffer {
     /// Begins an undo group — all subsequent edits merge into a single undo step.
@@ -34,8 +46,14 @@ impl EditorBuffer {
 
     /// Inserts a character at the current cursor position.
     ///
-    /// If a selection is active, deletes it first.
+    /// If a selection is active, deletes it first. With multiple cursors,
+    /// each cursor (and its selection) receives the insertion, all edits
+    /// grouped into a single undo step.
     pub fn insert_char(&mut self, ch: char) {
+        if self.has_multiple_cursors() {
+            self.insert_string_multi(&ch.to_string());
+            return;
+        }
         if self.has_selection() {
             self.delete_selection();
         }
@@ -57,6 +75,169 @@ impl EditorBuffer {
         self.notify_highlight_insert(char_idx, 1);
     }
 
+    /// Multi-cursor insert path used by [`insert_char`] when there are
+    /// secondary cursors.
+    ///
+    /// Each cursor that has a selection gets the selection deleted and
+    /// `text` inserted in its place; cursors without a selection just get
+    /// `text` inserted at their position. Restrictions:
+    ///
+    /// - `text` must not contain newlines (phase-D v1 is single-line only).
+    /// - Every selection must be single-line — a multi-line selection
+    ///   triggers a fallback that clears secondary cursors and runs the
+    ///   single-cursor fast path on the primary.
+    ///
+    /// All per-cursor edits are grouped into a single undo step and
+    /// applied right-to-left in byte order so earlier-in-document positions
+    /// stay valid while the rope mutates.
+    fn insert_string_multi(&mut self, text: &str) {
+        if text.contains('\n') {
+            // Multi-line inserts are out of scope for v1 — drop secondaries
+            // so the primary-only fast path below has clean state.
+            self.clear_secondary_cursors();
+            self.insert_text(text);
+            return;
+        }
+
+        // Snapshot the current cursor set; we rebuild it from scratch below.
+        let cursors_snapshot: Vec<CursorState> = self.cursors.all().to_vec();
+        let selections_snapshot: Vec<Option<Selection>> = self.cursors.all_selections().to_vec();
+        let primary_idx = self.cursors.primary_index();
+
+        // Convert each cursor into an edit descriptor.
+        let mut edits: Vec<PerCursorEdit> = Vec::with_capacity(cursors_snapshot.len());
+        for (orig_idx, (cursor, selection)) in cursors_snapshot
+            .iter()
+            .zip(selections_snapshot.iter())
+            .enumerate()
+        {
+            let (sr, sc, er, ec) = if let Some(sel) = selection {
+                sel.normalized(cursor.row, cursor.col)
+            } else {
+                (cursor.row, cursor.col, cursor.row, cursor.col)
+            };
+            if er != sr {
+                // Multi-line selection — fall back to single-cursor behaviour.
+                self.clear_secondary_cursors();
+                if self.has_selection() {
+                    self.delete_selection();
+                }
+                for ch in text.chars() {
+                    self.insert_char(ch);
+                }
+                return;
+            }
+            edits.push(PerCursorEdit {
+                orig_idx,
+                row: sr,
+                start_col: sc,
+                end_col: ec,
+                new_text: text.to_string(),
+                new_text_chars: text.chars().count(),
+            });
+        }
+
+        // Compute each cursor's final column BEFORE mutating the rope.
+        // Edits on the same row affect later cols by `new_len - old_len`.
+        let mut final_positions: Vec<(usize, usize)> = vec![(0, 0); edits.len()];
+        // Group edit indices by row, sorted by ascending start_col, to
+        // walk them left-to-right and accumulate the delta.
+        let mut by_row: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, e) in edits.iter().enumerate() {
+            by_row.entry(e.row).or_default().push(i);
+        }
+        for group in by_row.values_mut() {
+            group.sort_by_key(|i| edits[*i].start_col);
+            let mut cumulative_delta: isize = 0;
+            for &i in group.iter() {
+                let e = &edits[i];
+                let adjusted_start = (e.start_col as isize + cumulative_delta) as usize;
+                let new_col = adjusted_start + e.new_text_chars;
+                final_positions[i] = (e.row, new_col);
+                let delta = e.new_text_chars as isize - (e.end_col as isize - e.start_col as isize);
+                cumulative_delta += delta;
+            }
+        }
+
+        // Apply the rope mutations right-to-left so earlier positions keep
+        // working while we iterate.
+        let mut order: Vec<usize> = (0..edits.len()).collect();
+        order.sort_by(|a, b| {
+            let ea = &edits[*a];
+            let eb = &edits[*b];
+            (eb.row, eb.start_col).cmp(&(ea.row, ea.start_col))
+        });
+
+        self.begin_undo_group();
+        for i in &order {
+            let e = &edits[*i];
+            let start_idx = self.content.line_to_char(e.row) + e.start_col;
+            let end_idx = self.content.line_to_char(e.row) + e.end_col;
+
+            let old_text: String = if end_idx > start_idx {
+                self.content.slice(start_idx..end_idx).to_string()
+            } else {
+                String::new()
+            };
+            let old_byte_len = old_text.len();
+            let old_end_pos = highlight::byte_to_point(
+                &self.content,
+                self.content.char_to_byte(end_idx.max(start_idx)),
+            );
+
+            if end_idx > start_idx {
+                self.content.remove(start_idx..end_idx);
+            }
+            if !e.new_text.is_empty() {
+                self.content.insert(start_idx, &e.new_text);
+            }
+
+            let cursor_before = cursors_snapshot[e.orig_idx].clone();
+            let cursor_after = CursorState {
+                row: final_positions[*i].0,
+                col: final_positions[*i].1,
+                desired_col: final_positions[*i].1,
+            };
+            self.history.record(
+                Edit {
+                    char_idx: start_idx,
+                    old_text,
+                    new_text: e.new_text.clone(),
+                },
+                cursor_before,
+                cursor_after,
+            );
+
+            if end_idx > start_idx {
+                self.notify_highlight_delete(
+                    start_idx,
+                    end_idx - start_idx,
+                    old_byte_len,
+                    old_end_pos,
+                );
+            }
+            if e.new_text_chars > 0 {
+                self.notify_highlight_insert(start_idx, e.new_text_chars);
+            }
+        }
+        self.end_undo_group();
+        self.modified = true;
+
+        // Rebuild the cursor set with the computed final positions.
+        let new_cursors: Vec<CursorState> = final_positions
+            .iter()
+            .map(|(row, col)| CursorState {
+                row: *row,
+                col: *col,
+                desired_col: *col,
+            })
+            .collect();
+        let new_selections: Vec<Option<Selection>> = vec![None; new_cursors.len()];
+        self.cursors
+            .replace_with(new_cursors, new_selections, primary_idx);
+    }
+
     // IMPACT ANALYSIS — insert_newline
     // Parents: KeyEvent → Command::EditorNewline → this function
     // Children: Splits line, auto-indents from current line, cursor moves to new line
@@ -64,8 +245,13 @@ impl EditorBuffer {
 
     /// Inserts a newline at the current cursor position with auto-indent.
     ///
-    /// If a selection is active, deletes it first.
+    /// If a selection is active, deletes it first. Clears any secondary
+    /// cursors first — multi-cursor newline insertion is out of scope in
+    /// phase-D v1.
     pub fn insert_newline(&mut self) {
+        if self.has_multiple_cursors() {
+            self.clear_secondary_cursors();
+        }
         if self.has_selection() {
             self.delete_selection();
         }
@@ -100,8 +286,12 @@ impl EditorBuffer {
     ///
     /// When `insert_spaces` is `true`, inserts `tab_size` space characters.
     /// When `insert_spaces` is `false`, inserts a single literal tab character.
-    /// If a selection is active, deletes it first.
+    /// If a selection is active, deletes it first. Multi-cursor state is
+    /// dropped first — phase-D v1 does not handle multi-cursor tab inserts.
     pub fn insert_tab(&mut self) {
+        if self.has_multiple_cursors() {
+            self.clear_secondary_cursors();
+        }
         if self.has_selection() {
             self.delete_selection();
         }
@@ -139,8 +329,12 @@ impl EditorBuffer {
     ///
     /// If a selection is active, deletes the selection instead.
     /// At the beginning of a line, joins with the previous line.
-    /// At the beginning of the file, does nothing.
+    /// At the beginning of the file, does nothing. Drops multi-cursor
+    /// state first — phase-D v1 delegates backspace to the primary only.
     pub fn delete_char_backward(&mut self) {
+        if self.has_multiple_cursors() {
+            self.clear_secondary_cursors();
+        }
         if self.has_selection() {
             self.delete_selection();
             return;
@@ -208,8 +402,11 @@ impl EditorBuffer {
     ///
     /// If a selection is active, deletes the selection instead.
     /// At the end of a line, joins with the next line.
-    /// At the end of the file, does nothing.
+    /// At the end of the file, does nothing. Drops multi-cursor state first.
     pub fn delete_char_forward(&mut self) {
+        if self.has_multiple_cursors() {
+            self.clear_secondary_cursors();
+        }
         if self.has_selection() {
             self.delete_selection();
             return;
