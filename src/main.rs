@@ -34,7 +34,9 @@ const INITIAL_TERM_ROWS: u16 = 24;
 #[derive(Parser)]
 #[command(name = "axe", version = BUILD_VERSION, about = "Axe IDE")]
 struct Cli {
-    /// Directory to open (defaults to current directory)
+    /// Directory or file to open (defaults to current directory).
+    /// When a file is given, its enclosing git repo (or parent dir) becomes
+    /// the workspace root and the file is opened in the editor.
     #[arg(default_value = ".")]
     path: PathBuf,
 
@@ -44,6 +46,44 @@ struct Cli {
 }
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
+
+/// Resolves the CLI path argument into a workspace root and an optional
+/// file to auto-open.
+///
+/// - Directory path -> `(canonical_dir, None)`.
+/// - File path -> walks ancestors looking for a `.git` directory; if found
+///   returns that ancestor as root, otherwise the file's parent directory.
+///   The second tuple element is the canonical file path to open.
+/// - Nonexistent path -> `(original_path, None)`, preserving the previous
+///   fallback so `AppState::new_with_root` can handle the failure.
+fn resolve_cli_target(path: PathBuf) -> (PathBuf, Option<PathBuf>) {
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (path, None),
+    };
+
+    if canonical.is_dir() {
+        return (canonical, None);
+    }
+
+    if !canonical.is_file() {
+        // Exotic filesystem entry (symlink loop, socket, etc.) — fall through.
+        return (canonical, None);
+    }
+
+    let parent = canonical
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let root = parent
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .map(PathBuf::from)
+        .unwrap_or(parent);
+
+    (root, Some(canonical))
+}
 
 fn setup_terminal() -> Result<Term> {
     terminal::enable_raw_mode()?;
@@ -98,7 +138,7 @@ async fn main() -> Result<()> {
     install_panic_hook();
 
     let mut terminal = setup_terminal()?;
-    let root = cli.path.canonicalize().unwrap_or(cli.path);
+    let (root, file_to_open) = resolve_cli_target(cli.path);
 
     let mut app = AppState::new_with_root(root.clone());
     app.build_version = BUILD_VERSION.to_string();
@@ -111,6 +151,12 @@ async fn main() -> Result<()> {
                 log::warn!("Session restore: {msg}");
             }
         }
+    }
+
+    // If the CLI arg was a file path, open it on top of whatever the session
+    // restored so the requested file becomes the focused buffer.
+    if let Some(file) = file_to_open {
+        app.execute(axe_core::Command::OpenFile(file));
     }
 
     // Persist initial session state so .axe/ directory and global gitignore
@@ -337,4 +383,63 @@ async fn main() -> Result<()> {
 
     restore_terminal();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolve_cli_target_directory_returns_dir_and_none() {
+        let dir = tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+
+        let (root, file) = resolve_cli_target(dir.path().to_path_buf());
+
+        assert_eq!(root, canonical);
+        assert_eq!(file, None);
+    }
+
+    #[test]
+    fn resolve_cli_target_file_without_git_uses_parent() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("notes.md");
+        fs::write(&file_path, "hello").unwrap();
+        let canonical_dir = dir.path().canonicalize().unwrap();
+        let canonical_file = file_path.canonicalize().unwrap();
+
+        let (root, file) = resolve_cli_target(file_path);
+
+        assert_eq!(root, canonical_dir);
+        assert_eq!(file, Some(canonical_file));
+    }
+
+    #[test]
+    fn resolve_cli_target_file_inside_git_uses_git_root() {
+        let repo = tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        let nested = repo.path().join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        let file_path = nested.join("foo.rs");
+        fs::write(&file_path, "fn main() {}").unwrap();
+        let canonical_repo = repo.path().canonicalize().unwrap();
+        let canonical_file = file_path.canonicalize().unwrap();
+
+        let (root, file) = resolve_cli_target(file_path);
+
+        assert_eq!(root, canonical_repo);
+        assert_eq!(file, Some(canonical_file));
+    }
+
+    #[test]
+    fn resolve_cli_target_nonexistent_path_falls_through() {
+        let bogus = PathBuf::from("/definitely/does/not/exist/axe-test-xyz");
+
+        let (root, file) = resolve_cli_target(bogus.clone());
+
+        assert_eq!(root, bogus);
+        assert_eq!(file, None);
+    }
 }
