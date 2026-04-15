@@ -25,10 +25,10 @@ use editor_panel::{
 };
 use layout::LayoutManager;
 use overlays::{
-    render_command_palette, render_completion_popup, render_confirm_dialog, render_diff_popup,
-    render_file_finder, render_go_to_line, render_help_overlay, render_hover_tooltip,
-    render_location_list, render_password_dialog, render_project_search, render_rename_input,
-    render_signature_help, render_ssh_host_finder,
+    render_code_actions_popup, render_command_palette, render_completion_popup,
+    render_confirm_dialog, render_diff_popup, render_file_finder, render_go_to_line,
+    render_help_overlay, render_hover_tooltip, render_location_list, render_password_dialog,
+    render_project_search, render_rename_input, render_signature_help, render_ssh_host_finder,
 };
 use status_bar::build_status_bar;
 use terminal_panel::{adjust_terminal_rect, render_right_panels, render_terminal_content};
@@ -690,6 +690,13 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
     if let Some(ref sig) = app.signature_help {
         if let Some(buffer) = app.buffer_manager.active_buffer() {
             render_signature_help(sig, buffer, app, frame, theme);
+        }
+    }
+
+    // Code actions picker — non-modal, anchored to the cursor.
+    if let Some(ref actions) = app.code_actions {
+        if let Some(buffer) = app.buffer_manager.active_buffer() {
+            render_code_actions_popup(actions, buffer, app, frame, theme);
         }
     }
 

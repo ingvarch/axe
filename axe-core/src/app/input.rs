@@ -122,6 +122,26 @@ impl AppState {
             return;
         }
 
+        // Code actions picker intercepts all keys when open.
+        if self.code_actions.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.execute(Command::CancelCodeActions);
+                }
+                KeyCode::Enter => {
+                    self.execute(Command::ApplySelectedCodeAction);
+                }
+                KeyCode::Up => {
+                    self.execute(Command::CodeActionsPrev);
+                }
+                KeyCode::Down => {
+                    self.execute(Command::CodeActionsNext);
+                }
+                _ => {} // Consume all other keys
+            }
+            return;
+        }
+
         // Inline rename dialog intercepts all keys when open.
         if self.rename.is_some() {
             match key.code {

@@ -213,6 +213,52 @@ impl AppState {
                     self.rename = None;
                     self.set_status_message(format!("Rename failed: {}", e.message));
                 }
+                axe_lsp::LspEvent::CodeActionsResponse { result: Ok(value) } => {
+                    let actions = crate::code_actions::parse_code_actions_response(&value);
+                    if actions.is_empty() {
+                        self.code_actions = None;
+                        self.set_status_message("No code actions available".to_string());
+                    } else if let Some(buf) = self.buffer_manager.active_buffer() {
+                        self.code_actions = Some(crate::code_actions::CodeActionsState::new(
+                            actions,
+                            buf.cursor.row,
+                            buf.cursor.col,
+                        ));
+                    }
+                }
+                axe_lsp::LspEvent::CodeActionsResponse { result: Err(e) } => {
+                    log::warn!("LSP code actions error: {}", e.message);
+                    self.code_actions = None;
+                    self.set_status_message(format!("Code actions failed: {}", e.message));
+                }
+                axe_lsp::LspEvent::ExecuteCommandResponse { result: Ok(value) } => {
+                    // rust-analyzer and gopls sometimes return a WorkspaceEdit
+                    // directly from workspace/executeCommand; apply it when
+                    // present so server-side refactorings land in the buffers.
+                    if let Some(ws_edit) = crate::rename::parse_workspace_edit_response(&value) {
+                        if !ws_edit.files.is_empty() {
+                            match self
+                                .buffer_manager
+                                .apply_workspace_edit(&ws_edit, "Code Action")
+                            {
+                                Ok(summary) => {
+                                    self.set_status_message(format!(
+                                        "Applied {} edit(s) in {} file(s)",
+                                        summary.edits_applied, summary.files_affected
+                                    ));
+                                    self.last_edit_time = Some(Instant::now());
+                                    self.notify_lsp_change();
+                                }
+                                Err(e) => {
+                                    log::warn!("workspace/executeCommand apply failed: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::ExecuteCommandResponse { result: Err(e) } => {
+                    log::warn!("workspace/executeCommand error: {}", e.message);
+                }
             }
         }
     }
@@ -469,6 +515,127 @@ impl AppState {
             .as_ref()
             .map(|lsp| lsp.signature_help_trigger_chars(path))
             .unwrap_or_default()
+    }
+
+    /// Requests code actions for the current cursor position.
+    ///
+    /// Builds a range covering just the cursor (LSP servers interpret a
+    /// zero-width range as "at cursor") and forwards diagnostics overlapping
+    /// the cursor line as the request context, so the server can surface
+    /// quick fixes.
+    pub(super) fn request_code_actions(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        let Some(buf) = self.buffer_manager.active_buffer() else {
+            return;
+        };
+        let Some(path) = buf.path() else {
+            self.set_status_message("Code actions: buffer has no file path".to_string());
+            return;
+        };
+        let path = path.to_path_buf();
+        let row = buf.cursor.row as u32;
+        let col = buf.cursor.col as u32;
+
+        // Collect diagnostics that cover the cursor line — LSP servers use
+        // these as `context.diagnostics` when computing quick fixes.
+        let diagnostics: Vec<serde_json::Value> = buf
+            .diagnostics()
+            .iter()
+            .filter(|d| d.line == buf.cursor.row)
+            .map(|d| {
+                serde_json::json!({
+                    "range": {
+                        "start": { "line": d.line, "character": d.col_start },
+                        "end":   { "line": d.line, "character": d.col_end },
+                    },
+                    "severity": match d.severity {
+                        axe_editor::diagnostic::DiagnosticSeverity::Error => 1,
+                        axe_editor::diagnostic::DiagnosticSeverity::Warning => 2,
+                        axe_editor::diagnostic::DiagnosticSeverity::Info => 3,
+                        axe_editor::diagnostic::DiagnosticSeverity::Hint => 4,
+                    },
+                    "message": d.message,
+                    "source": d.source,
+                    "code": d.code,
+                })
+            })
+            .collect();
+
+        if let Some(ref mut lsp) = self.lsp_manager {
+            match lsp.request_code_actions(&path, row, col, row, col, diagnostics) {
+                Ok(true) => {
+                    self.set_status_message("Code actions: requesting…".to_string());
+                    // Dismiss conflicting popups so the picker stands alone.
+                    self.completion = None;
+                    self.hover_info = None;
+                    self.signature_help = None;
+                }
+                Ok(false) => {
+                    self.set_status_message(
+                        "Code actions not supported by this language server".to_string(),
+                    );
+                }
+                Err(e) => {
+                    log::warn!("LSP code actions request failed: {e}");
+                    self.set_status_message("Code actions: request failed".to_string());
+                }
+            }
+        } else {
+            self.set_status_message("Code actions: no language server active".to_string());
+        }
+    }
+
+    /// Applies the currently highlighted code action, honoring both the
+    /// inline workspace edit (if present) and the server-side command.
+    pub(super) fn apply_selected_code_action(&mut self) {
+        let Some(state) = self.code_actions.as_ref() else {
+            return;
+        };
+        let Some(action) = state.selected_action() else {
+            return;
+        };
+        if !action.is_applicable() {
+            if let Some(ref reason) = action.disabled_reason {
+                self.set_status_message(format!("Code action disabled: {reason}"));
+            }
+            return;
+        }
+
+        let action = action.clone();
+        self.code_actions = None;
+
+        if let Some(ref edit) = action.edit {
+            match self
+                .buffer_manager
+                .apply_workspace_edit(edit, "Code Action")
+            {
+                Ok(summary) => {
+                    self.set_status_message(format!(
+                        "Applied '{}' — {} edit(s) in {} file(s)",
+                        action.title, summary.edits_applied, summary.files_affected
+                    ));
+                    self.last_edit_time = Some(Instant::now());
+                    self.notify_lsp_change();
+                }
+                Err(e) => {
+                    log::warn!("Failed to apply code action '{}': {e}", action.title);
+                    self.set_status_message(format!("Code action failed: {}", action.title));
+                    return;
+                }
+            }
+        }
+
+        if let Some(cmd) = action.command {
+            let path = self
+                .buffer_manager
+                .active_buffer()
+                .and_then(|b| b.path().map(|p| p.to_path_buf()));
+            if let (Some(path), Some(ref mut lsp)) = (path, self.lsp_manager.as_mut()) {
+                if let Err(e) = lsp.execute_command(&path, &cmd.command, cmd.arguments.clone()) {
+                    log::warn!("workspace/executeCommand failed: {e}");
+                }
+            }
+        }
     }
 
     /// Opens the inline rename dialog anchored at the word under the cursor.

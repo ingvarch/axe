@@ -26,6 +26,8 @@ pub enum PendingRequestKind {
     Formatting,
     SignatureHelp,
     Rename,
+    CodeActions,
+    ExecuteCommand,
     InlayHint { path: PathBuf, version: u64 },
 }
 
@@ -70,6 +72,17 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/rename request.
     RenameResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/codeAction request.
+    CodeActionsResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a workspace/executeCommand request.
+    ///
+    /// Execute-command responses may themselves carry a `WorkspaceEdit`
+    /// the client must apply (e.g. rust-analyzer's apply-assist flow).
+    ExecuteCommandResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server responded to a textDocument/inlayHint request.
@@ -330,6 +343,14 @@ impl LspClient {
             .is_some()
     }
 
+    /// Returns whether the server supports code actions.
+    pub fn supports_code_actions(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.code_action_provider.as_ref())
+            .is_some()
+    }
+
     /// Returns the signature help trigger characters advertised by the server,
     /// or an empty slice if none are configured.
     pub fn signature_help_trigger_chars(&self) -> Vec<char> {
@@ -445,6 +466,24 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 "rename": {
                     "dynamicRegistration": false,
                     "prepareSupport": false,
+                },
+                "codeAction": {
+                    "dynamicRegistration": false,
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": {
+                            "valueSet": [
+                                "",
+                                "quickfix",
+                                "refactor",
+                                "refactor.extract",
+                                "refactor.inline",
+                                "refactor.rewrite",
+                                "source",
+                                "source.organizeImports"
+                            ]
+                        }
+                    },
+                    "isPreferredSupport": true,
                 },
                 "inlayHint": {
                     "dynamicRegistration": false,
@@ -863,6 +902,29 @@ mod tests {
             PendingRequestKind::Rename,
             PendingRequestKind::SignatureHelp
         );
+    }
+
+    #[test]
+    fn pending_request_kind_code_actions_distinct() {
+        assert_ne!(PendingRequestKind::CodeActions, PendingRequestKind::Rename);
+        assert_ne!(
+            PendingRequestKind::CodeActions,
+            PendingRequestKind::ExecuteCommand
+        );
+    }
+
+    #[test]
+    fn initialize_params_includes_code_action() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let action = &params["capabilities"]["textDocument"]["codeAction"];
+        assert!(action.is_object());
+        assert_eq!(action["dynamicRegistration"], false);
+        assert_eq!(action["isPreferredSupport"], true);
+        let kinds = action["codeActionLiteralSupport"]["codeActionKind"]["valueSet"]
+            .as_array()
+            .expect("valueSet is array");
+        assert!(kinds.iter().any(|k| k == "quickfix"));
     }
 
     #[test]

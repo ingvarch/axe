@@ -765,6 +765,29 @@ impl AppState {
                     r.backspace();
                 }
             }
+            // IMPACT ANALYSIS — Code Actions commands
+            // Parents: KeyEvent → Ctrl+. → ShowCodeActions; arrow/enter/esc → picker nav
+            // Children: LspManager::request_code_actions, apply_workspace_edit or execute_command
+            // Siblings: dismiss completion/hover/signature help on open
+            Command::ShowCodeActions => {
+                self.request_code_actions();
+            }
+            Command::CodeActionsNext => {
+                if let Some(ref mut state) = self.code_actions {
+                    state.select_next();
+                }
+            }
+            Command::CodeActionsPrev => {
+                if let Some(ref mut state) = self.code_actions {
+                    state.select_prev();
+                }
+            }
+            Command::ApplySelectedCodeAction => {
+                self.apply_selected_code_action();
+            }
+            Command::CancelCodeActions => {
+                self.code_actions = None;
+            }
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {
                     self.set_status_message("Formatting not available".to_string());

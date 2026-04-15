@@ -200,6 +200,7 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "show_signature_help" => Some(Command::ShowSignatureHelp),
         "dismiss_signature_help" => Some(Command::DismissSignatureHelp),
         "start_rename" => Some(Command::StartRename),
+        "show_code_actions" => Some(Command::ShowCodeActions),
         _ => None,
     }
 }
@@ -590,6 +591,16 @@ impl KeymapResolver {
         // F2 is already used by project search; Shift+F6 is the standard
         // rename shortcut in IntelliJ / Rider / WebStorm.
         resolver.bind(KeyModifiers::SHIFT, KeyCode::F(6), Command::StartRename);
+
+        // Code actions / quick fixes: Ctrl+. (VS Code convention) and Alt+Enter
+        // (JetBrains). Bind both so users can pick whichever their terminal
+        // passes through reliably.
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('.'),
+            Command::ShowCodeActions,
+        );
+        resolver.bind(KeyModifiers::ALT, KeyCode::Enter, Command::ShowCodeActions);
 
         // Toggle block comment: Shift+Alt+A (VS Code convention).
         // Ctrl+Shift+/ is reserved as a Ctrl+Space fallback for completion.

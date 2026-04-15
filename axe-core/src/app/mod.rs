@@ -144,6 +144,8 @@ pub struct AppState {
     pub signature_help: Option<crate::signature_help::SignatureHelpState>,
     /// Active inline rename dialog, if open.
     pub rename: Option<crate::rename::RenameState>,
+    /// Active code actions picker, if open.
+    pub code_actions: Option<crate::code_actions::CodeActionsState>,
     /// Inlay hints indexed by buffer path, refreshed as the buffer changes.
     pub inlay_hints: crate::inlay::InlayHintStore,
     /// Monotonic content versions for open buffers — bumped on every edit.
@@ -237,6 +239,7 @@ impl AppState {
             hover_info: None,
             signature_help: None,
             rename: None,
+            code_actions: None,
             inlay_hints: crate::inlay::InlayHintStore::new(),
             buffer_content_versions: std::collections::HashMap::new(),
             hover_mouse_state: None,

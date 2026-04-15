@@ -1,5 +1,6 @@
 pub mod ai_overlay;
 pub mod app;
+pub mod code_actions;
 pub mod command;
 pub mod command_palette;
 pub mod completion;
@@ -23,6 +24,7 @@ pub use app::{
     GoToLineDialog, MouseDragState, PasswordDialog, ResizeModeState,
 };
 pub use axe_tree::FileTree;
+pub use code_actions::{CodeAction, CodeActionsState, LspCommand};
 pub use command::Command;
 pub use command_palette::CommandPalette;
 pub use completion::{CompletionItem, CompletionKind, CompletionState};

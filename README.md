@@ -25,6 +25,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Inlay hints** -- inline LSP type and parameter hints rendered next to the code (rust-analyzer, gopls, pyright, etc.)
 - **Signature help** -- popup showing the function signature and active parameter; auto-triggers on `(` and `,`, manual on Ctrl+Shift+Space
 - **Rename symbol** -- Shift+F6 opens an inline rename dialog; applies edits atomically across every affected open buffer with a single undo step
+- **Quick fixes / code actions** -- Ctrl+. or Alt+Enter opens a picker with LSP-provided refactors and diagnostics fixes, applied in one undoable step
 - **Comment toggling** -- Ctrl+/ for line comments, Shift+Alt+A for block comments; language-aware and single-step undo
 - **Fuzzy file finder** -- Ctrl+P, powered by nucleo
 - **Command palette** -- Ctrl+Shift+P, search and execute any command
@@ -95,6 +96,7 @@ axe /path/to/dir # Open specific directory
 | Ctrl+Shift+K / F4 | Show hover info |
 | Ctrl+Shift+Space | Show signature help (also auto-triggers on `(`/`,`) |
 | Shift+F6 | Rename symbol under cursor |
+| Ctrl+. / Alt+Enter | Show code actions / quick fixes |
 | Ctrl+Shift+I | Format document |
 | Ctrl+/ | Toggle line comment on selection or current line |
 | Shift+Alt+A | Toggle block comment on selection |

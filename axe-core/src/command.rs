@@ -242,6 +242,16 @@ pub enum Command {
     RenameInputChar(char),
     /// Remove the character before the caret in the rename input buffer.
     RenameInputBackspace,
+    /// Request LSP code actions for the symbol / line under the cursor.
+    ShowCodeActions,
+    /// Move the highlight down in the open code-actions picker.
+    CodeActionsNext,
+    /// Move the highlight up in the open code-actions picker.
+    CodeActionsPrev,
+    /// Apply the currently highlighted code action.
+    ApplySelectedCodeAction,
+    /// Close the code-actions picker without applying.
+    CancelCodeActions,
     /// Format the current document using the LSP formatter.
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
@@ -419,6 +429,11 @@ mod tests {
             Command::CancelRename,
             Command::RenameInputChar('a'),
             Command::RenameInputBackspace,
+            Command::ShowCodeActions,
+            Command::CodeActionsNext,
+            Command::CodeActionsPrev,
+            Command::ApplySelectedCodeAction,
+            Command::CancelCodeActions,
         ];
 
         for (i, a) in variants.iter().enumerate() {

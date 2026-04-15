@@ -239,6 +239,18 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::CodeActions) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::CodeActionsResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::ExecuteCommand) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::ExecuteCommandResponse { result });
+                                }
+                                continue;
+                            }
                             Some(PendingRequestKind::InlayHint { path, version }) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::InlayHintResponse {
@@ -305,6 +317,18 @@ impl LspManager {
                             Some(PendingRequestKind::Rename) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::RenameResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::CodeActions) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::CodeActionsResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::ExecuteCommand) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::ExecuteCommandResponse { result });
                                 }
                                 continue;
                             }
@@ -501,6 +525,96 @@ impl LspManager {
             "textDocument/formatting",
             params,
             PendingRequestKind::Formatting,
+        )?;
+        Ok(true)
+    }
+
+    /// Sends a `textDocument/codeAction` request for the given range.
+    ///
+    /// `diagnostics` — serialized LSP `Diagnostic` objects covering the
+    /// cursor position — are passed as request context so the server can
+    /// produce relevant quick fixes. Returns `Ok(true)` when the request
+    /// is sent, `Ok(false)` if code actions are unsupported.
+    pub fn request_code_actions(
+        &mut self,
+        path: &Path,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        if !client.supports_code_actions() {
+            return Ok(false);
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "range": {
+                "start": { "line": start_line, "character": start_character },
+                "end": { "line": end_line, "character": end_character },
+            },
+            "context": {
+                "diagnostics": diagnostics,
+                "triggerKind": 1,
+            }
+        });
+
+        client.send_request(
+            "textDocument/codeAction",
+            params,
+            PendingRequestKind::CodeActions,
+        )?;
+        Ok(true)
+    }
+
+    /// Sends a `workspace/executeCommand` request to the active server for
+    /// the file at `path`.
+    ///
+    /// Used when a code action carries only a server-side command, or when
+    /// applying a resolved action from rust-analyzer's assist flow.
+    pub fn execute_command(
+        &mut self,
+        path: &Path,
+        command: &str,
+        arguments: Vec<serde_json::Value>,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        let params = serde_json::json!({
+            "command": command,
+            "arguments": arguments,
+        });
+
+        client.send_request(
+            "workspace/executeCommand",
+            params,
+            PendingRequestKind::ExecuteCommand,
         )?;
         Ok(true)
     }

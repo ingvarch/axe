@@ -1481,6 +1481,141 @@ pub(crate) fn render_signature_help(
     }
 }
 
+/// Minimum width for the code-actions picker.
+const CODE_ACTIONS_MIN_WIDTH: u16 = 28;
+/// Maximum width for the code-actions picker.
+const CODE_ACTIONS_MAX_WIDTH: u16 = 80;
+/// Maximum number of entries shown at once; extras are reachable via arrows.
+const CODE_ACTIONS_MAX_VISIBLE: usize = 10;
+
+/// Renders the code-actions picker near the cursor.
+///
+/// Anchored above the cursor line (fallback below), shows the action title
+/// prefixed by a kind glyph and a preferred-marker. The selected row is
+/// highlighted; arrow keys move through the list, Enter applies, Esc closes.
+pub(crate) fn render_code_actions_popup(
+    state: &axe_core::CodeActionsState,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    if state.actions.is_empty() {
+        return;
+    }
+
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    let line_count = buffer.line_count();
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH + DIFF_GUTTER_WIDTH;
+
+    // Title column width — cap at CODE_ACTIONS_MAX_WIDTH.
+    let max_title_width = state
+        .actions
+        .iter()
+        .map(|a| a.title.chars().count() as u16 + 4) // prefix + padding
+        .max()
+        .unwrap_or(CODE_ACTIONS_MIN_WIDTH);
+    let popup_width = (max_title_width + 2) // +2 borders
+        .clamp(CODE_ACTIONS_MIN_WIDTH, CODE_ACTIONS_MAX_WIDTH)
+        .min(editor_w);
+
+    let visible = state.actions.len().min(CODE_ACTIONS_MAX_VISIBLE);
+    let popup_height = (visible as u16 + 2).min(editor_h); // +2 borders
+
+    let cursor_screen_row = state.anchor_row.saturating_sub(buffer.scroll_row) as u16;
+    let cursor_screen_col = state.anchor_col.saturating_sub(buffer.scroll_col) as u16;
+
+    let popup_x = (editor_x + gutter_width + cursor_screen_col).min(
+        editor_x
+            .saturating_add(editor_w)
+            .saturating_sub(popup_width),
+    );
+
+    let space_above = cursor_screen_row;
+    let above_y = editor_y
+        .saturating_add(cursor_screen_row)
+        .saturating_sub(popup_height);
+    let below_y = editor_y + cursor_screen_row + 1;
+    let popup_y = if space_above >= popup_height {
+        above_y
+    } else {
+        below_y
+    };
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground))
+        .border_style(Style::default().fg(theme.overlay_border));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Scroll window: keep selected index inside the visible slice.
+    let visible = visible.max(1);
+    let start = (state.selected + 1).saturating_sub(visible);
+    let end = (start + visible).min(state.actions.len());
+
+    let base_style = Style::default().fg(theme.foreground).bg(theme.overlay_bg);
+    let selected_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.search_active_match_bg)
+        .add_modifier(Modifier::BOLD);
+    let kind_style = Style::default()
+        .fg(theme.status_bar_key)
+        .bg(theme.overlay_bg)
+        .add_modifier(Modifier::ITALIC);
+
+    for (row_idx, action_idx) in (start..end).enumerate() {
+        if row_idx as u16 >= inner.height {
+            break;
+        }
+        let action = &state.actions[action_idx];
+        let is_selected = action_idx == state.selected;
+        let style = if is_selected {
+            selected_style
+        } else {
+            base_style
+        };
+
+        let kind_glyph: &str = match action.kind.as_deref() {
+            Some(k) if k.starts_with("quickfix") => "\u{2696}",
+            Some(k) if k.starts_with("refactor") => "\u{29BF}",
+            Some(k) if k.starts_with("source") => "\u{2699}",
+            _ => "\u{2022}",
+        };
+        let preferred_marker = if action.is_preferred {
+            "\u{2605} "
+        } else {
+            "  "
+        };
+
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::styled(format!(" {kind_glyph} "), kind_style));
+        spans.push(Span::styled(preferred_marker.to_string(), style));
+        spans.push(Span::styled(action.title.clone(), style));
+
+        // Pad the remainder so the selected-row background spans the full width.
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        if used < inner.width as usize {
+            spans.push(Span::styled(" ".repeat(inner.width as usize - used), style));
+        }
+
+        let line_rect = Rect::new(inner.x, inner.y + row_idx as u16, inner.width, 1);
+        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+    }
+}
+
 /// Minimum width for the rename input popup.
 const RENAME_MIN_WIDTH: u16 = 20;
 /// Maximum width for the rename input popup.
