@@ -11,6 +11,52 @@ pub struct LanguageConfig {
     pub highlights_query: &'static str,
 }
 
+/// Comment token configuration for a language.
+///
+/// Populated independently of `LanguageConfig` because comment-toggling
+/// should work for languages without a bundled tree-sitter grammar
+/// (e.g. SQL, Lua, YAML) and should not require loading the grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommentTokens {
+    /// Line-comment prefix (e.g. `"//"` for Rust, `"#"` for Python).
+    pub line: Option<&'static str>,
+    /// Block-comment open/close pair (e.g. `("/*", "*/")` for C-family).
+    pub block: Option<(&'static str, &'static str)>,
+}
+
+/// Returns the comment token configuration for a given file extension,
+/// or `None` if comments are unknown for that extension.
+pub fn comment_tokens_for_extension(ext: &str) -> Option<CommentTokens> {
+    let tokens = match ext {
+        // C-family: line + block.
+        "rs" | "js" | "jsx" | "ts" | "tsx" | "go" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp"
+        | "java" | "swift" | "kt" | "kts" | "cs" | "scala" | "dart" | "css" | "scss" | "less"
+        | "tf" | "tfvars" | "hcl" => CommentTokens {
+            line: Some("//"),
+            block: Some(("/*", "*/")),
+        },
+        // Hash-comment languages.
+        "py" | "sh" | "bash" | "zsh" | "fish" | "toml" | "yaml" | "yml" | "rb" | "pl" | "r"
+        | "make" | "mk" | "dockerfile" => CommentTokens {
+            line: Some("#"),
+            block: None,
+        },
+        // SQL-style double-dash.
+        "sql" | "lua" | "hs" | "elm" => CommentTokens {
+            line: Some("--"),
+            block: None,
+        },
+        // Markup block-only comments.
+        "html" | "xml" | "md" | "svg" => CommentTokens {
+            line: None,
+            block: Some(("<!--", "-->")),
+        },
+        // JSON has no official comments; skip.
+        _ => return None,
+    };
+    Some(tokens)
+}
+
 /// Returns the language configuration for a given file extension, or `None`
 /// if the extension is not recognised.
 pub fn language_for_extension(ext: &str) -> Option<LanguageConfig> {
@@ -187,6 +233,50 @@ mod tests {
         assert!(language_for_extension("xyz").is_none());
         assert!(language_for_extension("").is_none());
         assert!(language_for_extension("docx").is_none());
+    }
+
+    #[test]
+    fn comment_tokens_rust_has_line_and_block() {
+        let t = comment_tokens_for_extension("rs").unwrap();
+        assert_eq!(t.line, Some("//"));
+        assert_eq!(t.block, Some(("/*", "*/")));
+    }
+
+    #[test]
+    fn comment_tokens_python_has_hash_no_block() {
+        let t = comment_tokens_for_extension("py").unwrap();
+        assert_eq!(t.line, Some("#"));
+        assert!(t.block.is_none());
+    }
+
+    #[test]
+    fn comment_tokens_html_has_block_no_line() {
+        let t = comment_tokens_for_extension("html").unwrap();
+        assert!(t.line.is_none());
+        assert_eq!(t.block, Some(("<!--", "-->")));
+    }
+
+    #[test]
+    fn comment_tokens_sql_has_double_dash() {
+        let t = comment_tokens_for_extension("sql").unwrap();
+        assert_eq!(t.line, Some("--"));
+    }
+
+    #[test]
+    fn comment_tokens_unknown_extension_is_none() {
+        assert!(comment_tokens_for_extension("").is_none());
+        assert!(comment_tokens_for_extension("xyz").is_none());
+        // JSON intentionally has no comment tokens.
+        assert!(comment_tokens_for_extension("json").is_none());
+    }
+
+    #[test]
+    fn comment_tokens_all_c_family_match() {
+        for ext in &["rs", "js", "ts", "go", "c", "cpp", "java", "swift", "css"] {
+            let t = comment_tokens_for_extension(ext)
+                .unwrap_or_else(|| panic!("expected tokens for {ext}"));
+            assert_eq!(t.line, Some("//"), "{ext} should use // line comment");
+        }
     }
 
     #[test]

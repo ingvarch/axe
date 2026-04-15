@@ -14,4 +14,5 @@ pub use cursor::CursorState;
 pub use diagnostic::{BufferDiagnostic, DiagnosticSeverity};
 pub use diff::{DiffHunk, DiffHunkKind};
 pub use highlight::{HighlightKind, HighlightSpan};
+pub use languages::{comment_tokens_for_extension, CommentTokens};
 pub use selection::Selection;

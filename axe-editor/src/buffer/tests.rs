@@ -1787,6 +1787,164 @@ fn reload_from_disk_skips_modified_buffer() {
     assert!(buf.content_string().contains('x'));
 }
 
+// --- Toggle comment tests ---
+
+fn set_selection(buf: &mut EditorBuffer, ar: usize, ac: usize, cr: usize, cc: usize) {
+    buf.selection = Some(crate::selection::Selection {
+        anchor_row: ar,
+        anchor_col: ac,
+    });
+    buf.cursor.row = cr;
+    buf.cursor.col = cc;
+    buf.cursor.desired_col = cc;
+}
+
+#[test]
+fn toggle_line_comment_rust_single_line_round_trip() {
+    let mut buf = buffer_from_str("fn main() {}\n");
+    buf.cursor.row = 0;
+    buf.cursor.col = 0;
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "// fn main() {}");
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "fn main() {}");
+}
+
+#[test]
+fn toggle_line_comment_multi_line_all_commented_uncomments() {
+    let mut buf = buffer_from_str("// a\n// b\n// c\n");
+    set_selection(&mut buf, 0, 0, 2, 4);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "a");
+    assert_eq!(buf.line_text(1), "b");
+    assert_eq!(buf.line_text(2), "c");
+}
+
+#[test]
+fn toggle_line_comment_mixed_comments_all() {
+    let mut buf = buffer_from_str("a\n// b\nc\n");
+    set_selection(&mut buf, 0, 0, 2, 1);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "// a");
+    assert_eq!(buf.line_text(1), "// // b");
+    assert_eq!(buf.line_text(2), "// c");
+}
+
+#[test]
+fn toggle_line_comment_preserves_common_indent() {
+    let mut buf = buffer_from_str("    foo\n      bar\n    baz\n");
+    set_selection(&mut buf, 0, 0, 2, 7);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "    // foo");
+    assert_eq!(buf.line_text(1), "    //   bar");
+    assert_eq!(buf.line_text(2), "    // baz");
+}
+
+#[test]
+fn toggle_line_comment_skips_blank_lines_when_commenting() {
+    let mut buf = buffer_from_str("a\n\nb\n");
+    set_selection(&mut buf, 0, 0, 2, 1);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "// a");
+    assert_eq!(buf.line_text(1), "");
+    assert_eq!(buf.line_text(2), "// b");
+}
+
+#[test]
+fn toggle_line_comment_selection_ends_at_col0_excludes_last() {
+    let mut buf = buffer_from_str("a\nb\nc\n");
+    // Selection: row 0 col 0 → row 2 col 0 (cursor on row 2). VS Code excludes row 2.
+    set_selection(&mut buf, 0, 0, 2, 0);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "// a");
+    assert_eq!(buf.line_text(1), "// b");
+    assert_eq!(
+        buf.line_text(2),
+        "c",
+        "row 2 (cursor at col 0) must stay unchanged"
+    );
+}
+
+#[test]
+fn toggle_line_comment_uses_cursor_row_when_no_selection() {
+    let mut buf = buffer_from_str("a\nb\nc\n");
+    buf.cursor.row = 1;
+    buf.cursor.col = 0;
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "a");
+    assert_eq!(buf.line_text(1), "// b");
+    assert_eq!(buf.line_text(2), "c");
+}
+
+#[test]
+fn toggle_line_comment_single_undo_reverts_whole_action() {
+    let mut buf = buffer_from_str("a\nb\nc\n");
+    set_selection(&mut buf, 0, 0, 2, 1);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "// a");
+    assert_eq!(buf.line_text(1), "// b");
+    assert_eq!(buf.line_text(2), "// c");
+    buf.undo();
+    assert_eq!(buf.line_text(0), "a");
+    assert_eq!(buf.line_text(1), "b");
+    assert_eq!(buf.line_text(2), "c");
+}
+
+#[test]
+fn toggle_line_comment_uncomment_handles_no_space_after_token() {
+    let mut buf = buffer_from_str("//a\n//b\n");
+    set_selection(&mut buf, 0, 0, 1, 3);
+    buf.toggle_line_comment("//");
+    assert_eq!(buf.line_text(0), "a");
+    assert_eq!(buf.line_text(1), "b");
+}
+
+#[test]
+fn toggle_line_comment_python_hash_token() {
+    let mut buf = buffer_from_str("x = 1\ny = 2\n");
+    set_selection(&mut buf, 0, 0, 1, 5);
+    buf.toggle_line_comment("#");
+    assert_eq!(buf.line_text(0), "# x = 1");
+    assert_eq!(buf.line_text(1), "# y = 2");
+}
+
+#[test]
+fn toggle_block_comment_wraps_selection() {
+    let mut buf = buffer_from_str("let x = foo;\n");
+    // Select "foo" (cols 8..11 on row 0).
+    set_selection(&mut buf, 0, 8, 0, 11);
+    buf.toggle_block_comment("/*", "*/");
+    assert_eq!(buf.line_text(0), "let x = /*foo*/;");
+}
+
+#[test]
+fn toggle_block_comment_unwraps_exact_match() {
+    let mut buf = buffer_from_str("let x = /*foo*/;\n");
+    // Select "/*foo*/" (cols 8..15 on row 0).
+    set_selection(&mut buf, 0, 8, 0, 15);
+    buf.toggle_block_comment("/*", "*/");
+    assert_eq!(buf.line_text(0), "let x = foo;");
+}
+
+#[test]
+fn toggle_block_comment_empty_selection_is_noop() {
+    let mut buf = buffer_from_str("hello\n");
+    buf.cursor.row = 0;
+    buf.cursor.col = 2;
+    buf.toggle_block_comment("/*", "*/");
+    assert_eq!(buf.line_text(0), "hello");
+}
+
+#[test]
+fn toggle_block_comment_undo_reverts_wrap() {
+    let mut buf = buffer_from_str("let x = foo;\n");
+    set_selection(&mut buf, 0, 8, 0, 11);
+    buf.toggle_block_comment("/*", "*/");
+    assert_eq!(buf.line_text(0), "let x = /*foo*/;");
+    buf.undo();
+    assert_eq!(buf.line_text(0), "let x = foo;");
+}
+
 #[test]
 fn reload_from_disk_clamps_cursor() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();

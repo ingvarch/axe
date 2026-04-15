@@ -365,6 +365,171 @@ impl EditorBuffer {
         self.notify_highlight_insert(char_idx, chars_inserted);
     }
 
+    // IMPACT ANALYSIS — toggle_line_comment
+    // Parents: KeyEvent → Command::ToggleLineComment → app.execute() → this function
+    // Children: Buffer content changes (multi-line), history records one group, highlight notified
+    // Siblings: Selection (preserved row-wise; col shifted by per-row delta),
+    //           LSP didChange (single notification via execute caller),
+    //           Tree-sitter reparse (incremental via apply_text_edit path)
+
+    /// Toggles line comments over the current selection or cursor line.
+    ///
+    /// If every non-blank line in the affected range already begins with `token`,
+    /// the token is removed; otherwise `token + " "` is inserted at the column of
+    /// the minimum common indent across non-blank lines. Blank lines are left
+    /// untouched when commenting. All edits are grouped into a single undo step.
+    ///
+    /// When a selection ends exactly at column 0 of a row, that row is excluded
+    /// from the range (matches VS Code / JetBrains behaviour).
+    pub fn toggle_line_comment(&mut self, token: &str) {
+        if token.is_empty() {
+            return;
+        }
+
+        let (start_row, end_row) = self.toggle_line_range();
+        let max_row = self.content_line_count().saturating_sub(1);
+        if start_row > max_row {
+            return;
+        }
+        let end_row = end_row.min(max_row);
+
+        // Gather text and classify lines.
+        let line_texts: Vec<String> = (start_row..=end_row).map(|r| self.line_text(r)).collect();
+
+        let non_blank: Vec<(usize, &String)> = line_texts
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| !line.trim().is_empty())
+            .collect();
+
+        if non_blank.is_empty() {
+            return;
+        }
+
+        // All non-blank lines commented? Uncomment. Otherwise, comment.
+        let all_commented = non_blank.iter().all(|(_, line)| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with(token)
+        });
+
+        // Save cursor/selection anchor so we can restore row positions after edits.
+        let cursor_before = self.cursor.clone();
+        let selection_before = self.selection.clone();
+
+        self.begin_undo_group();
+
+        if all_commented {
+            // Uncomment: remove `token` (and one trailing space if present) from each
+            // non-blank line, iterating in reverse so earlier char indices stay valid.
+            for (offset, line) in line_texts.iter().enumerate().rev() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let row = start_row + offset;
+                let indent_len = line.len() - line.trim_start().len();
+                let after_indent = &line[indent_len..];
+                if !after_indent.starts_with(token) {
+                    continue;
+                }
+                let token_len = token.chars().count();
+                // Swallow a single space after the token if present.
+                let rest = &after_indent[token.len()..];
+                let extra = if rest.starts_with(' ') { 1 } else { 0 };
+                let start_col = indent_len;
+                let end_col = indent_len + token_len + extra;
+                self.apply_text_edit(row, start_col, row, end_col, "");
+            }
+        } else {
+            // Comment: insert `token + " "` at the common minimum indent of non-blank lines.
+            let min_indent = non_blank
+                .iter()
+                .map(|(_, line)| line.len() - line.trim_start().len())
+                .min()
+                .unwrap_or(0);
+            let insertion = format!("{token} ");
+            for (offset, line) in line_texts.iter().enumerate().rev() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let row = start_row + offset;
+                self.apply_text_edit(row, min_indent, row, min_indent, &insertion);
+            }
+        }
+
+        self.end_undo_group();
+
+        // Restore cursor row/selection row; `apply_text_edit` leaves cursor at the
+        // position of the last edit, which is not what the user expects.
+        self.cursor.row = cursor_before
+            .row
+            .min(self.content_line_count().saturating_sub(1));
+        let max_col = self.line_length(self.cursor.row);
+        self.cursor.col = cursor_before.col.min(max_col);
+        self.cursor.desired_col = self.cursor.col;
+        if let Some(sel) = selection_before {
+            self.selection = Some(sel);
+        }
+    }
+
+    // IMPACT ANALYSIS — toggle_block_comment
+    // Parents: KeyEvent → Command::ToggleBlockComment → app.execute() → this function
+    // Children: Single apply_text_edit replacing the selection; history records one edit
+    // Siblings: Selection (cleared by apply_text_edit), LSP didChange, tree-sitter reparse
+
+    /// Toggles a block comment around the current selection.
+    ///
+    /// If the selection is empty, does nothing. If the selection already begins
+    /// with `open` and ends with `close`, the wrapper is removed; otherwise the
+    /// selection is wrapped with `open ... close`.
+    pub fn toggle_block_comment(&mut self, open: &str, close: &str) {
+        if open.is_empty() || close.is_empty() {
+            return;
+        }
+        let Some(sel) = self.selection.as_ref() else {
+            return;
+        };
+        if sel.is_empty(self.cursor.row, self.cursor.col) {
+            return;
+        }
+        let (sr, sc, er, ec) = sel.normalized(self.cursor.row, self.cursor.col);
+        let start_idx = self.content.line_to_char(sr) + sc;
+        let end_idx = self.content.line_to_char(er) + ec;
+        if end_idx <= start_idx {
+            return;
+        }
+        let selected: String = self.content.slice(start_idx..end_idx).into();
+        let new_text = if selected.starts_with(open) && selected.ends_with(close) {
+            // Unwrap.
+            let inner = &selected[open.len()..selected.len() - close.len()];
+            inner.to_string()
+        } else {
+            // Wrap.
+            format!("{open}{selected}{close}")
+        };
+        self.apply_text_edit(sr, sc, er, ec, &new_text);
+    }
+
+    // IMPACT ANALYSIS — toggle_line_range
+    // Parents: toggle_line_comment
+    // Children: Returns (start_row, end_row) inclusive range based on selection/cursor
+    // Siblings: None
+
+    /// Returns the inclusive row range affected by a line-comment toggle.
+    ///
+    /// Uses the normalized selection if present; if the selection ends at column 0
+    /// of a row, that row is excluded (matching VS Code / JetBrains behaviour).
+    /// Falls back to the cursor row if there is no selection.
+    fn toggle_line_range(&self) -> (usize, usize) {
+        match self.selection.as_ref() {
+            Some(sel) if !sel.is_empty(self.cursor.row, self.cursor.col) => {
+                let (sr, _sc, er, ec) = sel.normalized(self.cursor.row, self.cursor.col);
+                let end = if ec == 0 && er > sr { er - 1 } else { er };
+                (sr, end)
+            }
+            _ => (self.cursor.row, self.cursor.row),
+        }
+    }
+
     // IMPACT ANALYSIS — apply_text_edit
     // Parents: apply_completion in AppState
     // Children: Rope content changes, cursor moves, history records, highlight notified

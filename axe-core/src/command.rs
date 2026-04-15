@@ -240,6 +240,10 @@ pub enum Command {
     RevertDiffHunk,
     /// Close the diff popup without reverting.
     CloseDiffPopup,
+    /// Toggle line comment on the current selection or cursor line.
+    ToggleLineComment,
+    /// Toggle block comment around the current selection.
+    ToggleBlockComment,
     /// Toggle the AI chat overlay (show/hide). Hidden state preserves the session.
     ToggleAiOverlay,
     /// Open the AI agent picker — pick or switch the active AI CLI.
@@ -392,6 +396,8 @@ mod tests {
             Command::ShowDiffHunk,
             Command::RevertDiffHunk,
             Command::CloseDiffPopup,
+            Command::ToggleLineComment,
+            Command::ToggleBlockComment,
         ];
 
         for (i, a) in variants.iter().enumerate() {

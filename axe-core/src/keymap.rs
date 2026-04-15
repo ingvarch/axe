@@ -195,6 +195,8 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "toggle_ai_overlay" => Some(Command::ToggleAiOverlay),
         "select_ai_agent" => Some(Command::SelectAiAgent),
         "kill_ai_session" => Some(Command::KillAiSession),
+        "toggle_line_comment" => Some(Command::ToggleLineComment),
+        "toggle_block_comment" => Some(Command::ToggleBlockComment),
         _ => None,
     }
 }
@@ -558,6 +560,33 @@ impl KeymapResolver {
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             KeyCode::Char('i'),
             Command::FormatDocument,
+        );
+
+        // Toggle line comment: Ctrl+/.
+        // Many terminals deliver Ctrl+/ as Ctrl+_ (0x1F) without the Kitty
+        // keyboard protocol; bind both so the shortcut works everywhere.
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('/'),
+            Command::ToggleLineComment,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('_'),
+            Command::ToggleLineComment,
+        );
+
+        // Toggle block comment: Shift+Alt+A (VS Code convention).
+        // Ctrl+Shift+/ is reserved as a Ctrl+Space fallback for completion.
+        resolver.bind(
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+            KeyCode::Char('A'),
+            Command::ToggleBlockComment,
+        );
+        resolver.bind(
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+            KeyCode::Char('a'),
+            Command::ToggleBlockComment,
         );
 
         // Diagnostic navigation: Ctrl+Shift+. / Ctrl+Shift+,
@@ -1388,6 +1417,40 @@ mod tests {
     }
 
     // --- Completion ---
+
+    #[test]
+    fn ctrl_slash_toggles_line_comment() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::ToggleLineComment));
+    }
+
+    #[test]
+    fn ctrl_underscore_toggles_line_comment_fallback() {
+        // Some terminals deliver Ctrl+/ as Ctrl+_ without Kitty.
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
+        assert_eq!(resolver.resolve(&key), Some(Command::ToggleLineComment));
+    }
+
+    #[test]
+    fn shift_alt_a_toggles_block_comment() {
+        let resolver = KeymapResolver::with_defaults();
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT | KeyModifiers::SHIFT);
+        assert_eq!(resolver.resolve(&key), Some(Command::ToggleBlockComment));
+    }
+
+    #[test]
+    fn command_from_str_toggle_comments() {
+        assert_eq!(
+            command_from_str("toggle_line_comment"),
+            Some(Command::ToggleLineComment)
+        );
+        assert_eq!(
+            command_from_str("toggle_block_comment"),
+            Some(Command::ToggleBlockComment)
+        );
+    }
 
     #[test]
     fn ctrl_shift_slash_triggers_completion() {

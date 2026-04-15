@@ -749,6 +749,66 @@ impl AppState {
             Command::CloseDiffPopup => {
                 self.diff_popup = None;
             }
+            // IMPACT ANALYSIS — ToggleLineComment / ToggleBlockComment
+            // Parents: KeyEvent → Ctrl+/ / Ctrl+Shift+/ → keymap → these commands
+            // Children: EditorBuffer::toggle_line_comment / toggle_block_comment apply
+            //           multiple apply_text_edit calls grouped into one undo step
+            // Siblings: last_edit_time (autosave trigger), notify_lsp_change (didChange)
+            Command::ToggleLineComment => {
+                if self.focus != FocusTarget::Editor {
+                    return;
+                }
+                let (h, w) = self.editor_viewport();
+                let tokens = self.buffer_manager.active_buffer().and_then(|buf| {
+                    buf.path()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                        .and_then(axe_editor::comment_tokens_for_extension)
+                });
+                let Some(tokens) = tokens else {
+                    self.set_status_message(
+                        "Line comments not supported for this file type".to_string(),
+                    );
+                    return;
+                };
+                let Some(line_token) = tokens.line else {
+                    self.set_status_message(
+                        "Line comments not supported for this file type".to_string(),
+                    );
+                    return;
+                };
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.toggle_line_comment(line_token);
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
+            }
+            Command::ToggleBlockComment => {
+                if self.focus != FocusTarget::Editor {
+                    return;
+                }
+                let (h, w) = self.editor_viewport();
+                let tokens = self.buffer_manager.active_buffer().and_then(|buf| {
+                    buf.path()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                        .and_then(axe_editor::comment_tokens_for_extension)
+                });
+                let block = tokens.and_then(|t| t.block);
+                let Some((open, close)) = block else {
+                    self.set_status_message(
+                        "Block comments not supported for this file type".to_string(),
+                    );
+                    return;
+                };
+                if let Some(buf) = self.buffer_manager.active_buffer_mut() {
+                    buf.toggle_block_comment(open, close);
+                    buf.ensure_cursor_visible(h, w);
+                }
+                self.last_edit_time = Some(Instant::now());
+                self.notify_lsp_change();
+            }
             Command::ToggleAiOverlay => self.toggle_ai_overlay(),
             Command::SelectAiAgent => self.select_ai_agent(),
             Command::KillAiSession => self.kill_ai_session(),
