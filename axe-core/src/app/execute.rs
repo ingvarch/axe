@@ -303,7 +303,9 @@ impl AppState {
                 // Dismiss completion if cursor moved away from trigger position.
                 if let Some(ref comp) = self.completion {
                     if let Some(buf) = self.buffer_manager.active_buffer() {
-                        if buf.cursor.row != comp.trigger_row || buf.cursor.col < comp.trigger_col {
+                        if buf.cursor().row != comp.trigger_row
+                            || buf.cursor().col < comp.trigger_col
+                        {
                             self.completion = None;
                         }
                     }
@@ -313,7 +315,7 @@ impl AppState {
                 // Dismiss signature help when the cursor leaves the call's line.
                 if let Some(ref sig) = self.signature_help {
                     if let Some(buf) = self.buffer_manager.active_buffer() {
-                        if buf.cursor.row != sig.anchor_row {
+                        if buf.cursor().row != sig.anchor_row {
                             self.signature_help = None;
                         }
                     }
@@ -527,8 +529,8 @@ impl AppState {
                             if !first_line.is_empty() {
                                 search.query = first_line;
                                 search.update_matches(buf);
-                                let row = buf.cursor.row;
-                                let col = buf.cursor.col;
+                                let row = buf.cursor().row;
+                                let col = buf.cursor().col;
                                 search.nearest_match_from(row, col);
                             }
                         }
@@ -556,8 +558,8 @@ impl AppState {
                             if !first_line.is_empty() {
                                 search.query = first_line;
                                 search.update_matches(buf);
-                                let row = buf.cursor.row;
-                                let col = buf.cursor.col;
+                                let row = buf.cursor().row;
+                                let col = buf.cursor().col;
                                 search.nearest_match_from(row, col);
                             }
                         }
@@ -589,8 +591,8 @@ impl AppState {
                         if let Some(ref mut search) = self.search {
                             if let Some(buf) = self.buffer_manager.active_buffer() {
                                 search.update_matches(buf);
-                                let cursor_row = buf.cursor.row;
-                                let cursor_col = buf.cursor.col;
+                                let cursor_row = buf.cursor().row;
+                                let cursor_col = buf.cursor().col;
                                 search.nearest_match_from(cursor_row, cursor_col);
                             }
                         }
@@ -644,8 +646,8 @@ impl AppState {
                     search.next_match();
                     if let Some(m) = search.current_match().cloned() {
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                            buf.cursor.row = m.row;
-                            buf.cursor.col = m.col_start;
+                            buf.cursor_mut().row = m.row;
+                            buf.cursor_mut().col = m.col_start;
                             buf.clear_selection();
                             buf.ensure_cursor_visible(h, w);
                         }
@@ -658,8 +660,8 @@ impl AppState {
                     search.prev_match();
                     if let Some(m) = search.current_match().cloned() {
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                            buf.cursor.row = m.row;
-                            buf.cursor.col = m.col_start;
+                            buf.cursor_mut().row = m.row;
+                            buf.cursor_mut().col = m.col_start;
                             buf.clear_selection();
                             buf.ensure_cursor_visible(h, w);
                         }

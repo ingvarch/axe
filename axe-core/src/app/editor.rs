@@ -69,10 +69,10 @@ impl AppState {
         let (h, w) = self.editor_viewport();
         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
             // Only apply if cursor is on the trigger row.
-            if buf.cursor.row != trigger_row {
+            if buf.cursor().row != trigger_row {
                 return;
             }
-            let current_col = buf.cursor.col;
+            let current_col = buf.cursor().col;
             // Delete the typed prefix (from trigger_col to current cursor).
             if current_col > trigger_col {
                 buf.apply_text_edit(trigger_row, trigger_col, trigger_row, current_col, insert);
@@ -98,12 +98,12 @@ impl AppState {
             return;
         };
         // Dismiss if cursor moved to a different row.
-        if buf.cursor.row != comp.trigger_row {
+        if buf.cursor().row != comp.trigger_row {
             self.completion = None;
             return;
         }
         // Dismiss if cursor moved before the trigger column.
-        if buf.cursor.col < comp.trigger_col {
+        if buf.cursor().col < comp.trigger_col {
             self.completion = None;
             return;
         }
@@ -112,7 +112,7 @@ impl AppState {
         let prefix: String = line_text
             .chars()
             .skip(comp.trigger_col)
-            .take(buf.cursor.col - comp.trigger_col)
+            .take(buf.cursor().col - comp.trigger_col)
             .collect();
         comp.update_filter(&prefix);
         // Dismiss if nothing matches.

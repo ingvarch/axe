@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use ropey::{Rope, RopeSlice};
 
 use crate::cursor::CursorState;
+use crate::cursors::Cursors;
 use crate::diagnostic::BufferDiagnostic;
 use crate::diff::DiffHunk;
 use crate::highlight::HighlightState;
@@ -67,8 +68,13 @@ pub struct EditorBuffer {
     pub modified: bool,
     /// Whether this buffer is a preview (single-click open, replaced by next preview).
     pub is_preview: bool,
-    /// Current cursor position within this buffer.
-    pub cursor: CursorState,
+    /// Cursor positions and their selections.
+    ///
+    /// Always holds at least one (primary) cursor; secondary cursors are
+    /// added by multi-cursor commands. Use the accessor methods to read
+    /// or mutate — even from inside the crate — so future refactors stay
+    /// localised to this struct.
+    cursors: Cursors,
     /// First visible line (vertical scroll offset).
     pub scroll_row: usize,
     /// First visible column (horizontal scroll offset).
@@ -77,8 +83,6 @@ pub struct EditorBuffer {
     history: EditHistory,
     /// Viewport width in columns for horizontal scroll clamping.
     viewport_width: usize,
-    /// Current text selection, if any.
-    pub selection: Option<Selection>,
     /// Syntax highlighting state, if the file type is supported.
     highlight: Option<HighlightState>,
     /// LSP diagnostics for this buffer (errors, warnings, etc.).
@@ -109,12 +113,11 @@ impl EditorBuffer {
             path: None,
             modified: false,
             is_preview: false,
-            cursor: CursorState::default(),
+            cursors: Cursors::single(CursorState::default()),
             scroll_row: 0,
             scroll_col: 0,
             viewport_width: usize::MAX,
             history: EditHistory::new(),
-            selection: None,
             highlight: None,
             diagnostics: Vec::new(),
             diff_hunks: Vec::new(),
@@ -152,6 +155,84 @@ impl EditorBuffer {
     pub fn set_tab_config(&mut self, tab_size: usize, insert_spaces: bool) {
         self.tab_size = tab_size;
         self.insert_spaces = insert_spaces;
+    }
+
+    // --- Cursor and selection accessors ---
+    //
+    // All internal and external code reads and writes cursor state through
+    // these methods. The actual storage lives in `self.cursors: Cursors`
+    // which also carries non-primary cursors used by multi-cursor commands.
+
+    /// Returns the current primary cursor position.
+    pub fn cursor(&self) -> &CursorState {
+        self.cursors.primary()
+    }
+
+    /// Returns a mutable reference to the primary cursor position.
+    pub fn cursor_mut(&mut self) -> &mut CursorState {
+        self.cursors.primary_mut()
+    }
+
+    /// Sets the primary cursor position outright.
+    pub fn set_cursor(&mut self, cursor: CursorState) {
+        *self.cursors.primary_mut() = cursor;
+    }
+
+    /// Returns the current text selection attached to the primary cursor.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.cursors.primary_selection()
+    }
+
+    /// Returns `true` when the buffer currently has an active selection.
+    pub fn has_selection(&self) -> bool {
+        self.cursors.primary_selection().is_some()
+    }
+
+    /// Replaces the primary cursor's text selection.
+    pub fn set_selection(&mut self, selection: Option<Selection>) {
+        *self.cursors.primary_selection_mut() = selection;
+    }
+
+    // --- Multi-cursor public API ---
+    //
+    // The storage already supports multiple cursors thanks to `Cursors`.
+    // These methods expose it so phase-D commands (Ctrl+D, Alt+Click,
+    // Ctrl+Shift+L) can build up secondary cursors and later tear them
+    // down. Individual edit methods still operate on the primary cursor
+    // only; phase-D wires the multi-cursor edit loop where it belongs.
+
+    /// Returns `true` when more than one cursor is active.
+    pub fn has_multiple_cursors(&self) -> bool {
+        self.cursors.has_secondaries()
+    }
+
+    /// Returns the total number of cursors (at least one).
+    pub fn cursor_count(&self) -> usize {
+        self.cursors.len()
+    }
+
+    /// Returns a snapshot of every cursor position, sorted by `(row, col)`.
+    pub fn all_cursors(&self) -> Vec<CursorState> {
+        self.cursors.all().to_vec()
+    }
+
+    /// Returns the index of the primary cursor inside
+    /// [`all_cursors`](Self::all_cursors).
+    pub fn primary_cursor_index(&self) -> usize {
+        self.cursors.primary_index()
+    }
+
+    /// Adds a secondary cursor at `position` with an optional selection.
+    ///
+    /// No-op if another cursor already sits at the same `(row, col)`.
+    pub fn add_secondary_cursor(&mut self, position: CursorState, selection: Option<Selection>) {
+        self.cursors.add(position, selection);
+    }
+
+    /// Drops every non-primary cursor. The primary cursor and its selection
+    /// are preserved.
+    pub fn clear_secondary_cursors(&mut self) {
+        self.cursors.clear_secondaries();
     }
 
     /// Returns the current diagnostics for this buffer.
@@ -200,12 +281,11 @@ impl EditorBuffer {
             path: Some(path.to_path_buf()),
             modified: false,
             is_preview: false,
-            cursor: CursorState::default(),
+            cursors: Cursors::single(CursorState::default()),
             scroll_row: 0,
             scroll_col: 0,
             viewport_width: usize::MAX,
             history: EditHistory::new(),
-            selection: None,
             highlight,
             diagnostics: Vec::new(),
             diff_hunks: Vec::new(),
@@ -327,7 +407,7 @@ impl EditorBuffer {
         self.content = new_rope;
         self.modified = false;
         self.history = EditHistory::new();
-        self.selection = None;
+        self.set_selection(None);
         self.diff_hunks.clear();
 
         // Re-parse syntax highlighting for the new content.
@@ -337,12 +417,12 @@ impl EditorBuffer {
 
         // Clamp cursor to valid range.
         let max_row = self.content_line_count().saturating_sub(1);
-        if self.cursor.row > max_row {
-            self.cursor.row = max_row;
+        if self.cursor().row > max_row {
+            self.cursor_mut().row = max_row;
         }
-        let max_col = self.line_length(self.cursor.row);
-        if self.cursor.col > max_col {
-            self.cursor.col = max_col;
+        let max_col = self.line_length(self.cursor().row);
+        if self.cursor().col > max_col {
+            self.cursor_mut().col = max_col;
         }
 
         // Clamp scroll position.

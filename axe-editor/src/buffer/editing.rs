@@ -36,14 +36,14 @@ impl EditorBuffer {
     ///
     /// If a selection is active, deletes it first.
     pub fn insert_char(&mut self, ch: char) {
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
         }
-        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-        let cursor_before = self.cursor.clone();
+        let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+        let cursor_before = self.cursor().clone();
         self.content.insert_char(char_idx, ch);
-        self.cursor.col += 1;
-        self.cursor.desired_col = self.cursor.col;
+        self.cursor_mut().col += 1;
+        self.cursor_mut().desired_col = self.cursor().col;
         self.modified = true;
         self.history.record(
             Edit {
@@ -52,7 +52,7 @@ impl EditorBuffer {
                 new_text: ch.to_string(),
             },
             cursor_before,
-            self.cursor.clone(),
+            self.cursor().clone(),
         );
         self.notify_highlight_insert(char_idx, 1);
     }
@@ -66,18 +66,18 @@ impl EditorBuffer {
     ///
     /// If a selection is active, deletes it first.
     pub fn insert_newline(&mut self) {
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
         }
-        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-        let cursor_before = self.cursor.clone();
-        let indent = self.leading_whitespace(self.cursor.row);
+        let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+        let cursor_before = self.cursor().clone();
+        let indent = self.leading_whitespace(self.cursor().row);
         let insert_str = format!("\n{indent}");
         let insert_chars = insert_str.chars().count();
         self.content.insert(char_idx, &insert_str);
-        self.cursor.row += 1;
-        self.cursor.col = indent.len();
-        self.cursor.desired_col = self.cursor.col;
+        self.cursor_mut().row += 1;
+        self.cursor_mut().col = indent.len();
+        self.cursor_mut().desired_col = self.cursor().col;
         self.modified = true;
         self.history.record(
             Edit {
@@ -86,7 +86,7 @@ impl EditorBuffer {
                 new_text: insert_str,
             },
             cursor_before,
-            self.cursor.clone(),
+            self.cursor().clone(),
         );
         self.notify_highlight_insert(char_idx, insert_chars);
     }
@@ -102,11 +102,11 @@ impl EditorBuffer {
     /// When `insert_spaces` is `false`, inserts a single literal tab character.
     /// If a selection is active, deletes it first.
     pub fn insert_tab(&mut self) {
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
         }
-        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-        let cursor_before = self.cursor.clone();
+        let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+        let cursor_before = self.cursor().clone();
 
         let (insert_text, advance) = if self.insert_spaces {
             (" ".repeat(self.tab_size), self.tab_size)
@@ -115,8 +115,8 @@ impl EditorBuffer {
         };
 
         self.content.insert(char_idx, &insert_text);
-        self.cursor.col += advance;
-        self.cursor.desired_col = self.cursor.col;
+        self.cursor_mut().col += advance;
+        self.cursor_mut().desired_col = self.cursor().col;
         self.modified = true;
         self.history.record(
             Edit {
@@ -125,7 +125,7 @@ impl EditorBuffer {
                 new_text: insert_text,
             },
             cursor_before,
-            self.cursor.clone(),
+            self.cursor().clone(),
         );
         self.notify_highlight_insert(char_idx, advance);
     }
@@ -141,20 +141,20 @@ impl EditorBuffer {
     /// At the beginning of a line, joins with the previous line.
     /// At the beginning of the file, does nothing.
     pub fn delete_char_backward(&mut self) {
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
             return;
         }
-        if self.cursor.col > 0 {
-            let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-            let cursor_before = self.cursor.clone();
+        if self.cursor().col > 0 {
+            let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+            let cursor_before = self.cursor().clone();
             let deleted: String = self.content.slice(char_idx - 1..char_idx).into();
             let old_byte_len = deleted.len();
             let old_end_pos =
                 highlight::byte_to_point(&self.content, self.content.char_to_byte(char_idx));
             self.content.remove(char_idx - 1..char_idx);
-            self.cursor.col -= 1;
-            self.cursor.desired_col = self.cursor.col;
+            self.cursor_mut().col -= 1;
+            self.cursor_mut().desired_col = self.cursor().col;
             self.modified = true;
             self.history.record(
                 Edit {
@@ -163,13 +163,13 @@ impl EditorBuffer {
                     new_text: String::new(),
                 },
                 cursor_before,
-                self.cursor.clone(),
+                self.cursor().clone(),
             );
             self.notify_highlight_delete(char_idx - 1, 1, old_byte_len, old_end_pos);
-        } else if self.cursor.row > 0 {
-            let cursor_before = self.cursor.clone();
-            let prev_line_len = self.line_length(self.cursor.row - 1);
-            let char_idx = self.content.line_to_char(self.cursor.row);
+        } else if self.cursor().row > 0 {
+            let cursor_before = self.cursor().clone();
+            let prev_line_len = self.line_length(self.cursor().row - 1);
+            let char_idx = self.content.line_to_char(self.cursor().row);
             // Remove \r\n or \n at end of previous line.
             let remove_start = if char_idx >= 2 && self.content.char(char_idx - 2) == '\r' {
                 char_idx - 2
@@ -182,9 +182,9 @@ impl EditorBuffer {
             let old_end_pos =
                 highlight::byte_to_point(&self.content, self.content.char_to_byte(char_idx));
             self.content.remove(remove_start..char_idx);
-            self.cursor.row -= 1;
-            self.cursor.col = prev_line_len;
-            self.cursor.desired_col = self.cursor.col;
+            self.cursor_mut().row -= 1;
+            self.cursor_mut().col = prev_line_len;
+            self.cursor_mut().desired_col = self.cursor().col;
             self.modified = true;
             self.history.record(
                 Edit {
@@ -193,7 +193,7 @@ impl EditorBuffer {
                     new_text: String::new(),
                 },
                 cursor_before,
-                self.cursor.clone(),
+                self.cursor().clone(),
             );
             self.notify_highlight_delete(remove_start, chars_deleted, old_byte_len, old_end_pos);
         }
@@ -210,14 +210,14 @@ impl EditorBuffer {
     /// At the end of a line, joins with the next line.
     /// At the end of the file, does nothing.
     pub fn delete_char_forward(&mut self) {
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
             return;
         }
-        let line_len = self.line_length(self.cursor.row);
-        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-        if self.cursor.col < line_len {
-            let cursor_before = self.cursor.clone();
+        let line_len = self.line_length(self.cursor().row);
+        let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+        if self.cursor().col < line_len {
+            let cursor_before = self.cursor().clone();
             let deleted: String = self.content.slice(char_idx..char_idx + 1).into();
             let old_byte_len = deleted.len();
             let old_end_pos =
@@ -231,11 +231,11 @@ impl EditorBuffer {
                     new_text: String::new(),
                 },
                 cursor_before,
-                self.cursor.clone(),
+                self.cursor().clone(),
             );
             self.notify_highlight_delete(char_idx, 1, old_byte_len, old_end_pos);
-        } else if self.cursor.row + 1 < self.content_line_count() {
-            let cursor_before = self.cursor.clone();
+        } else if self.cursor().row + 1 < self.content_line_count() {
+            let cursor_before = self.cursor().clone();
             // At end of line — join with next line by removing the newline.
             let remove_end =
                 if char_idx < self.content.len_chars() && self.content.char(char_idx) == '\r' {
@@ -257,7 +257,7 @@ impl EditorBuffer {
                     new_text: String::new(),
                 },
                 cursor_before,
-                self.cursor.clone(),
+                self.cursor().clone(),
             );
             self.notify_highlight_delete(char_idx, chars_deleted, old_byte_len, old_end_pos);
         }
@@ -305,8 +305,8 @@ impl EditorBuffer {
                     self.content.insert(edit.char_idx, &edit.old_text);
                 }
             }
-            self.cursor = group.cursor_before;
-            self.cursor.desired_col = self.cursor.col;
+            self.set_cursor(group.cursor_before);
+            self.cursor_mut().desired_col = self.cursor().col;
             self.modified = true;
             self.reparse_highlight_full();
         }
@@ -326,8 +326,8 @@ impl EditorBuffer {
                     self.content.insert(edit.char_idx, &edit.new_text);
                 }
             }
-            self.cursor = group.cursor_after;
-            self.cursor.desired_col = self.cursor.col;
+            self.set_cursor(group.cursor_after);
+            self.cursor_mut().desired_col = self.cursor().col;
             self.modified = true;
             self.reparse_highlight_full();
         }
@@ -342,24 +342,24 @@ impl EditorBuffer {
             return;
         }
         // Delete selection first if active.
-        if self.selection.is_some() {
+        if self.has_selection() {
             self.delete_selection();
         }
-        let char_idx = self.content.line_to_char(self.cursor.row) + self.cursor.col;
-        let cursor_before = self.cursor.clone();
+        let char_idx = self.content.line_to_char(self.cursor().row) + self.cursor().col;
+        let cursor_before = self.cursor().clone();
         let chars_inserted = text.chars().count();
         self.content.insert(char_idx, text);
 
         // Advance cursor past the inserted text.
         for ch in text.chars() {
             if ch == '\n' {
-                self.cursor.row += 1;
-                self.cursor.col = 0;
+                self.cursor_mut().row += 1;
+                self.cursor_mut().col = 0;
             } else {
-                self.cursor.col += 1;
+                self.cursor_mut().col += 1;
             }
         }
-        self.cursor.desired_col = self.cursor.col;
+        self.cursor_mut().desired_col = self.cursor().col;
         self.modified = true;
         self.history.record(
             Edit {
@@ -368,7 +368,7 @@ impl EditorBuffer {
                 new_text: text.to_string(),
             },
             cursor_before,
-            self.cursor.clone(),
+            self.cursor().clone(),
         );
         self.notify_highlight_insert(char_idx, chars_inserted);
     }
@@ -421,8 +421,8 @@ impl EditorBuffer {
         });
 
         // Save cursor/selection anchor so we can restore row positions after edits.
-        let cursor_before = self.cursor.clone();
-        let selection_before = self.selection.clone();
+        let cursor_before = self.cursor().clone();
+        let selection_before = self.selection().cloned();
 
         self.begin_undo_group();
 
@@ -468,14 +468,14 @@ impl EditorBuffer {
 
         // Restore cursor row/selection row; `apply_text_edit` leaves cursor at the
         // position of the last edit, which is not what the user expects.
-        self.cursor.row = cursor_before
+        self.cursor_mut().row = cursor_before
             .row
             .min(self.content_line_count().saturating_sub(1));
-        let max_col = self.line_length(self.cursor.row);
-        self.cursor.col = cursor_before.col.min(max_col);
-        self.cursor.desired_col = self.cursor.col;
+        let max_col = self.line_length(self.cursor().row);
+        self.cursor_mut().col = cursor_before.col.min(max_col);
+        self.cursor_mut().desired_col = self.cursor().col;
         if let Some(sel) = selection_before {
-            self.selection = Some(sel);
+            self.set_selection(Some(sel));
         }
     }
 
@@ -493,13 +493,13 @@ impl EditorBuffer {
         if open.is_empty() || close.is_empty() {
             return;
         }
-        let Some(sel) = self.selection.as_ref() else {
+        let Some(sel) = self.selection() else {
             return;
         };
-        if sel.is_empty(self.cursor.row, self.cursor.col) {
+        if sel.is_empty(self.cursor().row, self.cursor().col) {
             return;
         }
-        let (sr, sc, er, ec) = sel.normalized(self.cursor.row, self.cursor.col);
+        let (sr, sc, er, ec) = sel.normalized(self.cursor().row, self.cursor().col);
         let start_idx = self.content.line_to_char(sr) + sc;
         let end_idx = self.content.line_to_char(er) + ec;
         if end_idx <= start_idx {
@@ -528,13 +528,13 @@ impl EditorBuffer {
     /// of a row, that row is excluded (matching VS Code / JetBrains behaviour).
     /// Falls back to the cursor row if there is no selection.
     fn toggle_line_range(&self) -> (usize, usize) {
-        match self.selection.as_ref() {
-            Some(sel) if !sel.is_empty(self.cursor.row, self.cursor.col) => {
-                let (sr, _sc, er, ec) = sel.normalized(self.cursor.row, self.cursor.col);
+        match self.selection() {
+            Some(sel) if !sel.is_empty(self.cursor().row, self.cursor().col) => {
+                let (sr, _sc, er, ec) = sel.normalized(self.cursor().row, self.cursor().col);
                 let end = if ec == 0 && er > sr { er - 1 } else { er };
                 (sr, end)
             }
-            _ => (self.cursor.row, self.cursor.row),
+            _ => (self.cursor().row, self.cursor().row),
         }
     }
 
@@ -556,7 +556,7 @@ impl EditorBuffer {
         new_text: &str,
     ) {
         // Clear selection before editing.
-        self.selection = None;
+        self.set_selection(None);
 
         let total_lines = self.content.len_lines();
         let start_line = start_line.min(total_lines.saturating_sub(1));
@@ -570,7 +570,7 @@ impl EditorBuffer {
         let start_idx = start_idx.min(total_chars);
         let end_idx = end_idx.min(total_chars).max(start_idx);
 
-        let cursor_before = self.cursor.clone();
+        let cursor_before = self.cursor().clone();
         let old_text: String = self.content.slice(start_idx..end_idx).into();
         let old_len = old_text.len();
         let old_end_pos = if end_idx > start_idx {
@@ -601,9 +601,9 @@ impl EditorBuffer {
                 col += 1;
             }
         }
-        self.cursor.row = row;
-        self.cursor.col = col;
-        self.cursor.desired_col = col;
+        self.cursor_mut().row = row;
+        self.cursor_mut().col = col;
+        self.cursor_mut().desired_col = col;
         self.modified = true;
 
         self.history.record(
@@ -613,7 +613,7 @@ impl EditorBuffer {
                 new_text: new_text.to_string(),
             },
             cursor_before,
-            self.cursor.clone(),
+            self.cursor().clone(),
         );
 
         // Notify syntax highlighter about the edit.

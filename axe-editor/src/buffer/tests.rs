@@ -135,12 +135,11 @@ fn file_type_known_extensions() {
             path: Some(std::path::PathBuf::from(filename)),
             modified: false,
             is_preview: false,
-            cursor: crate::cursor::CursorState::default(),
+            cursors: crate::cursors::Cursors::single(crate::cursor::CursorState::default()),
             scroll_row: 0,
             scroll_col: 0,
             viewport_width: usize::MAX,
             history: crate::history::EditHistory::new(),
-            selection: None,
             highlight: None,
             diagnostics: Vec::new(),
             diff_hunks: Vec::new(),
@@ -159,12 +158,11 @@ fn file_type_unknown_extension() {
         path: Some(std::path::PathBuf::from("test.xyz")),
         modified: false,
         is_preview: false,
-        cursor: crate::cursor::CursorState::default(),
+        cursors: crate::cursors::Cursors::single(crate::cursor::CursorState::default()),
         scroll_row: 0,
         scroll_col: 0,
         viewport_width: usize::MAX,
         history: crate::history::EditHistory::new(),
-        selection: None,
         highlight: None,
         diagnostics: Vec::new(),
         diff_hunks: Vec::new(),
@@ -252,213 +250,213 @@ fn buffer_from_str(s: &str) -> EditorBuffer {
 fn move_right_advances_col() {
     let mut buf = buffer_from_str("hello");
     buf.move_right();
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 #[test]
 fn move_right_at_eol_wraps_to_next_line() {
     let mut buf = buffer_from_str("ab\ncd");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.move_right();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn move_right_at_eof_does_nothing() {
     let mut buf = buffer_from_str("ab\ncd");
-    buf.cursor.row = 1;
-    buf.cursor.col = 2;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 2;
     buf.move_right();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn move_left_decreases_col() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.move_left();
-    assert_eq!(buf.cursor.col, 4);
+    assert_eq!(buf.cursor().col, 4);
 }
 
 #[test]
 fn move_left_at_bol_wraps_to_prev_line() {
     let mut buf = buffer_from_str("ab\ncd");
-    buf.cursor.row = 1;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 0;
     buf.move_left();
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn move_left_at_bof_does_nothing() {
     let mut buf = buffer_from_str("hello");
     buf.move_left();
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn move_down_advances_row() {
     let mut buf = buffer_from_str("a\nb");
     buf.move_down();
-    assert_eq!(buf.cursor.row, 1);
+    assert_eq!(buf.cursor().row, 1);
 }
 
 #[test]
 fn move_down_clamps_col_to_line_length() {
     let mut buf = buffer_from_str("hello\nab");
-    buf.cursor.col = 5;
-    buf.cursor.desired_col = 5;
+    buf.cursor_mut().col = 5;
+    buf.cursor_mut().desired_col = 5;
     buf.move_down();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn move_down_restores_desired_col() {
     let mut buf = buffer_from_str("hello\nab\nworld");
-    buf.cursor.col = 4;
-    buf.cursor.desired_col = 4;
+    buf.cursor_mut().col = 4;
+    buf.cursor_mut().desired_col = 4;
     buf.move_down(); // row 1 "ab" -> col clamped to 2
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
     buf.move_down(); // row 2 "world" -> col restored to 4
-    assert_eq!(buf.cursor.row, 2);
-    assert_eq!(buf.cursor.col, 4);
+    assert_eq!(buf.cursor().row, 2);
+    assert_eq!(buf.cursor().col, 4);
 }
 
 #[test]
 fn move_down_at_last_line_does_nothing() {
     let mut buf = buffer_from_str("only");
     buf.move_down();
-    assert_eq!(buf.cursor.row, 0);
+    assert_eq!(buf.cursor().row, 0);
 }
 
 #[test]
 fn move_up_decreases_row() {
     let mut buf = buffer_from_str("a\nb");
-    buf.cursor.row = 1;
+    buf.cursor_mut().row = 1;
     buf.move_up();
-    assert_eq!(buf.cursor.row, 0);
+    assert_eq!(buf.cursor().row, 0);
 }
 
 #[test]
 fn move_up_restores_desired_col() {
     let mut buf = buffer_from_str("hello\nab\nworld");
-    buf.cursor.row = 2;
-    buf.cursor.col = 4;
-    buf.cursor.desired_col = 4;
+    buf.cursor_mut().row = 2;
+    buf.cursor_mut().col = 4;
+    buf.cursor_mut().desired_col = 4;
     buf.move_up(); // row 1 "ab" -> col clamped to 2
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
     buf.move_up(); // row 0 "hello" -> col restored to 4
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 4);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 4);
 }
 
 #[test]
 fn move_up_at_first_line_does_nothing() {
     let mut buf = buffer_from_str("only");
     buf.move_up();
-    assert_eq!(buf.cursor.row, 0);
+    assert_eq!(buf.cursor().row, 0);
 }
 
 #[test]
 fn move_home_goes_to_col_zero() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.move_home();
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn move_end_goes_to_end_of_line() {
     let mut buf = buffer_from_str("hello\nworld");
     buf.move_end();
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn move_file_start_goes_to_0_0() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
-    buf.cursor.col = 3;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 3;
     buf.move_file_start();
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn move_file_end_goes_to_last_line_end() {
     let mut buf = buffer_from_str("hello\nworld");
     buf.move_file_end();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn move_page_down_moves_by_viewport() {
     let mut buf = buffer_from_str(&"line\n".repeat(50));
     buf.move_page_down(10);
-    assert_eq!(buf.cursor.row, 10);
+    assert_eq!(buf.cursor().row, 10);
 }
 
 #[test]
 fn move_page_down_clamps_to_last_line() {
     let mut buf = buffer_from_str("a\nb\nc");
     buf.move_page_down(100);
-    assert_eq!(buf.cursor.row, 2);
+    assert_eq!(buf.cursor().row, 2);
 }
 
 #[test]
 fn move_page_up_moves_by_viewport() {
     let mut buf = buffer_from_str(&"line\n".repeat(50));
-    buf.cursor.row = 30;
+    buf.cursor_mut().row = 30;
     buf.move_page_up(10);
-    assert_eq!(buf.cursor.row, 20);
+    assert_eq!(buf.cursor().row, 20);
 }
 
 #[test]
 fn move_page_up_clamps_to_zero() {
     let mut buf = buffer_from_str("a\nb\nc");
-    buf.cursor.row = 1;
+    buf.cursor_mut().row = 1;
     buf.move_page_up(100);
-    assert_eq!(buf.cursor.row, 0);
+    assert_eq!(buf.cursor().row, 0);
 }
 
 #[test]
 fn move_word_right_skips_word() {
     let mut buf = buffer_from_str("hello world");
     buf.move_word_right();
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
 fn move_word_right_at_eol_wraps() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.move_word_right();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn move_word_left_skips_word() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 11;
+    buf.cursor_mut().col = 11;
     buf.move_word_left();
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
 fn move_word_left_at_bol_wraps() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 0;
     buf.move_word_left();
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 // --- ensure_cursor_visible tests ---
@@ -466,9 +464,9 @@ fn move_word_left_at_bol_wraps() {
 #[test]
 fn ensure_visible_scrolls_down_when_cursor_below() {
     let mut buf = buffer_from_str(&"line\n".repeat(50));
-    buf.cursor.row = 30;
+    buf.cursor_mut().row = 30;
     buf.ensure_cursor_visible(20, 80);
-    // cursor.row (30) >= scroll_row + viewport_height(20) - margin(5)
+    // cursor().row (30) >= scroll_row + viewport_height(20) - margin(5)
     // scroll_row = 30 + 5 + 1 - 20 = 16
     assert_eq!(buf.scroll_row, 16);
 }
@@ -477,9 +475,9 @@ fn ensure_visible_scrolls_down_when_cursor_below() {
 fn ensure_visible_scrolls_up_when_cursor_above() {
     let mut buf = buffer_from_str(&"line\n".repeat(50));
     buf.scroll_row = 10;
-    buf.cursor.row = 2;
+    buf.cursor_mut().row = 2;
     buf.ensure_cursor_visible(20, 80);
-    // cursor.row (2) < scroll_row(10) + margin(5) => scroll_row = 2 - 5 = 0
+    // cursor().row (2) < scroll_row(10) + margin(5) => scroll_row = 2 - 5 = 0
     assert_eq!(buf.scroll_row, 0);
 }
 
@@ -487,7 +485,7 @@ fn ensure_visible_scrolls_up_when_cursor_above() {
 fn ensure_visible_no_change_when_in_view() {
     let mut buf = buffer_from_str(&"line\n".repeat(50));
     buf.scroll_row = 5;
-    buf.cursor.row = 12;
+    buf.cursor_mut().row = 12;
     buf.ensure_cursor_visible(20, 80);
     assert_eq!(buf.scroll_row, 5);
 }
@@ -495,9 +493,9 @@ fn ensure_visible_no_change_when_in_view() {
 #[test]
 fn ensure_visible_horizontal_scroll() {
     let mut buf = buffer_from_str(&"x".repeat(200));
-    buf.cursor.col = 100;
+    buf.cursor_mut().col = 100;
     buf.ensure_cursor_visible(20, 80);
-    // cursor.col (100) >= scroll_col(0) + viewport_width(80)
+    // cursor().col (100) >= scroll_col(0) + viewport_width(80)
     // scroll_col = 100 + 1 - 80 = 21
     assert_eq!(buf.scroll_col, 21);
 }
@@ -509,25 +507,25 @@ fn insert_char_at_start() {
     let mut buf = buffer_from_str("hello");
     buf.insert_char('x');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "xhello");
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 #[test]
 fn insert_char_in_middle() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.insert_char('x');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helxlo");
-    assert_eq!(buf.cursor.col, 4);
+    assert_eq!(buf.cursor().col, 4);
 }
 
 #[test]
 fn insert_char_at_end() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.insert_char('x');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
@@ -543,7 +541,7 @@ fn insert_char_in_empty_buffer() {
     let mut buf = EditorBuffer::new();
     buf.insert_char('a');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "a");
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 // --- insert_newline tests ---
@@ -551,12 +549,12 @@ fn insert_char_in_empty_buffer() {
 #[test]
 fn newline_splits_line() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.insert_newline();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hel\n");
     assert_eq!(buf.line_at(1).unwrap().to_string(), "lo");
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
@@ -565,29 +563,29 @@ fn newline_at_start() {
     buf.insert_newline();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "\n");
     assert!(buf.line_at(1).unwrap().to_string().starts_with("hello"));
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn newline_at_end() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.insert_newline();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello\n");
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn newline_auto_indents() {
     let mut buf = buffer_from_str("  hello");
-    buf.cursor.col = 6;
+    buf.cursor_mut().col = 6;
     buf.insert_newline();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "  hell\n");
     assert_eq!(buf.line_at(1).unwrap().to_string(), "  o");
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
@@ -605,7 +603,7 @@ fn tab_inserts_spaces() {
     let mut buf = buffer_from_str("hello");
     buf.insert_tab();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "    hello");
-    assert_eq!(buf.cursor.col, 4);
+    assert_eq!(buf.cursor().col, 4);
 }
 
 #[test]
@@ -621,10 +619,10 @@ fn tab_sets_modified() {
 #[test]
 fn backspace_deletes_char() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
@@ -632,25 +630,25 @@ fn backspace_at_bof_noop() {
     let mut buf = buffer_from_str("hello");
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().col, 0);
     assert!(!buf.modified);
 }
 
 #[test]
 fn backspace_joins_lines() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 0;
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn backspace_sets_modified() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 1;
+    buf.cursor_mut().col = 1;
     assert!(!buf.modified);
     buf.delete_char_backward();
     assert!(buf.modified);
@@ -661,16 +659,16 @@ fn backspace_sets_modified() {
 #[test]
 fn delete_forward_deletes_char() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.delete_char_forward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn delete_forward_at_eof_noop() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.delete_char_forward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
     assert!(!buf.modified);
@@ -679,11 +677,11 @@ fn delete_forward_at_eof_noop() {
 #[test]
 fn delete_forward_joins_lines() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.delete_char_forward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
@@ -737,7 +735,7 @@ fn save_is_atomic() {
     tmp.flush().unwrap();
 
     let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
-    buf.cursor.col = 4;
+    buf.cursor_mut().col = 4;
     buf.insert_char('!');
     buf.save_to_file().unwrap();
 
@@ -750,57 +748,57 @@ fn save_is_atomic() {
 #[test]
 fn undo_insert_char() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.insert_char('x');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn redo_insert_char() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.insert_char('x');
     buf.undo();
     buf.redo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hellox");
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
 fn undo_backspace() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 #[test]
 fn undo_newline() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.insert_newline();
     assert_eq!(buf.line_count(), 2);
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 #[test]
 fn undo_delete_forward() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.delete_char_forward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
@@ -810,7 +808,7 @@ fn undo_tab() {
     assert_eq!(buf.line_at(0).unwrap().to_string(), "    hello");
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello");
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
@@ -851,15 +849,15 @@ fn undo_redo_multiple_steps() {
 #[test]
 fn undo_backspace_at_line_join() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 0;
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helloworld");
     buf.undo();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hello\n");
     assert_eq!(buf.line_at(1).unwrap().to_string(), "world");
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
@@ -883,7 +881,7 @@ fn redo_on_empty_history_is_noop() {
 #[test]
 fn new_buffer_has_no_selection() {
     let buf = EditorBuffer::new();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
@@ -892,18 +890,18 @@ fn from_file_has_no_selection() {
     write!(tmp, "hello").unwrap();
     tmp.flush().unwrap();
     let buf = EditorBuffer::from_file(tmp.path()).unwrap();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
 fn select_right_starts_selection() {
     let mut buf = buffer_from_str("hello");
     buf.select_right();
-    assert!(buf.selection.is_some());
-    let sel = buf.selection.as_ref().unwrap();
+    assert!(buf.has_selection());
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 #[test]
@@ -911,120 +909,120 @@ fn select_right_extends_selection() {
     let mut buf = buffer_from_str("hello");
     buf.select_right();
     buf.select_right();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn select_left_from_mid() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.select_left();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 3);
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn select_down() {
     let mut buf = buffer_from_str("hello\nworld");
     buf.select_down();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
-    assert_eq!(buf.cursor.row, 1);
+    assert_eq!(buf.cursor().row, 1);
 }
 
 #[test]
 fn select_up() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
+    buf.cursor_mut().row = 1;
     buf.select_up();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 1);
-    assert_eq!(buf.cursor.row, 0);
+    assert_eq!(buf.cursor().row, 0);
 }
 
 #[test]
 fn select_home() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 3;
+    buf.cursor_mut().col = 3;
     buf.select_home();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 3);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn select_end() {
     let mut buf = buffer_from_str("hello");
     buf.select_end();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn select_file_start() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.cursor.row = 1;
-    buf.cursor.col = 3;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 3;
     buf.select_file_start();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 1);
     assert_eq!(sel.anchor_col, 3);
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
 fn select_file_end() {
     let mut buf = buffer_from_str("hello\nworld");
     buf.select_file_end();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn select_word_right() {
     let mut buf = buffer_from_str("hello world");
     buf.select_word_right();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
 fn select_word_left() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 11;
+    buf.cursor_mut().col = 11;
     buf.select_word_left();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 11);
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
 fn select_all() {
     let mut buf = buffer_from_str("hello\nworld");
     buf.select_all();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn clear_selection_clears() {
     let mut buf = buffer_from_str("hello");
     buf.select_right();
-    assert!(buf.selection.is_some());
+    assert!(buf.has_selection());
     buf.clear_selection();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 // --- selected_text tests ---
@@ -1032,34 +1030,34 @@ fn clear_selection_clears() {
 #[test]
 fn selected_text_single_line() {
     let mut buf = buffer_from_str("hello world");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 0,
-    });
-    buf.cursor.col = 5;
+    }));
+    buf.cursor_mut().col = 5;
     assert_eq!(buf.selected_text(), Some("hello".to_string()));
 }
 
 #[test]
 fn selected_text_multi_line() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 3,
-    });
-    buf.cursor.row = 1;
-    buf.cursor.col = 2;
+    }));
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 2;
     assert_eq!(buf.selected_text(), Some("lo\nwo".to_string()));
 }
 
 #[test]
 fn selected_text_backward() {
     let mut buf = buffer_from_str("hello world");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 8,
-    });
-    buf.cursor.col = 3;
+    }));
+    buf.cursor_mut().col = 3;
     assert_eq!(buf.selected_text(), Some("lo wo".to_string()));
 }
 
@@ -1074,40 +1072,40 @@ fn selected_text_none() {
 #[test]
 fn delete_selection_single_line() {
     let mut buf = buffer_from_str("hello world");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 0,
-    });
-    buf.cursor.col = 5;
+    }));
+    buf.cursor_mut().col = 5;
     buf.delete_selection();
     assert_eq!(buf.line_at(0).unwrap().to_string(), " world");
-    assert_eq!(buf.cursor.col, 0);
-    assert!(buf.selection.is_none());
+    assert_eq!(buf.cursor().col, 0);
+    assert!(buf.selection().is_none());
 }
 
 #[test]
 fn delete_selection_multi_line() {
     let mut buf = buffer_from_str("hello\nworld");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 3,
-    });
-    buf.cursor.row = 1;
-    buf.cursor.col = 2;
+    }));
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 2;
     buf.delete_selection();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helrld");
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 #[test]
 fn delete_selection_records_undo() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.delete_selection();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
     buf.undo();
@@ -1117,11 +1115,11 @@ fn delete_selection_records_undo() {
 #[test]
 fn delete_selection_returns_text() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 0,
-    });
-    buf.cursor.col = 3;
+    }));
+    buf.cursor_mut().col = 3;
     let deleted = buf.delete_selection();
     assert_eq!(deleted, Some("hel".to_string()));
 }
@@ -1139,34 +1137,34 @@ fn delete_selection_no_selection_noop() {
 #[test]
 fn insert_text_single_char() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.insert_text("x");
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hexllo");
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 #[test]
 fn insert_text_multiline() {
     let mut buf = buffer_from_str("hello");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.insert_text("a\nb");
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hea\n");
     assert_eq!(buf.line_at(1).unwrap().to_string(), "bllo");
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 #[test]
 fn insert_text_replaces_selection() {
     let mut buf = buffer_from_str("hello world");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 0,
-    });
-    buf.cursor.col = 5;
+    }));
+    buf.cursor_mut().col = 5;
     buf.insert_text("hi");
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hi world");
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
@@ -1182,11 +1180,11 @@ fn insert_text_empty_noop() {
 #[test]
 fn insert_char_with_selection_replaces() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.insert_char('x');
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hxo");
 }
@@ -1194,11 +1192,11 @@ fn insert_char_with_selection_replaces() {
 #[test]
 fn insert_newline_with_selection_replaces() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.insert_newline();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "h\n");
     assert!(buf.line_at(1).unwrap().to_string().starts_with("o"));
@@ -1207,11 +1205,11 @@ fn insert_newline_with_selection_replaces() {
 #[test]
 fn insert_tab_with_selection_replaces() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.insert_tab();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "h    o");
 }
@@ -1219,27 +1217,27 @@ fn insert_tab_with_selection_replaces() {
 #[test]
 fn backspace_with_selection_deletes_selection() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.delete_char_backward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
 fn delete_with_selection_deletes_selection() {
     let mut buf = buffer_from_str("hello");
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: 0,
         anchor_col: 1,
-    });
-    buf.cursor.col = 4;
+    }));
+    buf.cursor_mut().col = 4;
     buf.delete_char_forward();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "ho");
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 // --- Syntax highlighting integration tests ---
@@ -1309,8 +1307,8 @@ fn highlight_updates_after_insert_char() {
 
     let mut buf = EditorBuffer::from_file(&path).unwrap();
     // Insert at start of file: "let x = 1;\n"
-    buf.cursor.row = 0;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 0;
     for ch in "let x = 1;\n".chars() {
         if ch == '\n' {
             buf.insert_newline();
@@ -1340,8 +1338,8 @@ fn highlight_updates_after_undo() {
 
     let mut buf = EditorBuffer::from_file(&path).unwrap();
     // Type a character.
-    buf.cursor.row = 0;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 0;
     buf.insert_char('x');
     // Undo — should restore the original parse.
     buf.undo();
@@ -1387,7 +1385,7 @@ fn buffer_insert_tab_uses_configured_size() {
     let mut buf = EditorBuffer::with_tab_config(2, true);
     buf.insert_tab();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "  ");
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
@@ -1395,7 +1393,7 @@ fn buffer_insert_tab_with_spaces_false_inserts_tab_char() {
     let mut buf = EditorBuffer::with_tab_config(4, false);
     buf.insert_tab();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "\t");
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 #[test]
@@ -1404,7 +1402,7 @@ fn buffer_insert_tab_with_spaces_false_and_custom_size() {
     let mut buf = EditorBuffer::with_tab_config(8, false);
     buf.insert_tab();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "\t");
-    assert_eq!(buf.cursor.col, 1);
+    assert_eq!(buf.cursor().col, 1);
 }
 
 // --- select_word_at_cursor tests ---
@@ -1412,18 +1410,18 @@ fn buffer_insert_tab_with_spaces_false_and_custom_size() {
 #[test]
 fn select_word_at_cursor_middle_of_word() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 2;
+    buf.cursor_mut().col = 2;
     buf.select_word_at_cursor();
     assert_eq!(buf.selected_text(), Some("hello".to_string()));
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
 fn select_word_at_cursor_second_word() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 8;
+    buf.cursor_mut().col = 8;
     buf.select_word_at_cursor();
     assert_eq!(buf.selected_text(), Some("world".to_string()));
 }
@@ -1431,15 +1429,15 @@ fn select_word_at_cursor_second_word() {
 #[test]
 fn select_word_at_cursor_on_whitespace_does_nothing() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.select_word_at_cursor();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
 fn select_word_at_cursor_snake_case() {
     let mut buf = buffer_from_str("snake_case_var = 42");
-    buf.cursor.col = 6;
+    buf.cursor_mut().col = 6;
     buf.select_word_at_cursor();
     assert_eq!(buf.selected_text(), Some("snake_case_var".to_string()));
 }
@@ -1447,7 +1445,7 @@ fn select_word_at_cursor_snake_case() {
 #[test]
 fn select_word_at_cursor_start_of_word() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 0;
+    buf.cursor_mut().col = 0;
     buf.select_word_at_cursor();
     assert_eq!(buf.selected_text(), Some("hello".to_string()));
 }
@@ -1455,7 +1453,7 @@ fn select_word_at_cursor_start_of_word() {
 #[test]
 fn select_word_at_cursor_end_of_word() {
     let mut buf = buffer_from_str("hello world");
-    buf.cursor.col = 4;
+    buf.cursor_mut().col = 4;
     buf.select_word_at_cursor();
     assert_eq!(buf.selected_text(), Some("hello".to_string()));
 }
@@ -1464,15 +1462,15 @@ fn select_word_at_cursor_end_of_word() {
 fn select_word_at_cursor_empty_line() {
     let mut buf = buffer_from_str("");
     buf.select_word_at_cursor();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
 fn select_word_at_cursor_past_line_end() {
     let mut buf = buffer_from_str("hi");
-    buf.cursor.col = 5;
+    buf.cursor_mut().col = 5;
     buf.select_word_at_cursor();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 // --- select_line_at_cursor tests ---
@@ -1480,20 +1478,20 @@ fn select_word_at_cursor_past_line_end() {
 #[test]
 fn select_line_at_cursor_first_line() {
     let mut buf = buffer_from_str("hello world\nsecond line");
-    buf.cursor.row = 0;
-    buf.cursor.col = 3;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 3;
     buf.select_line_at_cursor();
-    let sel = buf.selection.as_ref().unwrap();
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.col, 11);
+    assert_eq!(buf.cursor().col, 11);
     assert_eq!(buf.selected_text(), Some("hello world".to_string()));
 }
 
 #[test]
 fn select_line_at_cursor_second_line() {
     let mut buf = buffer_from_str("first\nsecond\nthird");
-    buf.cursor.row = 1;
+    buf.cursor_mut().row = 1;
     buf.select_line_at_cursor();
     assert_eq!(buf.selected_text(), Some("second".to_string()));
 }
@@ -1501,10 +1499,10 @@ fn select_line_at_cursor_second_line() {
 #[test]
 fn select_line_at_cursor_empty_line() {
     let mut buf = buffer_from_str("hello\n\nworld");
-    buf.cursor.row = 1;
+    buf.cursor_mut().row = 1;
     buf.select_line_at_cursor();
-    assert!(buf.selection.is_some());
-    assert_eq!(buf.cursor.col, 0);
+    assert!(buf.has_selection());
+    assert_eq!(buf.cursor().col, 0);
 }
 
 // --- Diagnostics ---
@@ -1574,8 +1572,8 @@ fn apply_text_edit_single_line() {
     // Replace "world" (col 6..11) with "rust"
     buf.apply_text_edit(0, 6, 0, 11, "rust");
     assert_eq!(buf.content_string(), "hello rust");
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 10);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 10);
 }
 
 #[test]
@@ -1585,7 +1583,7 @@ fn apply_text_edit_replaces_range() {
     // Replace "foo" (col 3..6) with "bar"
     buf.apply_text_edit(0, 3, 0, 6, "bar");
     assert_eq!(buf.content_string(), "fn bar()");
-    assert_eq!(buf.cursor.col, 6);
+    assert_eq!(buf.cursor().col, 6);
 }
 
 #[test]
@@ -1595,7 +1593,7 @@ fn apply_text_edit_insert_without_delete() {
     // Insert at col 1 with zero-width range
     buf.apply_text_edit(0, 1, 0, 1, "XY");
     assert_eq!(buf.content_string(), "aXYb");
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 #[test]
@@ -1662,11 +1660,11 @@ fn scroll_by_no_op_for_small_file() {
 #[test]
 fn scroll_by_does_not_move_cursor() {
     let mut buf = buffer_with_lines(100);
-    buf.cursor.row = 5;
-    buf.cursor.col = 3;
+    buf.cursor_mut().row = 5;
+    buf.cursor_mut().col = 3;
     buf.scroll_by(10, 20);
-    assert_eq!(buf.cursor.row, 5);
-    assert_eq!(buf.cursor.col, 3);
+    assert_eq!(buf.cursor().row, 5);
+    assert_eq!(buf.cursor().col, 3);
 }
 
 // --- scroll_horizontally_by tests ---
@@ -1705,11 +1703,11 @@ fn scroll_horizontally_does_not_move_cursor() {
     let mut buf = EditorBuffer::new();
     buf.insert_text(&"x".repeat(200));
     buf.set_viewport_width(20);
-    buf.cursor.row = 0;
-    buf.cursor.col = 5;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 5;
     buf.scroll_horizontally_by(10);
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
@@ -1790,20 +1788,20 @@ fn reload_from_disk_skips_modified_buffer() {
 // --- Toggle comment tests ---
 
 fn set_selection(buf: &mut EditorBuffer, ar: usize, ac: usize, cr: usize, cc: usize) {
-    buf.selection = Some(crate::selection::Selection {
+    buf.set_selection(Some(crate::selection::Selection {
         anchor_row: ar,
         anchor_col: ac,
-    });
-    buf.cursor.row = cr;
-    buf.cursor.col = cc;
-    buf.cursor.desired_col = cc;
+    }));
+    buf.cursor_mut().row = cr;
+    buf.cursor_mut().col = cc;
+    buf.cursor_mut().desired_col = cc;
 }
 
 #[test]
 fn toggle_line_comment_rust_single_line_round_trip() {
     let mut buf = buffer_from_str("fn main() {}\n");
-    buf.cursor.row = 0;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 0;
     buf.toggle_line_comment("//");
     assert_eq!(buf.line_text(0), "// fn main() {}");
     buf.toggle_line_comment("//");
@@ -1868,8 +1866,8 @@ fn toggle_line_comment_selection_ends_at_col0_excludes_last() {
 #[test]
 fn toggle_line_comment_uses_cursor_row_when_no_selection() {
     let mut buf = buffer_from_str("a\nb\nc\n");
-    buf.cursor.row = 1;
-    buf.cursor.col = 0;
+    buf.cursor_mut().row = 1;
+    buf.cursor_mut().col = 0;
     buf.toggle_line_comment("//");
     assert_eq!(buf.line_text(0), "a");
     assert_eq!(buf.line_text(1), "// b");
@@ -1929,8 +1927,8 @@ fn toggle_block_comment_unwraps_exact_match() {
 #[test]
 fn toggle_block_comment_empty_selection_is_noop() {
     let mut buf = buffer_from_str("hello\n");
-    buf.cursor.row = 0;
-    buf.cursor.col = 2;
+    buf.cursor_mut().row = 0;
+    buf.cursor_mut().col = 2;
     buf.toggle_block_comment("/*", "*/");
     assert_eq!(buf.line_text(0), "hello");
 }
@@ -1952,7 +1950,7 @@ fn reload_from_disk_clamps_cursor() {
     tmp.flush().unwrap();
 
     let mut buf = EditorBuffer::from_file(tmp.path()).unwrap();
-    buf.cursor.row = 3; // On "line 4"
+    buf.cursor_mut().row = 3; // On "line 4"
 
     // Shrink the file to 2 lines.
     std::fs::write(tmp.path(), "line 1\nline 2\n").unwrap();
@@ -1960,7 +1958,137 @@ fn reload_from_disk_clamps_cursor() {
     let reloaded = buf.reload_from_disk();
     assert!(reloaded);
     assert!(
-        buf.cursor.row < buf.line_count(),
+        buf.cursor().row < buf.line_count(),
         "cursor row should be clamped"
     );
+}
+
+// --- Multi-cursor public API tests ---
+
+#[test]
+fn new_buffer_has_exactly_one_cursor() {
+    let buf = EditorBuffer::new();
+    assert_eq!(buf.cursor_count(), 1);
+    assert!(!buf.has_multiple_cursors());
+}
+
+#[test]
+fn add_secondary_cursor_increments_count() {
+    let mut buf = buffer_from_str("foo foo foo");
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 4,
+            desired_col: 4,
+        },
+        None,
+    );
+    assert_eq!(buf.cursor_count(), 2);
+    assert!(buf.has_multiple_cursors());
+}
+
+#[test]
+fn add_secondary_cursor_at_primary_position_is_noop() {
+    let mut buf = buffer_from_str("hello");
+    // Primary starts at (0, 0).
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 0,
+            desired_col: 0,
+        },
+        None,
+    );
+    assert_eq!(buf.cursor_count(), 1);
+}
+
+#[test]
+fn clear_secondary_cursors_preserves_primary() {
+    let mut buf = buffer_from_str("foo foo foo");
+    buf.cursor_mut().col = 0;
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 4,
+            desired_col: 4,
+        },
+        None,
+    );
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 8,
+            desired_col: 8,
+        },
+        None,
+    );
+    assert_eq!(buf.cursor_count(), 3);
+    buf.clear_secondary_cursors();
+    assert_eq!(buf.cursor_count(), 1);
+    assert_eq!(buf.cursor().col, 0, "primary survives intact");
+}
+
+#[test]
+fn all_cursors_returns_positions_sorted() {
+    let mut buf = buffer_from_str("abcdefghij");
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 7,
+            desired_col: 7,
+        },
+        None,
+    );
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 3,
+            desired_col: 3,
+        },
+        None,
+    );
+    let positions = buf.all_cursors();
+    assert_eq!(positions.len(), 3);
+    assert_eq!(positions[0].col, 0);
+    assert_eq!(positions[1].col, 3);
+    assert_eq!(positions[2].col, 7);
+}
+
+#[test]
+fn primary_cursor_index_tracks_identity_after_sort() {
+    let mut buf = buffer_from_str("abcdefghij");
+    // Primary at col 5, add a secondary at col 2 (which sorts before).
+    buf.cursor_mut().col = 5;
+    buf.cursor_mut().desired_col = 5;
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 2,
+            desired_col: 2,
+        },
+        None,
+    );
+    // Primary must still be the cursor at col 5, which is now at index 1.
+    assert_eq!(buf.primary_cursor_index(), 1);
+    assert_eq!(buf.cursor().col, 5);
+}
+
+#[test]
+fn single_cursor_edits_still_only_affect_primary() {
+    // Sanity check: adding secondaries does NOT yet change edit behavior
+    // (that's phase-D). insert_char still inserts at the primary only.
+    let mut buf = buffer_from_str("ab");
+    buf.cursor_mut().col = 1;
+    buf.add_secondary_cursor(
+        crate::cursor::CursorState {
+            row: 0,
+            col: 2,
+            desired_col: 2,
+        },
+        None,
+    );
+    buf.insert_char('X');
+    // Primary insertion at col 1: "aXb"
+    // Secondary at col 2 did NOT receive an insertion yet (phase-D work).
+    assert_eq!(buf.line_text(0), "aXb");
 }

@@ -42,8 +42,8 @@ impl AppState {
                         if let Some(buf) = self.buffer_manager.active_buffer() {
                             self.completion = Some(crate::completion::CompletionState::new(
                                 items,
-                                buf.cursor.row,
-                                buf.cursor.col,
+                                buf.cursor().row,
+                                buf.cursor().col,
                             ));
                         }
                     }
@@ -70,8 +70,8 @@ impl AppState {
                             self.execute(Command::OpenFile(path));
                             let (h, w) = self.editor_viewport();
                             if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                                buf.cursor.row = line;
-                                buf.cursor.col = col;
+                                buf.cursor_mut().row = line;
+                                buf.cursor_mut().col = col;
                                 buf.ensure_cursor_visible(h, w);
                             }
                         }
@@ -105,8 +105,8 @@ impl AppState {
                     if let Some(mut info) = crate::hover::parse_hover_response(&value) {
                         // Attach current cursor position for rendering near cursor.
                         if let Some(buf) = self.buffer_manager.active_buffer() {
-                            info.trigger_row = buf.cursor.row;
-                            info.trigger_col = buf.cursor.col;
+                            info.trigger_row = buf.cursor().row;
+                            info.trigger_col = buf.cursor().col;
                         }
                         self.hover_info = Some(info);
                     } else {
@@ -164,7 +164,7 @@ impl AppState {
                     let (row, col) = self
                         .buffer_manager
                         .active_buffer()
-                        .map(|buf| (buf.cursor.row, buf.cursor.col))
+                        .map(|buf| (buf.cursor().row, buf.cursor().col))
                         .unwrap_or((0, 0));
                     if let Some(state) =
                         crate::signature_help::parse_signature_help_response(&value, row, col)
@@ -221,8 +221,8 @@ impl AppState {
                     } else if let Some(buf) = self.buffer_manager.active_buffer() {
                         self.code_actions = Some(crate::code_actions::CodeActionsState::new(
                             actions,
-                            buf.cursor.row,
-                            buf.cursor.col,
+                            buf.cursor().row,
+                            buf.cursor().col,
                         ));
                     }
                 }
@@ -363,7 +363,7 @@ impl AppState {
             if diags.is_empty() {
                 return;
             }
-            let current_line = buf.cursor.row;
+            let current_line = buf.cursor().row;
             // Find the first diagnostic line strictly after the cursor.
             let next = diags
                 .iter()
@@ -371,8 +371,8 @@ impl AppState {
                 .find(|&l| l > current_line)
                 .or_else(|| diags.iter().map(|d| d.line).min());
             if let Some(line) = next {
-                buf.cursor.row = line;
-                buf.cursor.col = 0;
+                buf.cursor_mut().row = line;
+                buf.cursor_mut().col = 0;
                 buf.ensure_cursor_visible(h, w);
             }
         }
@@ -386,7 +386,7 @@ impl AppState {
             if diags.is_empty() {
                 return;
             }
-            let current_line = buf.cursor.row;
+            let current_line = buf.cursor().row;
             // Find the last diagnostic line strictly before the cursor.
             let prev = diags
                 .iter()
@@ -395,8 +395,8 @@ impl AppState {
                 .find(|&l| l < current_line)
                 .or_else(|| diags.iter().map(|d| d.line).max());
             if let Some(line) = prev {
-                buf.cursor.row = line;
-                buf.cursor.col = 0;
+                buf.cursor_mut().row = line;
+                buf.cursor_mut().col = 0;
                 buf.ensure_cursor_visible(h, w);
             }
         }
@@ -413,8 +413,8 @@ impl AppState {
             if let Some(buf) = self.buffer_manager.active_buffer() {
                 if let Some(path) = buf.path() {
                     let path = path.to_path_buf();
-                    let line = buf.cursor.row as u32;
-                    let col = buf.cursor.col as u32;
+                    let line = buf.cursor().row as u32;
+                    let col = buf.cursor().col as u32;
                     if let Err(e) = lsp.request_completion(&path, line, col) {
                         log::warn!("LSP completion request failed: {e}");
                     }
@@ -455,8 +455,8 @@ impl AppState {
             if let Some(buf) = self.buffer_manager.active_buffer() {
                 if let Some(path) = buf.path() {
                     let path = path.to_path_buf();
-                    let line = buf.cursor.row as u32;
-                    let col = buf.cursor.col as u32;
+                    let line = buf.cursor().row as u32;
+                    let col = buf.cursor().col as u32;
                     if let Err(e) = lsp.request_definition(&path, line, col) {
                         log::warn!("LSP definition request failed: {e}");
                     }
@@ -472,8 +472,8 @@ impl AppState {
             if let Some(buf) = self.buffer_manager.active_buffer() {
                 if let Some(path) = buf.path() {
                     let path = path.to_path_buf();
-                    let line = buf.cursor.row as u32;
-                    let col = buf.cursor.col as u32;
+                    let line = buf.cursor().row as u32;
+                    let col = buf.cursor().col as u32;
                     if let Err(e) = lsp.request_references(&path, line, col) {
                         log::warn!("LSP references request failed: {e}");
                     }
@@ -493,8 +493,8 @@ impl AppState {
             if let Some(buf) = self.buffer_manager.active_buffer() {
                 if let Some(path) = buf.path() {
                     let path = path.to_path_buf();
-                    let line = buf.cursor.row as u32;
-                    let col = buf.cursor.col as u32;
+                    let line = buf.cursor().row as u32;
+                    let col = buf.cursor().col as u32;
                     if let Err(e) = lsp.request_signature_help(&path, line, col) {
                         log::warn!("LSP signature help request failed: {e}");
                     }
@@ -533,15 +533,15 @@ impl AppState {
             return;
         };
         let path = path.to_path_buf();
-        let row = buf.cursor.row as u32;
-        let col = buf.cursor.col as u32;
+        let row = buf.cursor().row as u32;
+        let col = buf.cursor().col as u32;
 
         // Collect diagnostics that cover the cursor line — LSP servers use
         // these as `context.diagnostics` when computing quick fixes.
         let diagnostics: Vec<serde_json::Value> = buf
             .diagnostics()
             .iter()
-            .filter(|d| d.line == buf.cursor.row)
+            .filter(|d| d.line == buf.cursor().row)
             .map(|d| {
                 serde_json::json!({
                     "range": {
@@ -652,8 +652,8 @@ impl AppState {
             self.set_status_message("Rename: buffer has no file path".to_string());
             return;
         };
-        let row = buf.cursor.row;
-        let col = buf.cursor.col;
+        let row = buf.cursor().row;
+        let col = buf.cursor().col;
         let word = word_at_cursor(buf, row, col);
         let initial = word.unwrap_or_default();
         let state = crate::rename::RenameState::new(path.to_path_buf(), row, col, initial);
@@ -725,8 +725,8 @@ impl AppState {
             if let Some(buf) = self.buffer_manager.active_buffer() {
                 if let Some(path) = buf.path() {
                     let path = path.to_path_buf();
-                    let line = buf.cursor.row as u32;
-                    let col = buf.cursor.col as u32;
+                    let line = buf.cursor().row as u32;
+                    let col = buf.cursor().col as u32;
                     if let Err(e) = lsp.request_hover(&path, line, col) {
                         log::warn!("LSP hover request failed: {e}");
                     }

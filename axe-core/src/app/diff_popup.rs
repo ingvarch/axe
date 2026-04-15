@@ -41,7 +41,7 @@ impl AppState {
     /// Does nothing if the cursor is not on a changed line or no buffer is active.
     pub fn show_diff_hunk(&mut self) {
         let cursor_line = match self.buffer_manager.active_buffer() {
-            Some(b) => b.cursor.row,
+            Some(b) => b.cursor().row,
             None => return,
         };
         self.show_diff_hunk_at_line(cursor_line);
@@ -219,7 +219,7 @@ mod tests {
         let (mut app, _tmp) = app_with_buffer("line 1\nmodified\nline 3\n", hunks);
         // Move cursor to line 1.
         if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-            buf.cursor.row = 1;
+            buf.cursor_mut().row = 1;
         }
         app.show_diff_hunk();
         let popup = app.diff_popup.as_ref().expect("popup should be shown");
@@ -238,7 +238,7 @@ mod tests {
         }];
         let (mut app, _tmp) = app_with_buffer("line 1\nline 2\nnew line\n", hunks);
         if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-            buf.cursor.row = 2;
+            buf.cursor_mut().row = 2;
         }
         app.show_diff_hunk();
         let popup = app.diff_popup.as_ref().expect("popup should be shown");
@@ -257,7 +257,7 @@ mod tests {
         }];
         let (mut app, _tmp) = app_with_buffer("line 1\nmodified\nline 3\n", hunks);
         if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-            buf.cursor.row = 1;
+            buf.cursor_mut().row = 1;
         }
         app.show_diff_hunk();
         assert!(app.diff_popup.is_some());
@@ -281,7 +281,7 @@ mod tests {
         }];
         let (mut app, _tmp) = app_with_buffer("line 1\nnew 1\nnew 2\nline 2\n", hunks);
         if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-            buf.cursor.row = 1;
+            buf.cursor_mut().row = 1;
         }
         app.show_diff_hunk();
         app.revert_diff_hunk();
@@ -303,7 +303,7 @@ mod tests {
         }];
         let (mut app, _tmp) = app_with_buffer("line 1\nline 3\n", hunks);
         if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-            buf.cursor.row = 1;
+            buf.cursor_mut().row = 1;
         }
         app.show_diff_hunk();
         app.revert_diff_hunk();

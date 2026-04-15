@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod buffer_manager;
 pub mod cursor;
+pub mod cursors;
 pub mod diagnostic;
 pub mod diff;
 pub mod highlight;

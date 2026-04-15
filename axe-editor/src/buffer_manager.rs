@@ -439,9 +439,9 @@ mod tests {
         mgr.open_file(tmp.path()).unwrap();
 
         let buf = mgr.active_buffer_mut().unwrap();
-        buf.cursor.row = 42;
+        buf.cursor_mut().row = 42;
 
-        assert_eq!(mgr.active_buffer().unwrap().cursor.row, 42);
+        assert_eq!(mgr.active_buffer().unwrap().cursor().row, 42);
     }
 
     #[test]

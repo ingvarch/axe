@@ -110,8 +110,8 @@ impl Session {
             .filter_map(|buf| {
                 buf.path().map(|p| BufferSession {
                     path: p.to_path_buf(),
-                    cursor_row: buf.cursor.row,
-                    cursor_col: buf.cursor.col,
+                    cursor_row: buf.cursor().row,
+                    cursor_col: buf.cursor().col,
                     scroll_row: buf.scroll_row,
                     scroll_col: buf.scroll_col,
                 })
@@ -239,8 +239,8 @@ impl Session {
             }
             // Set cursor and scroll on the just-opened buffer.
             if let Some(buf) = app.buffer_manager.active_buffer_mut() {
-                buf.cursor.row = buf_session.cursor_row;
-                buf.cursor.col = buf_session.cursor_col;
+                buf.cursor_mut().row = buf_session.cursor_row;
+                buf.cursor_mut().col = buf_session.cursor_col;
                 buf.scroll_row = buf_session.scroll_row;
                 buf.scroll_col = buf_session.scroll_col;
             }
@@ -331,8 +331,16 @@ mod tests {
 
         let mut app = AppState::new_with_root(root);
         app.buffer_manager.open_file(&file_path).unwrap();
-        app.buffer_manager.active_buffer_mut().unwrap().cursor.row = 5;
-        app.buffer_manager.active_buffer_mut().unwrap().cursor.col = 3;
+        app.buffer_manager
+            .active_buffer_mut()
+            .unwrap()
+            .cursor_mut()
+            .row = 5;
+        app.buffer_manager
+            .active_buffer_mut()
+            .unwrap()
+            .cursor_mut()
+            .col = 3;
 
         let session = Session::from_app(&app);
         assert_eq!(session.buffers.len(), 1);
@@ -711,8 +719,8 @@ mod tests {
         assert!(warnings.is_empty());
 
         let buf = app.buffer_manager.active_buffer().unwrap();
-        assert_eq!(buf.cursor.row, 3);
-        assert_eq!(buf.cursor.col, 2);
+        assert_eq!(buf.cursor().row, 3);
+        assert_eq!(buf.cursor().col, 2);
         assert_eq!(buf.scroll_row, 1);
     }
 

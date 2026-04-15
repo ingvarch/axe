@@ -172,9 +172,9 @@ impl AppState {
                     if let Some(line) = dialog.parse_line() {
                         let (h, w) = self.editor_viewport();
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                            buf.cursor.row = line;
-                            buf.cursor.col = 0;
-                            buf.cursor.desired_col = 0;
+                            buf.cursor_mut().row = line;
+                            buf.cursor_mut().col = 0;
+                            buf.cursor_mut().desired_col = 0;
                             buf.clear_selection();
                             buf.ensure_cursor_visible(h, w);
                         }
@@ -255,8 +255,8 @@ impl AppState {
                         self.execute(Command::OpenFile(path));
                         // Jump to the matching line.
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                            buf.cursor.row = line;
-                            buf.cursor.col = 0;
+                            buf.cursor_mut().row = line;
+                            buf.cursor_mut().col = 0;
                         }
                     }
                 }
@@ -337,8 +337,8 @@ impl AppState {
                         self.execute(Command::OpenFile(path));
                         let (h, w) = self.editor_viewport();
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                            buf.cursor.row = line;
-                            buf.cursor.col = col;
+                            buf.cursor_mut().row = line;
+                            buf.cursor_mut().col = col;
                             buf.ensure_cursor_visible(h, w);
                         }
                     }
@@ -833,20 +833,20 @@ impl AppState {
                             1 => {
                                 // Single click: position cursor, clear selection.
                                 buf.clear_selection();
-                                buf.cursor.row = erow;
-                                buf.cursor.col = ecol;
-                                buf.cursor.desired_col = ecol;
+                                buf.cursor_mut().row = erow;
+                                buf.cursor_mut().col = ecol;
+                                buf.cursor_mut().desired_col = ecol;
                             }
                             2 => {
                                 // Double-click: select word at cursor.
                                 buf.clear_selection();
-                                buf.cursor.row = erow;
-                                buf.cursor.col = ecol;
+                                buf.cursor_mut().row = erow;
+                                buf.cursor_mut().col = ecol;
                                 buf.select_word_at_cursor();
                             }
                             _ => {
                                 // Triple-click: select entire line.
-                                buf.cursor.row = erow;
+                                buf.cursor_mut().row = erow;
                                 buf.select_line_at_cursor();
                             }
                         }
@@ -918,9 +918,9 @@ impl AppState {
                     if let Some((erow, ecol)) = pos {
                         if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                             buf.start_or_extend_selection();
-                            buf.cursor.row = erow;
-                            buf.cursor.col = ecol;
-                            buf.cursor.desired_col = ecol;
+                            buf.cursor_mut().row = erow;
+                            buf.cursor_mut().col = ecol;
+                            buf.cursor_mut().desired_col = ecol;
                         }
                     }
                     return;
@@ -976,11 +976,8 @@ impl AppState {
                     self.editor_selecting = false;
                     // Clean up empty selection (click without drag).
                     if let Some(buf) = self.buffer_manager.active_buffer_mut() {
-                        if buf
-                            .selection
-                            .as_ref()
-                            .is_some_and(|s| s.is_empty(buf.cursor.row, buf.cursor.col))
-                        {
+                        let (row, col) = (buf.cursor().row, buf.cursor().col);
+                        if buf.selection().is_some_and(|s| s.is_empty(row, col)) {
                             buf.clear_selection();
                         }
                     }

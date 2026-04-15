@@ -656,8 +656,8 @@ pub(crate) fn render_editor_content(
     let visible_lines = area.height as usize;
     let scroll_row = buffer.scroll_row;
     let scroll_col_char = buffer.scroll_col;
-    let cursor_row = buffer.cursor.row;
-    let cursor_col_char = buffer.cursor.col;
+    let cursor_row = buffer.cursor().row;
+    let cursor_col_char = buffer.cursor().col;
     let tab_size = buffer.tab_size();
 
     // Width available for line numbers (total gutter - diagnostic column - diff column - trailing space).
@@ -725,7 +725,7 @@ pub(crate) fn render_editor_content(
     frame.render_widget(gutter_paragraph, gutter_area);
 
     // Compute normalized selection range (if any).
-    let sel_range = buffer.selection.as_ref().and_then(|sel| {
+    let sel_range = buffer.selection().and_then(|sel| {
         if sel.is_empty(cursor_row, cursor_col_char) {
             None
         } else {

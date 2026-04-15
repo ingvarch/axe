@@ -50,23 +50,23 @@ impl EditorBuffer {
 
         if viewport_height > 0 {
             // Vertical scrolling.
-            if self.cursor.row < self.scroll_row + SCROLL_MARGIN {
-                self.scroll_row = self.cursor.row.saturating_sub(SCROLL_MARGIN);
+            if self.cursor().row < self.scroll_row + SCROLL_MARGIN {
+                self.scroll_row = self.cursor().row.saturating_sub(SCROLL_MARGIN);
             }
             if viewport_height > SCROLL_MARGIN
-                && self.cursor.row >= self.scroll_row + viewport_height - SCROLL_MARGIN
+                && self.cursor().row >= self.scroll_row + viewport_height - SCROLL_MARGIN
             {
-                self.scroll_row = self.cursor.row + SCROLL_MARGIN + 1 - viewport_height;
+                self.scroll_row = self.cursor().row + SCROLL_MARGIN + 1 - viewport_height;
             }
         }
 
         if viewport_width > 0 {
             // Horizontal scrolling.
-            if self.cursor.col < self.scroll_col {
-                self.scroll_col = self.cursor.col;
+            if self.cursor().col < self.scroll_col {
+                self.scroll_col = self.cursor().col;
             }
-            if self.cursor.col >= self.scroll_col + viewport_width {
-                self.scroll_col = self.cursor.col + 1 - viewport_width;
+            if self.cursor().col >= self.scroll_col + viewport_width {
+                self.scroll_col = self.cursor().col + 1 - viewport_width;
             }
         }
     }

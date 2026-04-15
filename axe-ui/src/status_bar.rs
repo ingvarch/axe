@@ -61,7 +61,7 @@ pub(crate) fn build_status_center<'a>(app: &AppState, theme: &Theme) -> Vec<Span
     }
 
     if let Some(buffer) = app.buffer_manager.active_buffer() {
-        if let Some(diag) = diagnostics_for_line(buffer.diagnostics(), buffer.cursor.row).next() {
+        if let Some(diag) = diagnostics_for_line(buffer.diagnostics(), buffer.cursor().row).next() {
             let color = diagnostic_color(diag.severity, theme);
             return vec![Span::styled(
                 diag.message.clone(),
@@ -105,8 +105,8 @@ pub(crate) fn build_status_right<'a>(app: &AppState, theme: &Theme) -> Vec<Span<
     spans.push(Span::styled(
         format!(
             "Ln {}, Col {}",
-            buffer.cursor.row + 1,
-            buffer.cursor.col + 1
+            buffer.cursor().row + 1,
+            buffer.cursor().col + 1
         ),
         text_style,
     ));

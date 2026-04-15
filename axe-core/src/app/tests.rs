@@ -1166,8 +1166,8 @@ fn go_to_line_enter_jumps_to_line() {
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.go_to_line.is_none());
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert_eq!(buf.cursor.row, 2); // 0-indexed line 2 = user line 3
-    assert_eq!(buf.cursor.col, 0);
+    assert_eq!(buf.cursor().row, 2); // 0-indexed line 2 = user line 3
+    assert_eq!(buf.cursor().col, 0);
 }
 
 #[test]
@@ -1942,27 +1942,27 @@ fn app_with_editor_buffer(content: &str) -> AppState {
 fn editor_up_moves_cursor() {
     let mut app = app_with_editor_buffer("line1\nline2\nline3");
     app.execute(Command::EditorDown);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 1);
     app.execute(Command::EditorUp);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 0);
 }
 
 #[test]
 fn editor_arrow_keys_intercepted_when_editor_focused() {
     let mut app = app_with_editor_buffer("hello\nworld");
     app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 1);
     app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().col, 1);
 }
 
 #[test]
 fn editor_home_end_work() {
     let mut app = app_with_editor_buffer("hello world");
     app.execute(Command::EditorEnd);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 11);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().col, 11);
     app.execute(Command::EditorHome);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 0);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().col, 0);
 }
 
 #[test]
@@ -1974,16 +1974,16 @@ fn editor_page_down_uses_viewport() {
     let mut app = app_with_editor_buffer(&content);
     app.editor_inner_area = Some((0, 0, 80, 10));
     app.execute(Command::EditorPageDown);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 10);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 10);
 }
 
 #[test]
 fn editor_word_movement_works() {
     let mut app = app_with_editor_buffer("hello world foo");
     app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 6);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().col, 6);
     app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.col, 0);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().col, 0);
 }
 
 // --- Editor edit command tests ---
@@ -2002,20 +2002,28 @@ fn editor_insert_char_modifies_buffer() {
 fn editor_backspace_deletes_char() {
     let mut app = app_with_editor_buffer("hello");
     // Move cursor to col 3
-    app.buffer_manager.active_buffer_mut().unwrap().cursor.col = 3;
+    app.buffer_manager
+        .active_buffer_mut()
+        .unwrap()
+        .cursor_mut()
+        .col = 3;
     app.execute(Command::EditorBackspace);
     let buf = app.buffer_manager.active_buffer().unwrap();
     assert_eq!(buf.line_at(0).unwrap().to_string(), "helo");
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 #[test]
 fn editor_enter_splits_line() {
     let mut app = app_with_editor_buffer("hello");
-    app.buffer_manager.active_buffer_mut().unwrap().cursor.col = 3;
+    app.buffer_manager
+        .active_buffer_mut()
+        .unwrap()
+        .cursor_mut()
+        .col = 3;
     app.execute(Command::EditorNewline);
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert_eq!(buf.cursor.row, 1);
+    assert_eq!(buf.cursor().row, 1);
     assert_eq!(buf.line_at(0).unwrap().to_string(), "hel\n");
 }
 
@@ -2139,9 +2147,9 @@ fn editor_mouse_click_positions_cursor() {
     app.handle_mouse_event(mouse, 80, 24);
 
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert_eq!(buf.cursor.row, 1);
-    assert_eq!(buf.cursor.col, 3);
-    assert!(buf.selection.is_none());
+    assert_eq!(buf.cursor().row, 1);
+    assert_eq!(buf.cursor().col, 3);
+    assert!(buf.selection().is_none());
     assert_eq!(app.focus, FocusTarget::Editor);
 }
 
@@ -2175,12 +2183,12 @@ fn editor_mouse_drag_creates_selection() {
     );
 
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert!(buf.selection.is_some());
-    let sel = buf.selection.as_ref().unwrap();
+    assert!(buf.has_selection());
+    let sel = buf.selection().unwrap();
     assert_eq!(sel.anchor_row, 0);
     assert_eq!(sel.anchor_col, 0);
-    assert_eq!(buf.cursor.row, 0);
-    assert_eq!(buf.cursor.col, 5);
+    assert_eq!(buf.cursor().row, 0);
+    assert_eq!(buf.cursor().col, 5);
 }
 
 #[test]
@@ -2213,7 +2221,7 @@ fn editor_mouse_click_without_drag_clears_selection_on_up() {
     );
 
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert!(buf.selection.is_none());
+    assert!(buf.selection().is_none());
 }
 
 #[test]
@@ -2234,7 +2242,7 @@ fn editor_mouse_click_clamps_col_to_line_length() {
     );
 
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert_eq!(buf.cursor.col, 2);
+    assert_eq!(buf.cursor().col, 2);
 }
 
 // --- Status message tests ---
@@ -2350,7 +2358,7 @@ fn search_next_match_moves_cursor() {
     let buf = app.buffer_manager.active_buffer().unwrap();
     let search = app.search.as_ref().unwrap();
     assert_eq!(search.current, 1);
-    assert_eq!(buf.cursor.row, 1);
+    assert_eq!(buf.cursor().row, 1);
 }
 
 #[test]
@@ -3158,8 +3166,8 @@ fn editor_single_click_still_positions_cursor() {
     app.handle_mouse_event(down, 100, 30);
 
     let buf = app.buffer_manager.active_buffer().unwrap();
-    assert_eq!(buf.cursor.col, 3);
-    assert!(buf.selection.is_none());
+    assert_eq!(buf.cursor().col, 3);
+    assert!(buf.selection().is_none());
 }
 
 #[test]
@@ -3663,15 +3671,15 @@ fn next_diagnostic_wraps() {
 
     // Cursor at line 0 -> next should go to line 1.
     app.execute(Command::GoToNextDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 1);
 
     // Next should go to line 3.
     app.execute(Command::GoToNextDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 3);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 3);
 
     // Next should wrap to line 1.
     app.execute(Command::GoToNextDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 1);
 }
 
 #[test]
@@ -3710,11 +3718,11 @@ fn prev_diagnostic_wraps() {
 
     // Start at line 0 -> prev should wrap to line 3 (last diagnostic).
     app.execute(Command::GoToPrevDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 3);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 3);
 
     // Prev should go to line 1.
     app.execute(Command::GoToPrevDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 1);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 1);
 }
 
 #[test]
@@ -3727,10 +3735,10 @@ fn no_diagnostics_noop() {
     app.buffer_manager.open_file(tmp.path()).unwrap();
 
     app.execute(Command::GoToNextDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 0);
 
     app.execute(Command::GoToPrevDiagnostic);
-    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor.row, 0);
+    assert_eq!(app.buffer_manager.active_buffer().unwrap().cursor().row, 0);
 }
 
 #[test]
