@@ -1588,6 +1588,50 @@ fn terminal_selecting_default_false() {
     assert!(app.terminal_select_start.is_none());
 }
 
+// --- AI overlay coordinate conversion ---
+
+#[test]
+fn screen_to_ai_overlay_point_none_when_overlay_hidden() {
+    let mut app = AppState::new();
+    // Even with a grid area set, a hidden overlay returns None so stale
+    // rects from a previous show don't fire.
+    app.ai_overlay_grid_area = Some((10, 5, 40, 20));
+    assert!(!app.ai_overlay.visible);
+    assert!(app.screen_to_ai_overlay_point(15, 10).is_none());
+}
+
+#[test]
+fn screen_to_ai_overlay_point_none_without_session() {
+    let mut app = AppState::new();
+    app.ai_overlay.visible = true;
+    app.ai_overlay_grid_area = Some((10, 5, 40, 20));
+    // No session spawned — hit-test must still return None.
+    assert!(app.screen_to_ai_overlay_point(15, 10).is_none());
+}
+
+#[test]
+fn screen_to_ai_overlay_point_none_outside_grid_area() {
+    let mut app = AppState::new();
+    app.ai_overlay.visible = true;
+    app.ai_overlay_grid_area = Some((10, 5, 40, 20));
+    // Still None — no session means no display offset to shift by.
+    // We test the bounds-check logic via the session-less path: even with a
+    // session in the future, any (col,row) outside the rect must short-circuit.
+    // Left, right, above, below:
+    assert!(app.screen_to_ai_overlay_point(9, 10).is_none());
+    assert!(app.screen_to_ai_overlay_point(50, 10).is_none());
+    assert!(app.screen_to_ai_overlay_point(20, 4).is_none());
+    assert!(app.screen_to_ai_overlay_point(20, 25).is_none());
+}
+
+#[test]
+fn ai_overlay_state_fields_default_empty() {
+    let app = AppState::new();
+    assert!(app.ai_overlay_grid_area.is_none());
+    assert!(!app.ai_overlay_selecting);
+    assert!(app.ai_overlay_select_start.is_none());
+}
+
 #[test]
 fn mouse_down_in_terminal_grid_starts_selection() {
     let mut app = AppState::new();

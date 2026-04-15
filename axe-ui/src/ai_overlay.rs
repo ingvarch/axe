@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListSt
 use ratatui::Frame;
 
 use axe_core::ai_overlay::{AgentPicker, AiOverlay};
+use axe_core::AppState;
 use axe_terminal::event_listener::PtyEventListener;
 use axe_terminal::tab::TerminalTab;
 
@@ -25,17 +26,24 @@ use crate::theme::Theme;
 
 /// Renders the AI overlay on top of `area` if it is currently visible.
 ///
-/// No-op when `overlay.visible == false` so the caller can always invoke
-/// this unconditionally at the end of the render cascade.
-pub(crate) fn render_ai_overlay(frame: &mut Frame, area: Rect, overlay: &AiOverlay, theme: &Theme) {
-    if !overlay.visible {
+/// Takes `&mut AppState` so the inner grid rectangle can be written back to
+/// `app.ai_overlay_grid_area` for the input layer to consume on the next
+/// tick — this is how mouse clicks are hit-tested against the overlay.
+///
+/// No-op when `app.ai_overlay.visible == false` so the caller can always
+/// invoke this unconditionally at the end of the render cascade.
+pub(crate) fn render_ai_overlay(frame: &mut Frame, area: Rect, app: &mut AppState, theme: &Theme) {
+    if !app.ai_overlay.visible {
+        // Clear any stale grid area so mouse clicks don't hit an invisible
+        // overlay after it's been closed.
+        app.ai_overlay_grid_area = None;
         return;
     }
 
     let rect = centered_rect(area, 80, 80);
     frame.render_widget(Clear, rect);
 
-    let title = ai_overlay_title(overlay);
+    let title = ai_overlay_title(&app.ai_overlay);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
@@ -50,12 +58,16 @@ pub(crate) fn render_ai_overlay(frame: &mut Frame, area: Rect, overlay: &AiOverl
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    if let Some(picker) = overlay.picker.as_ref() {
+    // Expose the inner PTY rect so the mouse handler can map screen
+    // coordinates to grid points.
+    app.ai_overlay_grid_area = Some((inner.x, inner.y, inner.width, inner.height));
+
+    if let Some(picker) = app.ai_overlay.picker.as_ref() {
         render_picker(frame, inner, picker, theme);
         return;
     }
 
-    if let Some(session) = overlay.session.as_ref() {
+    if let Some(session) = app.ai_overlay.session.as_ref() {
         render_term_grid(frame, inner, &session.tab, theme);
         return;
     }
@@ -149,6 +161,7 @@ fn render_term_grid(frame: &mut Frame, area: Rect, tab: &TerminalTab, theme: &Th
     let term: &alacritty_terminal::Term<PtyEventListener> = tab.term();
     let content = term.renderable_content();
     let offset = content.display_offset as i32;
+    let selection_range = content.selection;
 
     frame.render_widget(Clear, area);
     let buf = frame.buffer_mut();
@@ -176,7 +189,14 @@ fn render_term_grid(frame: &mut Frame, area: Rect, tab: &TerminalTab, theme: &Th
 
         let fg = convert_ansi_color(&cell.fg);
         let bg = convert_ansi_color(&cell.bg);
-        let modifier = cell_flags_to_modifier(cell.flags);
+        let mut modifier = cell_flags_to_modifier(cell.flags);
+        // Selection highlight: invert fg/bg via REVERSED. Matches the
+        // terminal panel's selection rendering exactly.
+        if let Some(ref sel) = selection_range {
+            if sel.contains(point) {
+                modifier.insert(Modifier::REVERSED);
+            }
+        }
         let style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
 
         if let Some(buf_cell) = buf.cell_mut((x, y)) {

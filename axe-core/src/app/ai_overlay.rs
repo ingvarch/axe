@@ -29,6 +29,7 @@ impl AppState {
     pub fn toggle_ai_overlay(&mut self) {
         if self.ai_overlay.visible {
             self.ai_overlay.visible = false;
+            self.reset_ai_overlay_selection_state();
             return;
         }
 
@@ -97,6 +98,20 @@ impl AppState {
     pub fn kill_ai_session(&mut self) {
         self.ai_overlay.kill_session();
         self.ai_overlay.visible = false;
+        self.reset_ai_overlay_selection_state();
+    }
+
+    /// Drops any pending mouse-selection state so the next time the overlay
+    /// opens it starts with a clean slate — no stale `selecting` flag, no
+    /// prior click count affecting multi-click detection, no leftover
+    /// highlighted range in the underlying PTY grid.
+    fn reset_ai_overlay_selection_state(&mut self) {
+        self.ai_overlay_selecting = false;
+        self.ai_overlay_select_start = None;
+        self.ai_overlay_click_state = super::types::ClickState::default();
+        if let Some(session) = self.ai_overlay.session.as_mut() {
+            session.tab.clear_selection();
+        }
     }
 
     /// Spawns a PTY session for `agent` and saves it as the new default.

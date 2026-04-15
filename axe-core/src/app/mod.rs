@@ -127,6 +127,18 @@ pub struct AppState {
     editor_click_state: ClickState,
     /// Multi-click state for the terminal panel.
     terminal_click_state: ClickState,
+    /// Inner rectangle of the AI overlay's PTY grid, in screen coordinates.
+    /// Updated each frame by `render_ai_overlay` while the overlay is visible.
+    /// Used by mouse hit-testing to convert clicks into grid points.
+    pub ai_overlay_grid_area: Option<(u16, u16, u16, u16)>,
+    /// Whether an AI-overlay text selection drag is currently in progress.
+    pub(crate) ai_overlay_selecting: bool,
+    /// Screen position of the last mouse-down inside the AI overlay grid.
+    /// Used to distinguish pure clicks from actual drags on `Up`.
+    pub(crate) ai_overlay_select_start: Option<(u16, u16)>,
+    /// Multi-click state for the AI overlay (single → simple, double →
+    /// semantic, triple → line selection).
+    pub(crate) ai_overlay_click_state: ClickState,
     keymap: KeymapResolver,
     /// Application configuration loaded from TOML files.
     pub config: axe_config::AppConfig,
@@ -243,6 +255,10 @@ impl AppState {
             terminal_select_start: None,
             editor_click_state: ClickState::default(),
             terminal_click_state: ClickState::default(),
+            ai_overlay_grid_area: None,
+            ai_overlay_selecting: false,
+            ai_overlay_select_start: None,
+            ai_overlay_click_state: ClickState::default(),
             keymap: KeymapResolver::with_defaults(),
             config: axe_config::AppConfig::default(),
             lsp_manager: None,

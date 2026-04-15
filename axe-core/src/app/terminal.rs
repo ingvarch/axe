@@ -330,4 +330,44 @@ impl AppState {
             Column(grid_col),
         ))
     }
+
+    // IMPACT ANALYSIS — screen_to_ai_overlay_point
+    // Parents: handle_mouse_event() calls this for down/drag events when the
+    //          AI overlay is visible and a session exists.
+    // Children: None — pure conversion function returning Option<Point>.
+    // Siblings: ai_overlay_grid_area (written each frame by render_ai_overlay),
+    //           ai_overlay.session.tab.display_offset() (current scroll).
+    // Risk: None — stateless helper. Returns None cleanly if the overlay is
+    //       hidden, the grid area has not been set yet (first frame after
+    //       show), or the click falls outside the overlay rect.
+
+    /// Converts screen coordinates to an AI overlay grid `Point`.
+    ///
+    /// Returns `None` if the overlay is not visible, no session exists, the
+    /// grid area has not been set yet this frame, or the coordinates fall
+    /// outside the overlay's inner rectangle.
+    pub(super) fn screen_to_ai_overlay_point(&self, col: u16, row: u16) -> Option<Point> {
+        if !self.ai_overlay.visible {
+            return None;
+        }
+        let session = self.ai_overlay.session.as_ref()?;
+        let (gx, gy, gw, gh) = self.ai_overlay_grid_area?;
+        if col < gx || col >= gx + gw || row < gy || row >= gy + gh {
+            return None;
+        }
+        let grid_col = (col - gx) as usize;
+        let grid_row = (row - gy) as i32;
+        let display_offset = session.tab.display_offset() as i32;
+        Some(Point::new(
+            Line(grid_row - display_offset),
+            Column(grid_col),
+        ))
+    }
+
+    /// Scrolls the AI overlay's active session by the given amount.
+    pub(super) fn ai_overlay_scroll(&mut self, scroll: alacritty_terminal::grid::Scroll) {
+        if let Some(session) = self.ai_overlay.session.as_mut() {
+            session.tab.scroll(scroll);
+        }
+    }
 }

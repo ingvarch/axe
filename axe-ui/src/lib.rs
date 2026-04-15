@@ -762,7 +762,10 @@ pub fn render(app: &mut AppState, frame: &mut Frame, theme: &Theme) {
 
     // AI chat overlay — drawn before other modal overlays so things like the
     // "kill current session?" confirm dialog render on top of it.
-    crate::ai_overlay::render_ai_overlay(frame, frame.area(), &app.ai_overlay, theme);
+    {
+        let area = frame.area();
+        crate::ai_overlay::render_ai_overlay(frame, area, app, theme);
+    }
 
     // Overlays (on top of everything)
     if let Some(ref dialog) = app.confirm_dialog {

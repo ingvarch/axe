@@ -736,6 +736,15 @@ impl AppState {
 
         let main_height = screen_height.saturating_sub(STATUS_BAR_HEIGHT);
 
+        // AI overlay is modal: while it's visible, every mouse event is
+        // handled here (or consumed silently) so clicks and wheel scrolls
+        // never leak into the panels below. `handle_ai_overlay_mouse`
+        // returns `true` when it took the event — either to select text,
+        // scroll the PTY history, or just swallow it.
+        if self.ai_overlay.visible && self.handle_ai_overlay_mouse(mouse) {
+            return;
+        }
+
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;
@@ -1228,10 +1237,34 @@ impl AppState {
     /// is intentionally a small, self-contained translation — we don't
     /// piggyback on the full terminal input module because AI CLIs don't need
     /// Kitty protocol encoding or modifier-key exotica.
+    ///
+    /// Scrollback shortcuts (`Shift+PageUp/PageDown/Home/End`) are
+    /// intercepted before the forward path so they control the overlay's
+    /// internal scroll instead of going to the PTY. Unshifted PageUp /
+    /// PageDown still forwards so agents that use them for their own
+    /// navigation (Aider, Goose, etc.) keep working.
     fn forward_key_to_ai_session(&mut self, key: KeyEvent) {
         let Some(session) = self.ai_overlay.session.as_mut() else {
             return;
         };
+
+        // Scrollback keys: Shift + PageUp/PageDown/Home/End. These never
+        // reach the PTY — they drive `Term::scroll_display` directly.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            use alacritty_terminal::grid::Scroll;
+            let scroll = match key.code {
+                KeyCode::PageUp => Some(Scroll::PageUp),
+                KeyCode::PageDown => Some(Scroll::PageDown),
+                KeyCode::Home => Some(Scroll::Top),
+                KeyCode::End => Some(Scroll::Bottom),
+                _ => None,
+            };
+            if let Some(s) = scroll {
+                session.tab.scroll(s);
+                return;
+            }
+        }
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let bytes: Vec<u8> = match key.code {
@@ -1262,6 +1295,138 @@ impl AppState {
 
         if let Err(e) = session.tab.write(&bytes) {
             log::warn!("Failed to forward key to AI session: {e}");
+        }
+    }
+
+    // IMPACT ANALYSIS — handle_ai_overlay_mouse
+    // Parents: handle_mouse_event() calls this unconditionally when the AI
+    //          overlay is visible.
+    // Children: screen_to_ai_overlay_point (coordinate resolution),
+    //           AiSession::tab::{start_selection, update_selection,
+    //           selection_to_string, clear_selection, scroll} (state mutation).
+    // Siblings: Selection state on AppState (ai_overlay_selecting,
+    //           ai_overlay_select_start, ai_overlay_click_state).
+    // Risk: Must ALWAYS return `true` when overlay is visible so no mouse
+    //       event leaks to the tree/editor/terminal below — the overlay is
+    //       modal even when the click falls outside its rect.
+
+    /// Handles a mouse event while the AI overlay is visible.
+    ///
+    /// Returns `true` once the event is consumed (always, for visibility).
+    /// Filters `MouseEventKind` into three paths:
+    ///
+    /// - **ScrollUp / ScrollDown over the overlay grid**: scrolls the PTY
+    ///   history via `TerminalTab::scroll`.
+    /// - **Down / Drag / Up (Left button)**: drives text selection inside
+    ///   the overlay's grid with multi-click detection and clipboard copy
+    ///   on drag release — mirrors the terminal panel's selection flow.
+    /// - **Anything else**: swallowed so modal semantics hold.
+    fn handle_ai_overlay_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let col = mouse.column;
+        let row = mouse.row;
+
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.screen_to_ai_overlay_point(col, row).is_some() {
+                    self.ai_overlay_scroll(alacritty_terminal::grid::Scroll::Delta(
+                        MOUSE_SCROLL_LINES,
+                    ));
+                }
+                true
+            }
+            MouseEventKind::ScrollDown => {
+                if self.screen_to_ai_overlay_point(col, row).is_some() {
+                    self.ai_overlay_scroll(alacritty_terminal::grid::Scroll::Delta(
+                        -MOUSE_SCROLL_LINES,
+                    ));
+                }
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(point) = self.screen_to_ai_overlay_point(col, row) {
+                    let grid_row = point.line.0 as usize;
+                    let grid_col = point.column.0;
+                    let now = Instant::now();
+                    let click_count = self.ai_overlay_click_state.register(
+                        now,
+                        grid_row,
+                        grid_col,
+                        DOUBLE_CLICK_THRESHOLD,
+                    );
+
+                    if let Some(session) = self.ai_overlay.session.as_mut() {
+                        session.tab.clear_selection();
+                        let ty = match click_count {
+                            1 => SelectionType::Simple,
+                            2 => SelectionType::Semantic,
+                            _ => SelectionType::Lines,
+                        };
+                        session.tab.start_selection(ty, point, Direction::Left);
+                    }
+                    // Only enable drag selection on single click.
+                    self.ai_overlay_selecting = click_count == 1;
+                    self.ai_overlay_select_start = Some((col, row));
+                }
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.ai_overlay_selecting {
+                    let point = if let Some((gx, gy, gw, gh)) = self.ai_overlay_grid_area {
+                        let clamped_col = col.clamp(gx, gx + gw.saturating_sub(1));
+                        let clamped_row = row.clamp(gy, gy + gh.saturating_sub(1));
+                        self.screen_to_ai_overlay_point(clamped_col, clamped_row)
+                    } else {
+                        None
+                    };
+                    if let Some(point) = point {
+                        if let Some(session) = self.ai_overlay.session.as_mut() {
+                            session.tab.update_selection(point, Direction::Right);
+                        }
+                    }
+                }
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.ai_overlay_selecting {
+                    self.ai_overlay_selecting = false;
+
+                    let was_click = self
+                        .ai_overlay_select_start
+                        .is_none_or(|(sx, sy)| sx == col && sy == row);
+                    self.ai_overlay_select_start = None;
+
+                    if was_click {
+                        // Click without drag — drop selection.
+                        if let Some(session) = self.ai_overlay.session.as_mut() {
+                            session.tab.clear_selection();
+                        }
+                    } else {
+                        // Drag completed — copy selection to clipboard.
+                        let text = self
+                            .ai_overlay
+                            .session
+                            .as_ref()
+                            .and_then(|s| s.tab.selection_to_string())
+                            .filter(|s| !s.is_empty());
+                        if let Some(ref text) = text {
+                            Self::copy_to_clipboard(text);
+                        }
+                    }
+                } else if self.ai_overlay_click_state.click_count > 1 {
+                    // Multi-click (double/triple) completed — copy selection.
+                    let text = self
+                        .ai_overlay
+                        .session
+                        .as_ref()
+                        .and_then(|s| s.tab.selection_to_string())
+                        .filter(|s| !s.is_empty());
+                    if let Some(ref text) = text {
+                        Self::copy_to_clipboard(text);
+                    }
+                }
+                true
+            }
+            _ => true,
         }
     }
 }
