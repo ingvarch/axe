@@ -9,9 +9,7 @@ use ratatui::Frame;
 use axe_core::{AppState, FocusTarget};
 use axe_terminal::TerminalManager;
 
-use crate::editor_panel::{
-    editor_title, render_editor_content, render_scrollbar, render_startup_screen,
-};
+use crate::editor_panel::{editor_title, render_scrollbar};
 use crate::layout::LayoutManager;
 use crate::theme::Theme;
 
@@ -388,30 +386,7 @@ pub(crate) fn render_right_panels(
         );
         let editor_inner = editor_block.inner(right_split[0]);
         frame.render_widget(editor_block, right_split[0]);
-        if let Some(buffer) = app.buffer_manager.active_buffer() {
-            let focused = app.focus == FocusTarget::Editor;
-            let tab_bar = Some((
-                app.buffer_manager.buffers(),
-                app.buffer_manager.active_index(),
-            ));
-            let hints: &[axe_core::InlayHint] = buffer
-                .path()
-                .and_then(|p| app.inlay_hints.get(p))
-                .map(|entry| entry.hints.as_slice())
-                .unwrap_or(&[]);
-            render_editor_content(
-                buffer,
-                editor_inner,
-                frame,
-                theme,
-                focused,
-                app.search.as_ref(),
-                tab_bar,
-                hints,
-            );
-        } else {
-            render_startup_screen(editor_inner, frame, theme, &app.build_version);
-        }
+        crate::render_editor_splits(app, editor_inner, frame, theme);
 
         let term_block = crate::panel_block(
             " Terminal ",
@@ -435,29 +410,6 @@ pub(crate) fn render_right_panels(
         );
         let editor_inner = editor_block.inner(area);
         frame.render_widget(editor_block, area);
-        if let Some(buffer) = app.buffer_manager.active_buffer() {
-            let focused = app.focus == FocusTarget::Editor;
-            let tab_bar = Some((
-                app.buffer_manager.buffers(),
-                app.buffer_manager.active_index(),
-            ));
-            let hints: &[axe_core::InlayHint] = buffer
-                .path()
-                .and_then(|p| app.inlay_hints.get(p))
-                .map(|entry| entry.hints.as_slice())
-                .unwrap_or(&[]);
-            render_editor_content(
-                buffer,
-                editor_inner,
-                frame,
-                theme,
-                focused,
-                app.search.as_ref(),
-                tab_bar,
-                hints,
-            );
-        } else {
-            render_startup_screen(editor_inner, frame, theme, &app.build_version);
-        }
+        crate::render_editor_splits(app, editor_inner, frame, theme);
     }
 }

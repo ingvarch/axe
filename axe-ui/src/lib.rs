@@ -35,6 +35,56 @@ use terminal_panel::{adjust_terminal_rect, render_right_panels, render_terminal_
 use theme::Theme;
 use tree_panel::render_tree_content;
 
+/// Renders every editor split inside `area`, dividing it according to the
+/// current orientation. Each split draws its own buffer (or the startup
+/// screen if the buffer index is out of range); only the focused split
+/// receives the bright cursor/border treatment. The tab bar is shown on
+/// the focused split only so other splits use their full height.
+pub(crate) fn render_editor_splits(app: &AppState, area: Rect, frame: &mut Frame, theme: &Theme) {
+    let splits = app.editor_layout.splits();
+    let orientation = app.editor_layout.orientation();
+    let focused_split_idx = app.editor_layout.focused_index();
+    let editor_is_focused_panel = app.focus == FocusTarget::Editor;
+
+    let rects = layout::split_rects(area, splits.len(), orientation);
+    for (i, split) in splits.iter().enumerate() {
+        let split_area = rects.get(i).copied().unwrap_or(area);
+        let is_focused_split = i == focused_split_idx && editor_is_focused_panel;
+        let buffer = app.buffer_manager.buffers().get(split.active_buffer);
+        if let Some(buffer) = buffer {
+            let tab_bar = if i == focused_split_idx {
+                Some((
+                    app.buffer_manager.buffers(),
+                    app.buffer_manager.active_index(),
+                ))
+            } else {
+                None
+            };
+            let hints: &[axe_core::InlayHint] = buffer
+                .path()
+                .and_then(|p| app.inlay_hints.get(p))
+                .map(|entry| entry.hints.as_slice())
+                .unwrap_or(&[]);
+            render_editor_content(
+                buffer,
+                split_area,
+                frame,
+                theme,
+                is_focused_split,
+                if is_focused_split {
+                    app.search.as_ref()
+                } else {
+                    None
+                },
+                tab_bar,
+                hints,
+            );
+        } else {
+            render_startup_screen(split_area, frame, theme, &app.build_version);
+        }
+    }
+}
+
 /// Returns the border style for a panel based on whether it has focus and resize mode.
 pub(crate) fn border_style_for(
     focus: &FocusTarget,
@@ -601,30 +651,7 @@ pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
                 }
             }
             FocusTarget::Editor => {
-                if let Some(buffer) = app.buffer_manager.active_buffer() {
-                    let focused = app.focus == FocusTarget::Editor;
-                    let tab_bar = Some((
-                        app.buffer_manager.buffers(),
-                        app.buffer_manager.active_index(),
-                    ));
-                    let hints: &[axe_core::InlayHint] = buffer
-                        .path()
-                        .and_then(|p| app.inlay_hints.get(p))
-                        .map(|entry| entry.hints.as_slice())
-                        .unwrap_or(&[]);
-                    render_editor_content(
-                        buffer,
-                        inner,
-                        frame,
-                        theme,
-                        focused,
-                        app.search.as_ref(),
-                        tab_bar,
-                        hints,
-                    );
-                } else {
-                    render_startup_screen(inner, frame, theme, &app.build_version);
-                }
+                render_editor_splits(app, inner, frame, theme);
             }
         }
     } else if layout_mgr.show_tree {

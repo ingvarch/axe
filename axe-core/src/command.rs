@@ -263,6 +263,16 @@ pub enum Command {
     AddCursorAtPosition { row: usize, col: usize },
     /// Drop every secondary cursor, leaving only the primary.
     ClearSecondaryCursors,
+    /// Split the editor area horizontally, adding a new split to the right.
+    SplitRight,
+    /// Split the editor area vertically, adding a new split below.
+    SplitDown,
+    /// Close the currently focused editor split (no-op if it's the last).
+    CloseSplit,
+    /// Cycle focus to the next editor split.
+    FocusNextSplit,
+    /// Cycle focus to the previous editor split.
+    FocusPrevSplit,
     /// Format the current document using the LSP formatter.
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
@@ -449,6 +459,11 @@ mod tests {
             Command::SelectAllOccurrences,
             Command::AddCursorAtPosition { row: 0, col: 0 },
             Command::ClearSecondaryCursors,
+            Command::SplitRight,
+            Command::SplitDown,
+            Command::CloseSplit,
+            Command::FocusNextSplit,
+            Command::FocusPrevSplit,
         ];
 
         for (i, a) in variants.iter().enumerate() {

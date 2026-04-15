@@ -2,6 +2,7 @@ mod ai_overlay;
 mod clipboard;
 mod diff_popup;
 mod editor;
+pub mod editor_layout;
 mod execute;
 mod git;
 mod input;
@@ -11,6 +12,7 @@ mod terminal;
 mod tree;
 mod types;
 
+pub use editor_layout::{EditorLayout, Split, SplitError, SplitOrientation};
 pub use types::*;
 
 // Re-export free functions from submodules for test access.
@@ -184,6 +186,13 @@ pub struct AppState {
     /// it "poisons" ratatui's front buffer so the next frame's diff resends
     /// all cells, catching any updates the real terminal missed.
     pub terminal_output_this_frame: bool,
+    /// Editor split layout. Always contains at least one split. The
+    /// focused split's `active_buffer` is kept in sync with
+    /// `buffer_manager.active` via `AppState::set_focused_split`.
+    pub editor_layout: editor_layout::EditorLayout,
+    /// First key of a pending keyboard chord (e.g. `Ctrl+K`), waiting for
+    /// its continuation. Cleared after the next key press resolves it.
+    pub pending_chord: Option<crossterm::event::KeyEvent>,
 }
 
 impl AppState {
@@ -253,6 +262,8 @@ impl AppState {
             ai_overlay: crate::ai_overlay::AiOverlay::new(),
             ai_config_path_override: None,
             needs_full_redraw: true,
+            editor_layout: editor_layout::EditorLayout::single(0),
+            pending_chord: None,
             terminal_output_this_frame: false,
         }
     }
@@ -337,6 +348,28 @@ impl AppState {
     pub fn quit(&mut self) {
         self.confirm_dialog = None;
         self.should_quit = true;
+    }
+
+    /// Sets the focused editor split and syncs `buffer_manager.active` to
+    /// match the split's current buffer.
+    ///
+    /// This is the **only** approved way to change `editor_layout.focused`
+    /// — all other call sites must go through it so `BufferManager.active`
+    /// never drifts out of sync with the layout.
+    pub fn set_focused_split(&mut self, idx: usize) {
+        self.editor_layout.set_focused(idx);
+        let buffer_idx = self.editor_layout.focused().active_buffer;
+        if buffer_idx < self.buffer_manager.buffer_count() {
+            self.buffer_manager.set_active(buffer_idx);
+        }
+    }
+
+    /// Records the focused split's active buffer after a direct mutation
+    /// of `buffer_manager` (e.g. opening a new file). Keeps the split in
+    /// sync with the live buffer index.
+    pub fn sync_focused_split_to_active_buffer(&mut self) {
+        let active = self.buffer_manager.active_index();
+        self.editor_layout.set_focused_buffer(active);
     }
 
     /// Sets a temporary status message that appears in the status bar.

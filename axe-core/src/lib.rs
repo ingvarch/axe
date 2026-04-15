@@ -20,8 +20,9 @@ pub mod ssh_host;
 pub mod ssh_host_finder;
 
 pub use app::{
-    AppState, ConfirmButton, ConfirmDialog, DiffPopup, DiffPopupButton, DragBorder, FocusTarget,
-    GoToLineDialog, MouseDragState, PasswordDialog, ResizeModeState,
+    AppState, ConfirmButton, ConfirmDialog, DiffPopup, DiffPopupButton, DragBorder, EditorLayout,
+    FocusTarget, GoToLineDialog, MouseDragState, PasswordDialog, ResizeModeState, Split,
+    SplitError, SplitOrientation,
 };
 pub use axe_tree::FileTree;
 pub use code_actions::{CodeAction, CodeActionsState, LspCommand};

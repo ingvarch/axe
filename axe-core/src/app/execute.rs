@@ -236,6 +236,8 @@ impl AppState {
                 Ok(()) => {
                     self.buffer_manager.promote_preview();
                     self.focus = FocusTarget::Editor;
+                    // Route the newly opened buffer into the focused split.
+                    self.sync_focused_split_to_active_buffer();
                     // Notify LSP about the newly opened file.
                     if let Some(ref mut lsp) = self.lsp_manager {
                         if let Some(buf) = self.buffer_manager.active_buffer() {
@@ -260,6 +262,7 @@ impl AppState {
             Command::PreviewFile(path) => match self.buffer_manager.open_file_as_preview(&path) {
                 Ok(()) => {
                     self.focus = FocusTarget::Editor;
+                    self.sync_focused_split_to_active_buffer();
                     self.refresh_active_buffer_diff_hunks();
                 }
                 Err(e) => log::warn!("Failed to preview file: {e}"),
@@ -692,14 +695,17 @@ impl AppState {
             Command::NextBuffer => {
                 self.search = None;
                 self.buffer_manager.next_buffer();
+                self.sync_focused_split_to_active_buffer();
             }
             Command::PrevBuffer => {
                 self.search = None;
                 self.buffer_manager.prev_buffer();
+                self.sync_focused_split_to_active_buffer();
             }
             Command::ActivateBuffer(idx) => {
                 self.search = None;
                 self.buffer_manager.set_active(idx);
+                self.sync_focused_split_to_active_buffer();
             }
             Command::CloseBuffer => {
                 if let Some(buf) = self.buffer_manager.active_buffer() {
@@ -709,6 +715,7 @@ impl AppState {
                     } else {
                         let idx = self.buffer_manager.active_index();
                         self.buffer_manager.close_buffer(idx);
+                        self.sync_focused_split_to_active_buffer();
                         self.search = None;
                     }
                 }
@@ -716,6 +723,7 @@ impl AppState {
             Command::ConfirmCloseBuffer => {
                 let idx = self.buffer_manager.active_index();
                 self.buffer_manager.close_buffer(idx);
+                self.sync_focused_split_to_active_buffer();
                 self.search = None;
             }
             Command::CancelCloseBuffer => {
@@ -824,6 +832,59 @@ impl AppState {
                 if let Some(buf) = self.buffer_manager.active_buffer_mut() {
                     buf.clear_secondary_cursors();
                 }
+            }
+            // IMPACT ANALYSIS — Editor split commands
+            // Parents: KeyEvent → Ctrl+\ / Ctrl+Shift+\ / Ctrl+K chord → these commands
+            // Children: EditorLayout mutates splits vector, set_focused_split
+            //           keeps buffer_manager.active in sync
+            // Siblings: FocusTarget::Editor (unchanged — splits are hidden
+            //           inside editor_layout), render loop iterates splits
+            Command::SplitRight => match self.editor_layout.split_right() {
+                Ok(()) => {
+                    let idx = self.editor_layout.focused_index();
+                    self.set_focused_split(idx);
+                    self.needs_full_redraw = true;
+                }
+                Err(crate::app::SplitError::OrientationConflict) => {
+                    self.set_status_message(
+                        "Can't split right while the layout is vertical".to_string(),
+                    );
+                }
+                Err(_) => {}
+            },
+            Command::SplitDown => match self.editor_layout.split_down() {
+                Ok(()) => {
+                    let idx = self.editor_layout.focused_index();
+                    self.set_focused_split(idx);
+                    self.needs_full_redraw = true;
+                }
+                Err(crate::app::SplitError::OrientationConflict) => {
+                    self.set_status_message(
+                        "Can't split down while the layout is horizontal".to_string(),
+                    );
+                }
+                Err(_) => {}
+            },
+            Command::CloseSplit => match self.editor_layout.close_focused() {
+                Ok(()) => {
+                    let idx = self.editor_layout.focused_index();
+                    self.set_focused_split(idx);
+                    self.needs_full_redraw = true;
+                }
+                Err(crate::app::SplitError::LastSplit) => {
+                    self.set_status_message("Can't close the last split".to_string());
+                }
+                Err(_) => {}
+            },
+            Command::FocusNextSplit => {
+                self.editor_layout.focus_next();
+                let idx = self.editor_layout.focused_index();
+                self.set_focused_split(idx);
+            }
+            Command::FocusPrevSplit => {
+                self.editor_layout.focus_prev();
+                let idx = self.editor_layout.focused_index();
+                self.set_focused_split(idx);
             }
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {

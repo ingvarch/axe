@@ -90,6 +90,11 @@ fn build_palette_items(keymap: &KeymapResolver) -> Vec<CommandPaletteItem> {
             "Edit: Clear Secondary Cursors",
             Command::ClearSecondaryCursors,
         ),
+        ("View: Split Editor Right", Command::SplitRight),
+        ("View: Split Editor Down", Command::SplitDown),
+        ("View: Close Split", Command::CloseSplit),
+        ("View: Focus Next Split", Command::FocusNextSplit),
+        ("View: Focus Previous Split", Command::FocusPrevSplit),
         ("Edit: Go to Line", Command::GoToLine),
         ("SSH: Connect to Host", Command::OpenSshHostFinder),
         ("AI: Toggle Chat Overlay", Command::ToggleAiOverlay),
@@ -248,7 +253,7 @@ mod tests {
     #[test]
     fn new_creates_palette_with_expected_commands() {
         let p = palette();
-        assert_eq!(p.items.len(), 46, "Expected 46 palette commands");
+        assert_eq!(p.items.len(), 51, "Expected 51 palette commands");
     }
 
     #[test]

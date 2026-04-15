@@ -673,6 +673,45 @@ impl AppState {
             return;
         }
 
+        // Chord prefix handling. If the previous key was a chord prefix
+        // (e.g. `Ctrl+K`), resolve the current key as the continuation and
+        // clear the pending chord regardless of whether it matched.
+        if self.pending_chord.take().is_some() {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let continuation = match (key.code, key.modifiers) {
+                // Ctrl+K → W: close the focused split.
+                (KeyCode::Char('w'), m) | (KeyCode::Char('W'), m)
+                    if m == KeyModifiers::NONE || m == KeyModifiers::CONTROL =>
+                {
+                    Some(Command::CloseSplit)
+                }
+                // Ctrl+K → Right: focus next split.
+                (KeyCode::Right, _) => Some(Command::FocusNextSplit),
+                // Ctrl+K → Left: focus previous split.
+                (KeyCode::Left, _) => Some(Command::FocusPrevSplit),
+                _ => None,
+            };
+            if let Some(cmd) = continuation {
+                self.execute(cmd);
+                return;
+            }
+            // Unknown continuation — fall through to normal resolution so
+            // the user's key still does something.
+        }
+
+        // Detect the `Ctrl+K` chord prefix and stash it for the next key.
+        {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            if matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+                && !key.modifiers.contains(KeyModifiers::SHIFT)
+            {
+                self.pending_chord = Some(key);
+                return;
+            }
+        }
+
         if let Some(cmd) = self.keymap.resolve(&key) {
             if self.show_help {
                 match cmd {

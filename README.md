@@ -27,6 +27,7 @@ A terminal-based IDE written in Rust. Fast, lightweight, keyboard-driven.
 - **Rename symbol** -- Shift+F6 opens an inline rename dialog; applies edits atomically across every affected open buffer with a single undo step
 - **Quick fixes / code actions** -- Ctrl+. or Alt+Enter opens a picker with LSP-provided refactors and diagnostics fixes, applied in one undoable step
 - **Multi-cursor editing** -- Ctrl+D adds a cursor at the next occurrence of the word under the cursor, Ctrl+Alt+L selects every occurrence, Alt+Click adds a cursor at the clicked position, Esc clears secondaries
+- **Editor splits** -- Ctrl+\ splits the editor area horizontally, Ctrl+Shift+\ splits vertically, Ctrl+K W closes the focused split, Ctrl+K ←/→ cycles focus
 - **Comment toggling** -- Ctrl+/ for line comments, Shift+Alt+A for block comments; language-aware and single-step undo
 - **Fuzzy file finder** -- Ctrl+P, powered by nucleo
 - **Command palette** -- Ctrl+Shift+P, search and execute any command
@@ -101,6 +102,10 @@ axe /path/to/dir # Open specific directory
 | Ctrl+D | Add cursor at next occurrence of selection / word |
 | Ctrl+Alt+L | Add cursors at every occurrence |
 | Alt+Click | Add cursor at click position |
+| Ctrl+\ | Split editor right |
+| Ctrl+Shift+\ | Split editor down |
+| Ctrl+K W | Close current editor split |
+| Ctrl+K ← / Ctrl+K → | Focus previous / next editor split |
 | Ctrl+Shift+I | Format document |
 | Ctrl+/ | Toggle line comment on selection or current line |
 | Shift+Alt+A | Toggle block comment on selection |

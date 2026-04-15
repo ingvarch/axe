@@ -204,6 +204,11 @@ pub fn command_from_str(s: &str) -> Option<Command> {
         "add_cursor_at_next_occurrence" => Some(Command::AddCursorAtNextOccurrence),
         "select_all_occurrences" => Some(Command::SelectAllOccurrences),
         "clear_secondary_cursors" => Some(Command::ClearSecondaryCursors),
+        "split_right" => Some(Command::SplitRight),
+        "split_down" => Some(Command::SplitDown),
+        "close_split" => Some(Command::CloseSplit),
+        "focus_next_split" => Some(Command::FocusNextSplit),
+        "focus_prev_split" => Some(Command::FocusPrevSplit),
         _ => None,
     }
 }
@@ -604,6 +609,24 @@ impl KeymapResolver {
             Command::ShowCodeActions,
         );
         resolver.bind(KeyModifiers::ALT, KeyCode::Enter, Command::ShowCodeActions);
+
+        // Editor splits: Ctrl+\ = split right, Ctrl+Shift+\ = split down.
+        // Ctrl+K is a chord prefix handled in input.rs (close, focus).
+        resolver.bind(
+            KeyModifiers::CONTROL,
+            KeyCode::Char('\\'),
+            Command::SplitRight,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('\\'),
+            Command::SplitDown,
+        );
+        resolver.bind(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyCode::Char('|'),
+            Command::SplitDown,
+        );
 
         // Multi-cursor: Ctrl+D adds a cursor at the next occurrence of the
         // current word / selection (VS Code convention).
