@@ -14,6 +14,14 @@ impl EditorBuffer {
         self.history.set_force_merge(true);
     }
 
+    /// Begins a labeled undo group that does not merge with any pre-existing
+    /// group even when `force_merge` is set. Used by multi-edit operations
+    /// like Rename and Code Actions to make their undo step distinct and
+    /// discoverable.
+    pub fn begin_labeled_undo_group(&mut self, label: &str) {
+        self.history.begin_isolated_group(label.to_string());
+    }
+
     /// Ends the undo group started by `begin_undo_group()`.
     pub fn end_undo_group(&mut self) {
         self.history.set_force_merge(false);

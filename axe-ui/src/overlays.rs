@@ -1481,6 +1481,137 @@ pub(crate) fn render_signature_help(
     }
 }
 
+/// Minimum width for the rename input popup.
+const RENAME_MIN_WIDTH: u16 = 20;
+/// Maximum width for the rename input popup.
+const RENAME_MAX_WIDTH: u16 = 60;
+
+/// Renders the inline rename input popup near the symbol being renamed.
+///
+/// The popup shows the new-name input with a visible caret, a title line,
+/// and key hints. Positioned above the symbol row when possible, falling
+/// back to below.
+pub(crate) fn render_rename_input(
+    state: &axe_core::RenameState,
+    buffer: &EditorBuffer,
+    app: &AppState,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
+    let Some((editor_x, editor_y, editor_w, editor_h)) = app.editor_inner_area else {
+        return;
+    };
+
+    // Gutter width (mirrors hover/signature popups).
+    let line_count = buffer.line_count();
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + GUTTER_PADDING + DIAGNOSTIC_GUTTER_WIDTH + DIFF_GUTTER_WIDTH;
+
+    let content_height: u16 = 3; // title + input + hint row
+    let popup_height = (content_height + 2) // +2 for borders
+        .min(editor_h);
+    let input_len = state.input.chars().count() as u16;
+    let popup_width = (input_len + 6) // caret padding + borders
+        .clamp(RENAME_MIN_WIDTH, RENAME_MAX_WIDTH)
+        .min(editor_w);
+
+    let cursor_screen_row = state.origin_row.saturating_sub(buffer.scroll_row) as u16;
+    let cursor_screen_col = state.origin_col.saturating_sub(buffer.scroll_col) as u16;
+
+    let popup_x = (editor_x + gutter_width + cursor_screen_col).min(
+        editor_x
+            .saturating_add(editor_w)
+            .saturating_sub(popup_width),
+    );
+
+    let space_above = cursor_screen_row;
+    let above_y = editor_y
+        .saturating_add(cursor_screen_row)
+        .saturating_sub(popup_height);
+    let below_y = editor_y + cursor_screen_row + 1;
+    let popup_y = if space_above >= popup_height {
+        above_y
+    } else {
+        below_y
+    };
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(theme.overlay_bg).fg(theme.foreground))
+        .border_style(Style::default().fg(theme.overlay_border));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let title_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.overlay_bg)
+        .add_modifier(Modifier::BOLD);
+    let hint_style = Style::default()
+        .fg(theme.status_bar_key)
+        .bg(theme.overlay_bg)
+        .add_modifier(Modifier::ITALIC);
+    let input_style = Style::default()
+        .fg(theme.foreground)
+        .bg(theme.search_active_match_bg);
+
+    // Row 0: title.
+    if inner.height > 0 {
+        let line_rect = Rect::new(inner.x, inner.y, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("Rename symbol", title_style))),
+            line_rect,
+        );
+    }
+
+    // Row 1: input field with caret.
+    if inner.height > 1 {
+        let line_rect = Rect::new(inner.x, inner.y + 1, inner.width, 1);
+        // Build caret display: text with inverted cell at cursor position.
+        let chars: Vec<char> = state.input.chars().collect();
+        let caret_at = state.cursor.min(chars.len());
+        let mut spans: Vec<Span> = Vec::new();
+        if caret_at > 0 {
+            spans.push(Span::styled(
+                chars[..caret_at].iter().collect::<String>(),
+                input_style,
+            ));
+        }
+        // Caret cell.
+        let caret_char = chars.get(caret_at).copied().unwrap_or(' ');
+        spans.push(Span::styled(
+            caret_char.to_string(),
+            Style::default().fg(theme.overlay_bg).bg(theme.foreground),
+        ));
+        if caret_at + 1 < chars.len() {
+            spans.push(Span::styled(
+                chars[caret_at + 1..].iter().collect::<String>(),
+                input_style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+    }
+
+    // Row 2: keyboard hint.
+    if inner.height > 2 {
+        let line_rect = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Enter to apply, Esc to cancel",
+                hint_style,
+            ))),
+            line_rect,
+        );
+    }
+}
+
 /// Minimum width for the diff popup.
 const DIFF_POPUP_MIN_WIDTH: u16 = 30;
 /// Maximum width for the diff popup.

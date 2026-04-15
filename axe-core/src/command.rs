@@ -232,6 +232,16 @@ pub enum Command {
     ShowSignatureHelp,
     /// Dismiss the signature help popup without moving the cursor.
     DismissSignatureHelp,
+    /// Open the inline rename dialog for the symbol under the cursor.
+    StartRename,
+    /// Send the current rename input to the language server.
+    SubmitRename,
+    /// Close the rename dialog without applying.
+    CancelRename,
+    /// Insert a character into the open rename input buffer.
+    RenameInputChar(char),
+    /// Remove the character before the caret in the rename input buffer.
+    RenameInputBackspace,
     /// Format the current document using the LSP formatter.
     FormatDocument,
     /// Open the Go to Line dialog (Ctrl+G).
@@ -404,6 +414,11 @@ mod tests {
             Command::ToggleBlockComment,
             Command::ShowSignatureHelp,
             Command::DismissSignatureHelp,
+            Command::StartRename,
+            Command::SubmitRename,
+            Command::CancelRename,
+            Command::RenameInputChar('a'),
+            Command::RenameInputBackspace,
         ];
 
         for (i, a) in variants.iter().enumerate() {

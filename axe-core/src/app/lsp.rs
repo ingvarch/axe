@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use axe_editor::diagnostic::{BufferDiagnostic, DiagnosticSeverity};
 
@@ -176,6 +177,41 @@ impl AppState {
                 }
                 axe_lsp::LspEvent::SignatureHelpResponse { result: Err(e) } => {
                     log::warn!("LSP signature help error: {}", e.message);
+                }
+                axe_lsp::LspEvent::RenameResponse { result: Ok(value) } => {
+                    match crate::rename::parse_workspace_edit_response(&value) {
+                        Some(ws_edit) if !ws_edit.files.is_empty() => {
+                            let label = "Rename";
+                            match self.buffer_manager.apply_workspace_edit(&ws_edit, label) {
+                                Ok(summary) => {
+                                    self.rename = None;
+                                    self.set_status_message(format!(
+                                        "Renamed {} edit(s) across {} file(s)",
+                                        summary.edits_applied, summary.files_affected
+                                    ));
+                                    self.last_edit_time = Some(Instant::now());
+                                    self.notify_lsp_change();
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to apply rename edit: {e}");
+                                    self.set_status_message(
+                                        "Rename failed: could not apply edits".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            self.rename = None;
+                            self.set_status_message(
+                                "Rename: server returned no changes".to_string(),
+                            );
+                        }
+                    }
+                }
+                axe_lsp::LspEvent::RenameResponse { result: Err(e) } => {
+                    log::warn!("LSP rename error: {}", e.message);
+                    self.rename = None;
+                    self.set_status_message(format!("Rename failed: {}", e.message));
                 }
             }
         }
@@ -435,6 +471,67 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Opens the inline rename dialog anchored at the word under the cursor.
+    ///
+    /// Pre-fills the input with the current word (if any) and positions the
+    /// caret at the end. Does nothing if the buffer has no path, no word is
+    /// at the cursor, or no LSP client is available.
+    pub(super) fn start_rename(&mut self) {
+        self.ensure_lsp_open_for_active_buffer();
+        let Some(buf) = self.buffer_manager.active_buffer() else {
+            return;
+        };
+        let Some(path) = buf.path() else {
+            self.set_status_message("Rename: buffer has no file path".to_string());
+            return;
+        };
+        let row = buf.cursor.row;
+        let col = buf.cursor.col;
+        let word = word_at_cursor(buf, row, col);
+        let initial = word.unwrap_or_default();
+        let state = crate::rename::RenameState::new(path.to_path_buf(), row, col, initial);
+        self.rename = Some(state);
+        // Dismiss conflicting popups so the rename input stands alone.
+        self.completion = None;
+        self.hover_info = None;
+        self.signature_help = None;
+    }
+
+    /// Submits the pending rename state as a `textDocument/rename` request.
+    pub(super) fn submit_rename(&mut self) {
+        let Some(state) = self.rename.as_ref() else {
+            return;
+        };
+        if !state.is_submittable() {
+            return;
+        }
+        let path = state.path.clone();
+        let row = state.origin_row as u32;
+        let col = state.origin_col as u32;
+        let new_name = state.input.clone();
+        if let Some(ref mut lsp) = self.lsp_manager {
+            match lsp.request_rename(&path, row, col, &new_name) {
+                Ok(true) => {
+                    self.set_status_message("Rename: requesting…".to_string());
+                }
+                Ok(false) => {
+                    self.rename = None;
+                    self.set_status_message(
+                        "Rename not supported by this language server".to_string(),
+                    );
+                }
+                Err(e) => {
+                    log::warn!("LSP rename request failed: {e}");
+                    self.rename = None;
+                    self.set_status_message("Rename: request failed".to_string());
+                }
+            }
+        } else {
+            self.rename = None;
+            self.set_status_message("Rename: no language server active".to_string());
+        }
+    }
+
     /// Auto-triggers or dismisses signature help in response to a typed
     /// character.
     ///
@@ -545,6 +642,44 @@ impl AppState {
             }
         }
     }
+}
+
+/// Returns the word at the given (row, col) in the buffer, if any.
+///
+/// A word is a run of alphanumeric characters plus `_`. Returns `None`
+/// when the position is outside the buffer, on whitespace, or on an
+/// empty line.
+fn word_at_cursor(buf: &axe_editor::EditorBuffer, row: usize, col: usize) -> Option<String> {
+    let slice = buf.line_at(row)?;
+    let line_text: String = slice.to_string();
+    let trimmed = line_text.trim_end_matches('\n').trim_end_matches('\r');
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.is_empty() || col > chars.len() {
+        return None;
+    }
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    // When the cursor sits just after a word, step back one to find it.
+    let pivot = if col == chars.len() || !is_word(chars[col]) {
+        if col > 0 && is_word(chars[col - 1]) {
+            col - 1
+        } else {
+            return None;
+        }
+    } else {
+        col
+    };
+    let mut start = pivot;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = pivot;
+    while end < chars.len() && is_word(chars[end]) {
+        end += 1;
+    }
+    if end <= start {
+        return None;
+    }
+    Some(chars[start..end].iter().collect())
 }
 
 /// Converts an `lsp_types::Uri` to a `PathBuf`, if it has a `file` scheme.

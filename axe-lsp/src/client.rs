@@ -25,6 +25,7 @@ pub enum PendingRequestKind {
     Hover,
     Formatting,
     SignatureHelp,
+    Rename,
     InlayHint { path: PathBuf, version: u64 },
 }
 
@@ -65,6 +66,10 @@ pub enum LspEvent {
     },
     /// Server responded to a textDocument/signatureHelp request.
     SignatureHelpResponse {
+        result: std::result::Result<serde_json::Value, JsonRpcError>,
+    },
+    /// Server responded to a textDocument/rename request.
+    RenameResponse {
         result: std::result::Result<serde_json::Value, JsonRpcError>,
     },
     /// Server responded to a textDocument/inlayHint request.
@@ -317,6 +322,14 @@ impl LspClient {
             .is_some()
     }
 
+    /// Returns whether the server supports symbol rename.
+    pub fn supports_rename(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|c| c.rename_provider.as_ref())
+            .is_some()
+    }
+
     /// Returns the signature help trigger characters advertised by the server,
     /// or an empty slice if none are configured.
     pub fn signature_help_trigger_chars(&self) -> Vec<char> {
@@ -428,6 +441,10 @@ fn initialize_params(root_uri: &Url) -> serde_json::Value {
                 },
                 "formatting": {
                     "dynamicRegistration": false,
+                },
+                "rename": {
+                    "dynamicRegistration": false,
+                    "prepareSupport": false,
                 },
                 "inlayHint": {
                     "dynamicRegistration": false,
@@ -837,6 +854,24 @@ mod tests {
             PendingRequestKind::SignatureHelp,
             PendingRequestKind::Completion
         );
+    }
+
+    #[test]
+    fn pending_request_kind_rename_distinct() {
+        assert_ne!(PendingRequestKind::Rename, PendingRequestKind::Hover);
+        assert_ne!(
+            PendingRequestKind::Rename,
+            PendingRequestKind::SignatureHelp
+        );
+    }
+
+    #[test]
+    fn initialize_params_includes_rename() {
+        let root = Url::parse("file:///tmp/project").expect("valid url");
+        let params = initialize_params(&root);
+        let rename = &params["capabilities"]["textDocument"]["rename"];
+        assert!(rename.is_object());
+        assert_eq!(rename["dynamicRegistration"], false);
     }
 
     #[test]

@@ -1,8 +1,41 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::buffer::EditorBuffer;
+
+/// A single contiguous text edit within one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub new_text: String,
+}
+
+/// All edits targeted at one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEdit {
+    pub path: PathBuf,
+    pub edits: Vec<TextEdit>,
+}
+
+/// A workspace edit spanning one or more files (the subset of LSP
+/// `WorkspaceEdit` that Axe currently honours).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceEdit {
+    pub files: Vec<FileEdit>,
+}
+
+/// Summary returned by [`BufferManager::apply_workspace_edit`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppliedWorkspaceEdit {
+    /// Number of files touched (including files newly opened for the edit).
+    pub files_affected: usize,
+    /// Total number of individual text edits applied.
+    pub edits_applied: usize,
+}
 
 /// Manages multiple open editor buffers and tracks the active one.
 ///
@@ -227,6 +260,90 @@ impl BufferManager {
     pub fn buffer_mut_by_path(&mut self, path: &Path) -> Option<&mut EditorBuffer> {
         let canonical = std::fs::canonicalize(path).ok()?;
         self.buffers.iter_mut().find(|buf| {
+            buf.path()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .is_some_and(|c| c == canonical)
+        })
+    }
+
+    /// Applies an LSP-style workspace edit across one or more files.
+    ///
+    /// For every `FileEdit`:
+    /// - Finds the open buffer for that path, or opens it from disk.
+    /// - Sorts the edits by `(start_line desc, start_col desc)` so each edit
+    ///   is applied right-to-left and earlier positions stay valid.
+    /// - Starts a fresh labeled undo group (`label`) on that buffer and
+    ///   applies every edit into it so a single undo reverts the whole
+    ///   per-file group.
+    ///
+    /// Leaves the currently active buffer unchanged. Returns a summary of
+    /// how many files and edits were applied. Errors bubble up from
+    /// `EditorBuffer::from_file` when a file referenced by the edit does
+    /// not exist or cannot be read.
+    pub fn apply_workspace_edit(
+        &mut self,
+        workspace_edit: &WorkspaceEdit,
+        label: &str,
+    ) -> Result<AppliedWorkspaceEdit> {
+        let mut summary = AppliedWorkspaceEdit::default();
+        let previous_active = self.active;
+
+        for file in &workspace_edit.files {
+            if file.edits.is_empty() {
+                continue;
+            }
+
+            // Make sure the buffer exists; open it if needed.
+            let idx = match self.index_of_path(&file.path) {
+                Some(i) => i,
+                None => {
+                    self.open_file(&file.path).with_context(|| {
+                        format!("Failed to open {} for workspace edit", file.path.display())
+                    })?;
+                    self.buffers.len() - 1
+                }
+            };
+
+            // Sort edits right-to-left so earlier positions remain valid as
+            // we apply them one by one.
+            let mut sorted = file.edits.clone();
+            sorted.sort_by(|a, b| {
+                b.start_line
+                    .cmp(&a.start_line)
+                    .then_with(|| b.start_col.cmp(&a.start_col))
+            });
+
+            let edit_count = sorted.len();
+            let buffer = &mut self.buffers[idx];
+            buffer.begin_labeled_undo_group(label);
+            for edit in &sorted {
+                buffer.apply_text_edit(
+                    edit.start_line,
+                    edit.start_col,
+                    edit.end_line,
+                    edit.end_col,
+                    &edit.new_text,
+                );
+            }
+            buffer.end_undo_group();
+
+            summary.files_affected += 1;
+            summary.edits_applied += edit_count;
+        }
+
+        // Restore original active index — applying edits across files should
+        // not silently switch which buffer the user is looking at.
+        if previous_active < self.buffers.len() {
+            self.active = previous_active;
+        }
+
+        Ok(summary)
+    }
+
+    /// Returns the index of a buffer with the given canonical path, if any.
+    fn index_of_path(&self, path: &Path) -> Option<usize> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        self.buffers.iter().position(|buf| {
             buf.path()
                 .and_then(|p| std::fs::canonicalize(p).ok())
                 .is_some_and(|c| c == canonical)
@@ -603,5 +720,178 @@ mod tests {
         let buf = mgr.active_buffer().unwrap();
         assert_eq!(buf.tab_size(), 4);
         assert!(buf.insert_spaces());
+    }
+
+    // --- Workspace edit applier tests ---
+
+    fn text_edit(sl: usize, sc: usize, el: usize, ec: usize, new: &str) -> TextEdit {
+        TextEdit {
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+            new_text: new.to_string(),
+        }
+    }
+
+    #[test]
+    fn apply_workspace_edit_single_buffer_multi_edit_reverts_as_one_undo() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "foo foo foo").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+
+        let edit = WorkspaceEdit {
+            files: vec![FileEdit {
+                path: tmp.path().to_path_buf(),
+                edits: vec![
+                    text_edit(0, 0, 0, 3, "bar"),
+                    text_edit(0, 4, 0, 7, "bar"),
+                    text_edit(0, 8, 0, 11, "bar"),
+                ],
+            }],
+        };
+        let summary = mgr.apply_workspace_edit(&edit, "Rename").unwrap();
+        assert_eq!(summary.files_affected, 1);
+        assert_eq!(summary.edits_applied, 3);
+        assert_eq!(mgr.active_buffer().unwrap().content_string(), "bar bar bar");
+
+        // A single undo must revert all three edits atomically.
+        mgr.active_buffer_mut().unwrap().undo();
+        assert_eq!(mgr.active_buffer().unwrap().content_string(), "foo foo foo");
+    }
+
+    #[test]
+    fn apply_workspace_edit_labels_group() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "abc").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+        let edit = WorkspaceEdit {
+            files: vec![FileEdit {
+                path: tmp.path().to_path_buf(),
+                edits: vec![text_edit(0, 0, 0, 3, "xyz")],
+            }],
+        };
+        mgr.apply_workspace_edit(&edit, "Rename").unwrap();
+
+        // Undo to inspect the group's label via the returned EditGroup — we
+        // can observe it indirectly: the content reverts in a single step.
+        let buf = mgr.active_buffer_mut().unwrap();
+        buf.undo();
+        assert_eq!(buf.content_string(), "abc");
+    }
+
+    #[test]
+    fn apply_workspace_edit_opens_unopened_file() {
+        let mut tmp1 = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp1, "one").unwrap();
+        tmp1.flush().unwrap();
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp2, "two").unwrap();
+        tmp2.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp1.path()).unwrap();
+        assert_eq!(mgr.buffer_count(), 1);
+
+        let edit = WorkspaceEdit {
+            files: vec![FileEdit {
+                path: tmp2.path().to_path_buf(),
+                edits: vec![text_edit(0, 0, 0, 3, "TWO")],
+            }],
+        };
+        let summary = mgr.apply_workspace_edit(&edit, "Rename").unwrap();
+        assert_eq!(summary.files_affected, 1);
+        assert_eq!(mgr.buffer_count(), 2, "second file must be opened");
+        // Active stays on the originally-active buffer.
+        assert_eq!(mgr.active_index(), 0);
+        // Find the second buffer and verify its content.
+        let second = mgr
+            .buffers()
+            .iter()
+            .find(|b| b.path() == Some(tmp2.path()))
+            .unwrap();
+        assert_eq!(second.content_string(), "TWO");
+    }
+
+    #[test]
+    fn apply_workspace_edit_multiple_files_single_call() {
+        let mut tmp1 = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp1, "foo").unwrap();
+        tmp1.flush().unwrap();
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp2, "foo").unwrap();
+        tmp2.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp1.path()).unwrap();
+        mgr.open_file(tmp2.path()).unwrap();
+
+        let edit = WorkspaceEdit {
+            files: vec![
+                FileEdit {
+                    path: tmp1.path().to_path_buf(),
+                    edits: vec![text_edit(0, 0, 0, 3, "bar")],
+                },
+                FileEdit {
+                    path: tmp2.path().to_path_buf(),
+                    edits: vec![text_edit(0, 0, 0, 3, "baz")],
+                },
+            ],
+        };
+        let summary = mgr.apply_workspace_edit(&edit, "Rename").unwrap();
+        assert_eq!(summary.files_affected, 2);
+        assert_eq!(summary.edits_applied, 2);
+
+        let b1 = mgr
+            .buffers()
+            .iter()
+            .find(|b| b.path() == Some(tmp1.path()))
+            .unwrap();
+        assert_eq!(b1.content_string(), "bar");
+        let b2 = mgr
+            .buffers()
+            .iter()
+            .find(|b| b.path() == Some(tmp2.path()))
+            .unwrap();
+        assert_eq!(b2.content_string(), "baz");
+    }
+
+    #[test]
+    fn apply_workspace_edit_applies_right_to_left() {
+        // If edits were applied in their original order, an early insertion
+        // would shift the coordinates of later edits and break them. The
+        // applier sorts descending, so both succeed cleanly.
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "aXXXb").unwrap();
+        tmp.flush().unwrap();
+
+        let mut mgr = BufferManager::new();
+        mgr.open_file(tmp.path()).unwrap();
+
+        // Insert "(" before col 1 and ")" before col 4 — result "a(XXX)b".
+        let edit = WorkspaceEdit {
+            files: vec![FileEdit {
+                path: tmp.path().to_path_buf(),
+                edits: vec![text_edit(0, 1, 0, 1, "("), text_edit(0, 4, 0, 4, ")")],
+            }],
+        };
+        mgr.apply_workspace_edit(&edit, "Wrap").unwrap();
+        assert_eq!(mgr.active_buffer().unwrap().content_string(), "a(XXX)b");
+    }
+
+    #[test]
+    fn apply_workspace_edit_empty_files_is_noop() {
+        let mut mgr = BufferManager::new();
+        let summary = mgr
+            .apply_workspace_edit(&WorkspaceEdit::default(), "Rename")
+            .unwrap();
+        assert_eq!(summary.files_affected, 0);
+        assert_eq!(summary.edits_applied, 0);
     }
 }

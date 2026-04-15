@@ -122,6 +122,26 @@ impl AppState {
             return;
         }
 
+        // Inline rename dialog intercepts all keys when open.
+        if self.rename.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.execute(Command::CancelRename);
+                }
+                KeyCode::Enter => {
+                    self.execute(Command::SubmitRename);
+                }
+                KeyCode::Backspace => {
+                    self.execute(Command::RenameInputBackspace);
+                }
+                KeyCode::Char(c) => {
+                    self.execute(Command::RenameInputChar(c));
+                }
+                _ => {} // Consume all other keys
+            }
+            return;
+        }
+
         // Go to Line dialog intercepts all keys when open.
         if let Some(ref mut dialog) = self.go_to_line {
             match key.code {

@@ -233,6 +233,12 @@ impl LspManager {
                                 }
                                 continue;
                             }
+                            Some(PendingRequestKind::Rename) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::RenameResponse { result });
+                                }
+                                continue;
+                            }
                             Some(PendingRequestKind::InlayHint { path, version }) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::InlayHintResponse {
@@ -293,6 +299,12 @@ impl LspManager {
                             Some(PendingRequestKind::SignatureHelp) => {
                                 if let LspEvent::Response { result, .. } = event {
                                     remaining.push(LspEvent::SignatureHelpResponse { result });
+                                }
+                                continue;
+                            }
+                            Some(PendingRequestKind::Rename) => {
+                                if let LspEvent::Response { result, .. } = event {
+                                    remaining.push(LspEvent::RenameResponse { result });
                                 }
                                 continue;
                             }
@@ -490,6 +502,46 @@ impl LspManager {
             params,
             PendingRequestKind::Formatting,
         )?;
+        Ok(true)
+    }
+
+    /// Sends a `textDocument/rename` request for the given file position.
+    ///
+    /// Returns `Ok(true)` if the request was sent, `Ok(false)` if no client
+    /// is available or the server does not support renames.
+    pub fn request_rename(
+        &mut self,
+        path: &Path,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<bool> {
+        let Some(lang_id) = language_id_for_path(path) else {
+            return Ok(false);
+        };
+
+        let Some(client) = self.clients.get_mut(lang_id) else {
+            return Ok(false);
+        };
+
+        if !client.is_initialized() {
+            return Ok(false);
+        }
+
+        if !client.supports_rename() {
+            return Ok(false);
+        }
+
+        let uri = Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
+
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": line, "character": character },
+            "newName": new_name,
+        });
+
+        client.send_request("textDocument/rename", params, PendingRequestKind::Rename)?;
         Ok(true)
     }
 

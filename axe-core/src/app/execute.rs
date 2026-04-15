@@ -742,6 +742,29 @@ impl AppState {
             Command::DismissSignatureHelp => {
                 self.signature_help = None;
             }
+            // IMPACT ANALYSIS — Rename commands
+            // Parents: KeyEvent → Shift+F6 → StartRename; rename input keys → InputChar / Submit / Cancel
+            // Children: RenameState, LspManager::request_rename, WorkspaceEdit applier
+            // Siblings: hover/completion dismissed on start, status message on result
+            Command::StartRename => {
+                self.start_rename();
+            }
+            Command::SubmitRename => {
+                self.submit_rename();
+            }
+            Command::CancelRename => {
+                self.rename = None;
+            }
+            Command::RenameInputChar(ch) => {
+                if let Some(ref mut r) = self.rename {
+                    r.insert_char(ch);
+                }
+            }
+            Command::RenameInputBackspace => {
+                if let Some(ref mut r) = self.rename {
+                    r.backspace();
+                }
+            }
             Command::FormatDocument => {
                 if !self.request_format_for_active_buffer() {
                     self.set_status_message("Formatting not available".to_string());

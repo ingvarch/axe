@@ -9,7 +9,7 @@ pub mod languages;
 pub mod selection;
 
 pub use buffer::{EditorBuffer, LineEnding};
-pub use buffer_manager::BufferManager;
+pub use buffer_manager::{AppliedWorkspaceEdit, BufferManager, FileEdit, TextEdit, WorkspaceEdit};
 pub use cursor::CursorState;
 pub use diagnostic::{BufferDiagnostic, DiagnosticSeverity};
 pub use diff::{DiffHunk, DiffHunkKind};

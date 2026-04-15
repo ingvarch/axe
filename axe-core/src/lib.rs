@@ -11,6 +11,7 @@ pub mod inlay;
 pub mod keymap;
 pub mod location_list;
 pub mod project_search;
+pub mod rename;
 pub mod search;
 pub mod session;
 pub mod signature_help;
@@ -32,6 +33,7 @@ pub use inlay::{InlayHint, InlayHintEntry, InlayHintKind, InlayHintStore};
 pub use keymap::KeymapResolver;
 pub use location_list::LocationList;
 pub use project_search::ProjectSearch;
+pub use rename::RenameState;
 pub use search::{SearchField, SearchState};
 pub use signature_help::{ParameterInfo, Signature, SignatureHelpState};
 
