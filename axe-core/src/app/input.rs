@@ -544,6 +544,39 @@ impl AppState {
             }
         }
 
+        // Chord continuation: if the previous key was a chord prefix
+        // (e.g. `Ctrl+K`), resolve the current key as the continuation
+        // BEFORE the focus-based branches intercept it. Plain letters
+        // like `w` and arrow keys would otherwise be consumed by the
+        // editor-focus handler below.
+        if self.pending_chord.take().is_some() {
+            let continuation = match (key.code, key.modifiers) {
+                (KeyCode::Char('w'), _) | (KeyCode::Char('W'), _) => Some(Command::CloseSplit),
+                (KeyCode::Right, _) => Some(Command::FocusNextSplit),
+                (KeyCode::Left, _) => Some(Command::FocusPrevSplit),
+                _ => None,
+            };
+            if let Some(cmd) = continuation {
+                self.execute(cmd);
+                return;
+            }
+            // Unknown continuation — swallow the key so we don't accidentally
+            // insert `w` into the buffer when the user meant Ctrl+K W.
+            return;
+        }
+
+        // Detect the `Ctrl+K` chord prefix and stash it for the next key.
+        // Needs to run before focus-branch interception so Ctrl+K isn't
+        // treated as "insert k" in editor focus.
+        if matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+        {
+            self.pending_chord = Some(key);
+            return;
+        }
+
         // Editor-focus key interception: cursor movement and navigation.
         if self.focus == FocusTarget::Editor && !self.show_help {
             let editor_cmd = match (key.modifiers, key.code) {
@@ -671,45 +704,6 @@ impl AppState {
                 self.write_terminal_input(&key);
             }
             return;
-        }
-
-        // Chord prefix handling. If the previous key was a chord prefix
-        // (e.g. `Ctrl+K`), resolve the current key as the continuation and
-        // clear the pending chord regardless of whether it matched.
-        if self.pending_chord.take().is_some() {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let continuation = match (key.code, key.modifiers) {
-                // Ctrl+K → W: close the focused split.
-                (KeyCode::Char('w'), m) | (KeyCode::Char('W'), m)
-                    if m == KeyModifiers::NONE || m == KeyModifiers::CONTROL =>
-                {
-                    Some(Command::CloseSplit)
-                }
-                // Ctrl+K → Right: focus next split.
-                (KeyCode::Right, _) => Some(Command::FocusNextSplit),
-                // Ctrl+K → Left: focus previous split.
-                (KeyCode::Left, _) => Some(Command::FocusPrevSplit),
-                _ => None,
-            };
-            if let Some(cmd) = continuation {
-                self.execute(cmd);
-                return;
-            }
-            // Unknown continuation — fall through to normal resolution so
-            // the user's key still does something.
-        }
-
-        // Detect the `Ctrl+K` chord prefix and stash it for the next key.
-        {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            if matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT)
-                && !key.modifiers.contains(KeyModifiers::SHIFT)
-            {
-                self.pending_chord = Some(key);
-                return;
-            }
         }
 
         if let Some(cmd) = self.keymap.resolve(&key) {
@@ -876,6 +870,20 @@ impl AppState {
 
                 // Check if click is in editor content area -- multi-click detection.
                 if let Some((erow, ecol)) = self.screen_to_editor_pos(col, row) {
+                    // If the click landed inside an editor split that isn't
+                    // currently focused, switch focus to that split first so
+                    // the following cursor-placement logic acts on the right
+                    // buffer. Splits are checked in layout order; the first
+                    // one that contains `(col, row)` wins.
+                    let hit_split_idx = self.split_areas.iter().position(|&(sx, sy, sw, sh)| {
+                        col >= sx && col < sx + sw && row >= sy && row < sy + sh
+                    });
+                    if let Some(idx) = hit_split_idx {
+                        if idx != self.editor_layout.focused_index() {
+                            self.set_focused_split(idx);
+                        }
+                    }
+
                     // Alt+Click adds a secondary cursor at the click position
                     // without touching the existing selection/primary cursor.
                     if mouse.modifiers.contains(KeyModifiers::ALT) {

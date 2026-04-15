@@ -189,11 +189,14 @@ fn render_search_bar(search: &SearchState, area: Rect, frame: &mut Frame, theme:
 // Siblings: render_search_bar (similar 1-row bar pattern, independent).
 /// Renders the buffer tab bar in a 1-row area above the editor content.
 ///
-/// Each tab shows: ` filename.ext ` or ` filename.ext [+] `.
-/// Active tab uses the active tab style; inactive tabs use dim style.
+/// `indices` lists the global buffer indices (into `all_buffers`) shown
+/// in this tab bar, in display order. `active_in_split` highlights the
+/// currently focused tab within that list. Each tab shows:
+/// `[1:filename.ext]` or `[1:filename.ext+]` when modified.
 pub(crate) fn render_tab_bar(
-    buffers: &[EditorBuffer],
-    active_index: usize,
+    indices: &[usize],
+    active_in_split: usize,
+    all_buffers: &[EditorBuffer],
     area: Rect,
     frame: &mut Frame,
     theme: &Theme,
@@ -213,12 +216,15 @@ pub(crate) fn render_tab_bar(
     let mut total_width: usize = 0;
     let max_width = area.width as usize;
 
-    for (i, buf) in buffers.iter().enumerate() {
+    for (slot, &global_idx) in indices.iter().enumerate() {
+        let Some(buf) = all_buffers.get(global_idx) else {
+            continue;
+        };
         let name = buf.file_name().unwrap_or("untitled");
         let label = if buf.modified {
-            format!("[{}:{}+]", i + 1, name)
+            format!("[{}:{}+]", slot + 1, name)
         } else {
-            format!("[{}:{}]", i + 1, name)
+            format!("[{}:{}]", slot + 1, name)
         };
 
         let tab_width = label.len();
@@ -226,7 +232,7 @@ pub(crate) fn render_tab_bar(
             break;
         }
 
-        let base_style = if i == active_index {
+        let base_style = if slot == active_in_split {
             active_style
         } else {
             inactive_style
@@ -242,7 +248,7 @@ pub(crate) fn render_tab_bar(
         total_width += tab_width;
 
         // Space between tabs.
-        if i + 1 < buffers.len() && total_width < max_width {
+        if slot + 1 < indices.len() && total_width < max_width {
             spans.push(Span::raw(" "));
             total_width += 1;
         }
@@ -553,6 +559,15 @@ pub(crate) fn render_scrollbar(
 // Siblings: render_terminal_content (similar pattern, independent).
 /// Renders the file content with line numbers, scroll offset, cursor, and
 /// current-line highlighting inside the editor panel.
+/// Describes the tab bar for one editor split: the global buffer indices
+/// displayed in it, the active index inside that list, and the full
+/// buffer slice used for resolution.
+pub(crate) struct TabBarData<'a> {
+    pub indices: &'a [usize],
+    pub active_in_split: usize,
+    pub all_buffers: &'a [EditorBuffer],
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_editor_content(
     buffer: &EditorBuffer,
@@ -561,16 +576,16 @@ pub(crate) fn render_editor_content(
     theme: &Theme,
     editor_focused: bool,
     search: Option<&SearchState>,
-    tab_bar: Option<(&[EditorBuffer], usize)>,
+    tab_bar: Option<TabBarData<'_>>,
     inlay_hints: &[InlayHint],
 ) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Tab bar: steal 1 row when multiple buffers are open.
-    let area = if let Some((buffers, active_idx)) = tab_bar {
-        if area.height > 2 {
+    // Tab bar: steal 1 row when a tab bar is supplied.
+    let area = if let Some(tab_data) = tab_bar {
+        if area.height > 2 && !tab_data.indices.is_empty() {
             let tab_rect = Rect {
                 x: area.x,
                 y: area.y,
@@ -583,7 +598,14 @@ pub(crate) fn render_editor_content(
                 width: area.width,
                 height: area.height - 1,
             };
-            render_tab_bar(buffers, active_idx, tab_rect, frame, theme);
+            render_tab_bar(
+                tab_data.indices,
+                tab_data.active_in_split,
+                tab_data.all_buffers,
+                tab_rect,
+                frame,
+                theme,
+            );
             rest
         } else {
             area

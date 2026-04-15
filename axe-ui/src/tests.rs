@@ -13,7 +13,7 @@ use crate::overlays::{
 };
 use crate::theme::Theme;
 
-fn render_app_to_string(app: &AppState, width: u16, height: u16) -> String {
+fn render_app_to_string(app: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
@@ -30,8 +30,8 @@ fn render_app_to_string(app: &AppState, width: u16, height: u16) -> String {
 }
 
 fn render_to_string(width: u16, height: u16) -> String {
-    let app = AppState::new();
-    render_app_to_string(&app, width, height)
+    let mut app = AppState::new();
+    render_app_to_string(&mut app, width, height)
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn render_hides_tree_when_show_tree_false() {
     let mut app = AppState::new();
     app.show_tree = false;
     app.focus = FocusTarget::Editor;
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         !content.contains("Files"),
         "expected 'Files' to be absent when tree is hidden"
@@ -89,7 +89,7 @@ fn render_hides_tree_when_show_tree_false() {
 fn render_hides_terminal_when_show_terminal_false() {
     let mut app = AppState::new();
     app.show_terminal = false;
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         !content.contains("Terminal"),
         "expected 'Terminal' to be absent when terminal is hidden"
@@ -101,7 +101,7 @@ fn render_editor_fills_width_when_tree_hidden() {
     let mut app = AppState::new();
     app.show_tree = false;
     app.focus = FocusTarget::Editor;
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Editor"),
         "expected 'Editor' visible when tree is hidden"
@@ -116,7 +116,7 @@ fn render_editor_fills_width_when_tree_hidden() {
 fn render_editor_fills_height_when_terminal_hidden() {
     let mut app = AppState::new();
     app.show_terminal = false;
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Editor"),
         "expected 'Editor' visible when terminal is hidden"
@@ -131,7 +131,7 @@ fn render_editor_fills_height_when_terminal_hidden() {
 fn render_help_overlay_when_show_help_true() {
     let mut app = AppState::new();
     app.show_help = true;
-    let content = render_app_to_string(&app, 130, 40);
+    let content = render_app_to_string(&mut app, 130, 40);
     assert!(content.contains("Help"), "expected 'Help' title in overlay");
     assert!(content.contains("Quit"), "expected 'Quit' in help content");
 }
@@ -151,7 +151,7 @@ fn render_no_help_overlay_by_default() {
 fn render_help_overlay_shows_keybindings() {
     let mut app = AppState::new();
     app.show_help = true;
-    let content = render_app_to_string(&app, 130, 50);
+    let content = render_app_to_string(&mut app, 130, 50);
     assert!(content.contains("Ctrl+Q"), "expected 'Ctrl+Q' in help");
     assert!(content.contains("Ctrl+B"), "expected 'Ctrl+B' in help");
     assert!(content.contains("Ctrl+T"), "expected 'Ctrl+T' in help");
@@ -253,7 +253,7 @@ fn fallback_keys_appear_first() {
 fn render_confirm_dialog_when_quit() {
     let mut app = AppState::new();
     app.confirm_dialog = Some(axe_core::ConfirmDialog::quit());
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Yes"),
         "expected 'Yes' button in quit confirmation overlay"
@@ -270,8 +270,8 @@ fn render_confirm_dialog_when_quit() {
 
 #[test]
 fn render_no_confirm_dialog_by_default() {
-    let app = AppState::new();
-    let content = render_app_to_string(&app, 80, 24);
+    let mut app = AppState::new();
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         !content.contains("[ Yes ]"),
         "confirm dialog should not appear by default"
@@ -287,7 +287,7 @@ fn render_confirm_dialog_close_buffer() {
     app.execute(axe_core::Command::OpenFile(tmp.path().to_path_buf()));
     app.buffer_manager.active_buffer_mut().unwrap().modified = true;
     app.confirm_dialog = Some(axe_core::ConfirmDialog::close_buffer("test.txt"));
-    let content = render_app_to_string(&app, 80, 24);
+    let content = render_app_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Unsaved"),
         "expected 'Unsaved' in close-buffer overlay"
@@ -302,7 +302,7 @@ fn render_confirm_dialog_close_buffer() {
 fn render_shows_resize_indicator_when_resize_mode_active() {
     let mut app = AppState::new();
     app.resize_mode.active = true;
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("RESIZE"),
         "expected 'RESIZE' badge in status bar"
@@ -325,7 +325,7 @@ fn render_zoomed_shows_only_focused_panel() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains("Editor"), "expected 'Editor' panel");
     assert!(
         !content.contains("Files"),
@@ -342,7 +342,7 @@ fn render_zoomed_tree_shows_only_tree() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Tree;
     app.zoomed_panel = Some(FocusTarget::Tree);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains("Files"), "expected 'Files' panel");
     assert!(
         !content.contains("Editor"),
@@ -359,7 +359,7 @@ fn render_zoomed_terminal_shows_only_terminal() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Terminal(0);
     app.zoomed_panel = Some(FocusTarget::Terminal(0));
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains("Terminal"), "expected 'Terminal' panel");
     assert!(
         !content.contains("Files"),
@@ -375,7 +375,7 @@ fn render_zoomed_terminal_shows_only_terminal() {
 fn render_zoom_indicator_in_status_bar() {
     let mut app = AppState::new();
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("ZOOM"),
         "expected 'ZOOM' badge in status bar when zoomed"
@@ -393,7 +393,7 @@ fn render_zoomed_panel_title_has_suffix() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("(zoomed)"),
         "expected '(zoomed)' suffix in panel title"
@@ -406,7 +406,7 @@ fn render_uses_app_tree_width_pct() {
     app.tree_width_pct = 40;
     // Just ensure it renders without panic; the visual difference
     // is verified by the layout using the custom percentage.
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains("Files"), "expected 'Files' panel");
     assert!(content.contains("Editor"), "expected 'Editor' panel");
 }
@@ -424,7 +424,7 @@ fn app_with_tree() -> (AppState, tempfile::TempDir) {
 
 #[test]
 fn render_tree_shows_root_name() {
-    let (app, tmp) = app_with_tree();
+    let (mut app, tmp) = app_with_tree();
     let root_name = tmp
         .path()
         .canonicalize()
@@ -433,7 +433,7 @@ fn render_tree_shows_root_name() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains(&root_name),
         "expected root name '{root_name}' in rendered output"
@@ -447,7 +447,7 @@ fn render_tree_shows_directory_prefix_without_icons() {
     if let Some(ref mut tree) = app.file_tree {
         tree.toggle_show_icons();
     }
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains('\u{25B8}'),
         "expected collapsed dir prefix '\u{25B8}' in rendered output when icons disabled"
@@ -456,8 +456,8 @@ fn render_tree_shows_directory_prefix_without_icons() {
 
 #[test]
 fn render_tree_shows_file_entries() {
-    let (app, _tmp) = app_with_tree();
-    let content = render_app_to_string(&app, 100, 24);
+    let (mut app, _tmp) = app_with_tree();
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("Cargo.toml"),
         "expected 'Cargo.toml' in tree"
@@ -470,8 +470,8 @@ fn render_tree_shows_file_entries() {
 
 #[test]
 fn render_tree_shows_directory_name() {
-    let (app, _tmp) = app_with_tree();
-    let content = render_app_to_string(&app, 100, 24);
+    let (mut app, _tmp) = app_with_tree();
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains("src"), "expected 'src' directory in tree");
 }
 
@@ -500,16 +500,16 @@ fn app_with_open_file() -> (AppState, tempfile::TempDir) {
 
 #[test]
 fn render_editor_shows_line_numbers() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 100, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(content.contains('1'), "expected line number 1 in editor");
     assert!(content.contains('2'), "expected line number 2 in editor");
 }
 
 #[test]
 fn render_editor_shows_file_content() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 100, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("fn main()"),
         "expected file content in editor, got: {content}"
@@ -518,8 +518,8 @@ fn render_editor_shows_file_content() {
 
 #[test]
 fn status_bar_shows_filename() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 120, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 120, 24);
     assert!(
         content.contains("test.rs"),
         "expected filename in status bar"
@@ -528,8 +528,8 @@ fn status_bar_shows_filename() {
 
 #[test]
 fn status_bar_shows_encoding() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 120, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 120, 24);
     assert!(
         content.contains("UTF-8"),
         "expected 'UTF-8' encoding in status bar"
@@ -538,8 +538,8 @@ fn status_bar_shows_encoding() {
 
 #[test]
 fn status_bar_shows_line_ending() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 120, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 120, 24);
     assert!(
         content.contains("LF"),
         "expected line ending indicator in status bar"
@@ -548,8 +548,8 @@ fn status_bar_shows_line_ending() {
 
 #[test]
 fn status_bar_shows_file_type() {
-    let (app, _tmp) = app_with_open_file();
-    let content = render_app_to_string(&app, 120, 24);
+    let (mut app, _tmp) = app_with_open_file();
+    let content = render_app_to_string(&mut app, 120, 24);
     assert!(
         content.contains("Rust"),
         "expected 'Rust' file type in status bar"
@@ -573,9 +573,9 @@ fn app_with_two_files() -> (AppState, tempfile::TempDir) {
 
 #[test]
 fn tab_bar_not_shown_with_single_buffer() {
-    let (app, _tmp) = app_with_open_file();
+    let (mut app, _tmp) = app_with_open_file();
     assert_eq!(app.buffer_manager.buffer_count(), 1);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     // With a single buffer, there should be no tab bar.
     // The file content should still be visible.
     assert!(
@@ -586,9 +586,9 @@ fn tab_bar_not_shown_with_single_buffer() {
 
 #[test]
 fn tab_bar_shown_with_multiple_buffers() {
-    let (app, _tmp) = app_with_two_files();
+    let (mut app, _tmp) = app_with_two_files();
     assert_eq!(app.buffer_manager.buffer_count(), 2);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     // Both filenames should appear in the tab bar.
     assert!(content.contains("main.rs"), "expected 'main.rs' in tab bar");
     assert!(content.contains("lib.rs"), "expected 'lib.rs' in tab bar");
@@ -599,7 +599,7 @@ fn tab_bar_shows_modified_indicator() {
     let (mut app, _tmp) = app_with_two_files();
     // Modify the active buffer.
     app.execute(axe_core::Command::EditorInsertChar('x'));
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     // Format: "[2:lib.rs+]" — "+" before closing bracket indicates modified.
     assert!(
         content.contains("+]"),
@@ -621,7 +621,8 @@ fn render_tab_bar_uses_theme_colors() {
                 width: 40,
                 height: 1,
             };
-            render_tab_bar(&buffers, 0, area, frame, &theme);
+            let indices: Vec<usize> = (0..buffers.len()).collect();
+            render_tab_bar(&indices, 0, &buffers, area, frame, &theme);
         })
         .unwrap();
     // Verify it renders without panic and the active tab color is applied.
@@ -674,7 +675,7 @@ fn startup_screen_shows_logo() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("@@@@@@") && content.contains("@!@!@!@!"),
         "expected logo chars in startup screen with no buffers"
@@ -687,7 +688,7 @@ fn startup_screen_shows_version() {
     app.build_version = "v0.1.0-abc123".to_string();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 30);
+    let content = render_app_to_string(&mut app, 100, 30);
     assert!(
         content.contains("v0.1.0-abc123"),
         "expected version string in startup screen"
@@ -704,7 +705,7 @@ fn startup_screen_shows_shortcuts() {
     let mut app = AppState::new();
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 40);
+    let content = render_app_to_string(&mut app, 100, 40);
     assert!(
         content.contains("Ctrl+P"),
         "expected 'Ctrl+P' shortcut in startup screen"
@@ -732,7 +733,7 @@ fn startup_screen_disappears_when_file_opened() {
     app.execute(axe_core::Command::OpenFile(tmp.path().to_path_buf()));
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
-    let content = render_app_to_string(&app, 100, 24);
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         !content.contains("@@@@@@"),
         "expected no logo when a buffer is open"
@@ -745,7 +746,7 @@ fn startup_screen_graceful_on_small_area() {
     app.focus = FocusTarget::Editor;
     app.zoomed_panel = Some(FocusTarget::Editor);
     // Small terminal — should not panic.
-    let content = render_app_to_string(&app, 40, 5);
+    let content = render_app_to_string(&mut app, 40, 5);
     assert!(
         !content.is_empty(),
         "expected non-empty output on small terminal"
@@ -754,8 +755,8 @@ fn startup_screen_graceful_on_small_area() {
 
 #[test]
 fn startup_screen_unzoomed_shows_logo() {
-    let app = AppState::new();
-    let content = render_app_to_string(&app, 100, 24);
+    let mut app = AppState::new();
+    let content = render_app_to_string(&mut app, 100, 24);
     assert!(
         content.contains("@@@@@@"),
         "expected logo in unzoomed editor with no buffers"
@@ -831,7 +832,9 @@ fn terminal_grid_area_cleared_before_content_render() {
 
     // Second pass: render the actual app. The terminal grid area should be
     // cleared — no 'X' chars should remain in the terminal grid region.
-    terminal.draw(|frame| render(&app, frame, &theme)).unwrap();
+    terminal
+        .draw(|frame| render(&mut app, frame, &theme))
+        .unwrap();
 
     // Find the terminal grid area by checking where 'X' persists.
     // After a proper clear + render, the terminal grid cells should NOT
@@ -889,7 +892,9 @@ fn terminal_scrollbar_area_cleared_before_render() {
         .unwrap();
 
     // Render the app. The scrollbar column should not retain 'X'.
-    terminal.draw(|frame| render(&app, frame, &theme)).unwrap();
+    terminal
+        .draw(|frame| render(&mut app, frame, &theme))
+        .unwrap();
 
     let buf = terminal.backend().buffer();
     // The scrollbar is the rightmost column of the terminal panel.

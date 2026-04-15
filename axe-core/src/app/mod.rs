@@ -190,6 +190,9 @@ pub struct AppState {
     /// focused split's `active_buffer` is kept in sync with
     /// `buffer_manager.active` via `AppState::set_focused_split`.
     pub editor_layout: editor_layout::EditorLayout,
+    /// Per-split screen rectangles updated each frame by the renderer.
+    /// Used by mouse click handling to resolve which split was clicked.
+    pub split_areas: Vec<(u16, u16, u16, u16)>,
     /// First key of a pending keyboard chord (e.g. `Ctrl+K`), waiting for
     /// its continuation. Cleared after the next key press resolves it.
     pub pending_chord: Option<crossterm::event::KeyEvent>,
@@ -263,6 +266,7 @@ impl AppState {
             ai_config_path_override: None,
             needs_full_redraw: true,
             editor_layout: editor_layout::EditorLayout::single(0),
+            split_areas: Vec::new(),
             pending_chord: None,
             terminal_output_this_frame: false,
         }
@@ -358,18 +362,82 @@ impl AppState {
     /// never drifts out of sync with the layout.
     pub fn set_focused_split(&mut self, idx: usize) {
         self.editor_layout.set_focused(idx);
-        let buffer_idx = self.editor_layout.focused().active_buffer;
-        if buffer_idx < self.buffer_manager.buffer_count() {
-            self.buffer_manager.set_active(buffer_idx);
+        if let Some(buffer_idx) = self.editor_layout.focused().active_buffer() {
+            if buffer_idx < self.buffer_manager.buffer_count() {
+                self.buffer_manager.set_active(buffer_idx);
+            }
         }
     }
 
     /// Records the focused split's active buffer after a direct mutation
     /// of `buffer_manager` (e.g. opening a new file). Keeps the split in
-    /// sync with the live buffer index.
+    /// sync with the live buffer index — the focused split adopts the
+    /// currently active global buffer as a new tab (or reuses an
+    /// existing tab if it already has one).
     pub fn sync_focused_split_to_active_buffer(&mut self) {
         let active = self.buffer_manager.active_index();
-        self.editor_layout.set_focused_buffer(active);
+        if self.buffer_manager.buffer_count() == 0 {
+            return;
+        }
+        self.editor_layout.open_in_focused(active);
+    }
+
+    /// Closes the entire focused split, including every tab it holds.
+    ///
+    /// Used by `Ctrl+W` when the layout has more than one split so the
+    /// user can quickly dismiss a split without per-tab cycling. Each
+    /// closed tab is also removed from `BufferManager` if no other
+    /// split still references it, matching the single-tab close flow.
+    pub fn close_focused_split_entirely(&mut self) {
+        if self.editor_layout.len() <= 1 {
+            return;
+        }
+        // Close every tab in the focused split one by one so we reuse
+        // the existing per-tab cleanup (buffer removal, index shifting,
+        // push-sync). `close_focused_tab` auto-drops the split when it
+        // empties, so the loop naturally terminates.
+        while self.editor_layout.len() > 1 && !self.editor_layout.focused().buffers.is_empty() {
+            let (removed, split_was_closed) = self.editor_layout.close_focused_tab();
+            if let Some(removed_idx) = removed {
+                if !self.editor_layout.any_split_references(removed_idx) {
+                    self.buffer_manager.close_buffer(removed_idx);
+                    self.editor_layout
+                        .shift_buffer_indices_after_removal(removed_idx);
+                }
+            }
+            if split_was_closed {
+                break;
+            }
+        }
+        let idx = self.editor_layout.focused_index();
+        self.set_focused_split(idx);
+        self.needs_full_redraw = true;
+    }
+
+    /// Closes the focused split's currently active tab.
+    ///
+    /// If the tab was the split's only buffer, the split itself is
+    /// removed too (unless it's the last remaining split — in that case
+    /// we keep an empty split so the UI still has something to render).
+    /// When no other split references the removed buffer, it is also
+    /// closed from the global `BufferManager` and remaining split indices
+    /// are shifted down to compensate.
+    pub fn close_active_tab_in_focused_split(&mut self) {
+        let (removed, _split_was_closed) = self.editor_layout.close_focused_tab();
+        let Some(removed_idx) = removed else {
+            return;
+        };
+        // If no split still references the buffer, remove it from the
+        // global buffer manager and shift every remaining split index.
+        if !self.editor_layout.any_split_references(removed_idx) {
+            self.buffer_manager.close_buffer(removed_idx);
+            self.editor_layout
+                .shift_buffer_indices_after_removal(removed_idx);
+        }
+        // Push-sync: make the now-focused split's active tab the live
+        // buffer_manager active.
+        let idx = self.editor_layout.focused_index();
+        self.set_focused_split(idx);
     }
 
     /// Sets a temporary status message that appears in the status bar.

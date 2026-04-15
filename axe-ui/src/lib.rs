@@ -20,7 +20,7 @@ use ratatui::Frame;
 use axe_core::{AppState, FocusTarget};
 
 use editor_panel::{
-    editor_title, gutter_width, render_editor_content, render_startup_screen,
+    editor_title, gutter_width, render_editor_content, render_startup_screen, TabBarData,
     EDITOR_SCROLLBAR_WIDTH,
 };
 use layout::LayoutManager;
@@ -40,48 +40,66 @@ use tree_panel::render_tree_content;
 /// screen if the buffer index is out of range); only the focused split
 /// receives the bright cursor/border treatment. The tab bar is shown on
 /// the focused split only so other splits use their full height.
-pub(crate) fn render_editor_splits(app: &AppState, area: Rect, frame: &mut Frame, theme: &Theme) {
-    let splits = app.editor_layout.splits();
+pub(crate) fn render_editor_splits(
+    app: &mut AppState,
+    area: Rect,
+    frame: &mut Frame,
+    theme: &Theme,
+) {
     let orientation = app.editor_layout.orientation();
     let focused_split_idx = app.editor_layout.focused_index();
     let editor_is_focused_panel = app.focus == FocusTarget::Editor;
+    let split_count = app.editor_layout.splits().len();
 
-    let rects = layout::split_rects(area, splits.len(), orientation);
-    for (i, split) in splits.iter().enumerate() {
+    let rects = layout::split_rects(area, split_count, orientation);
+    // Record each split's screen rect so the input layer can hit-test
+    // mouse clicks and switch focus to the clicked split.
+    app.split_areas = rects
+        .iter()
+        .map(|r| (r.x, r.y, r.width, r.height))
+        .collect();
+
+    // Snapshot the splits to avoid re-borrowing `app` while we render.
+    let splits_snapshot: Vec<axe_core::Split> = app.editor_layout.splits().to_vec();
+    for (i, split) in splits_snapshot.iter().enumerate() {
         let split_area = rects.get(i).copied().unwrap_or(area);
         let is_focused_split = i == focused_split_idx && editor_is_focused_panel;
-        let buffer = app.buffer_manager.buffers().get(split.active_buffer);
-        if let Some(buffer) = buffer {
-            let tab_bar = if i == focused_split_idx {
-                Some((
-                    app.buffer_manager.buffers(),
-                    app.buffer_manager.active_index(),
-                ))
+        let buffer_idx = match split.active_buffer() {
+            Some(idx) => idx,
+            None => {
+                render_startup_screen(split_area, frame, theme, &app.build_version);
+                continue;
+            }
+        };
+        let Some(buffer) = app.buffer_manager.buffers().get(buffer_idx) else {
+            render_startup_screen(split_area, frame, theme, &app.build_version);
+            continue;
+        };
+        // Every split gets its own tab bar listing the buffers it holds.
+        let tab_bar = Some(TabBarData {
+            indices: &split.buffers,
+            active_in_split: split.active,
+            all_buffers: app.buffer_manager.buffers(),
+        });
+        let hints: &[axe_core::InlayHint] = buffer
+            .path()
+            .and_then(|p| app.inlay_hints.get(p))
+            .map(|entry| entry.hints.as_slice())
+            .unwrap_or(&[]);
+        render_editor_content(
+            buffer,
+            split_area,
+            frame,
+            theme,
+            is_focused_split,
+            if is_focused_split {
+                app.search.as_ref()
             } else {
                 None
-            };
-            let hints: &[axe_core::InlayHint] = buffer
-                .path()
-                .and_then(|p| app.inlay_hints.get(p))
-                .map(|entry| entry.hints.as_slice())
-                .unwrap_or(&[]);
-            render_editor_content(
-                buffer,
-                split_area,
-                frame,
-                theme,
-                is_focused_split,
-                if is_focused_split {
-                    app.search.as_ref()
-                } else {
-                    None
-                },
-                tab_bar,
-                hints,
-            );
-        } else {
-            render_startup_screen(split_area, frame, theme, &app.build_version);
-        }
+            },
+            tab_bar,
+            hints,
+        );
     }
 }
 
@@ -607,7 +625,7 @@ pub fn editor_scrollbar_rect(app: &AppState, area: Rect) -> Option<Rect> {
 }
 
 /// Renders the full IDE interface with conditional panel visibility and a status bar.
-pub fn render(app: &AppState, frame: &mut Frame, theme: &Theme) {
+pub fn render(app: &mut AppState, frame: &mut Frame, theme: &Theme) {
     let layout_mgr = LayoutManager {
         show_tree: app.show_tree,
         show_terminal: app.show_terminal,

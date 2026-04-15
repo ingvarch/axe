@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
             app.needs_full_redraw = false;
         }
 
-        terminal.draw(|frame| axe_ui::render(&app, frame, &theme))?;
+        terminal.draw(|frame| axe_ui::render(&mut app, frame, &theme))?;
         crossterm::execute!(io::stdout(), EndSynchronizedUpdate)?;
 
         // After PTY output, poison ratatui's front buffer in the terminal panel

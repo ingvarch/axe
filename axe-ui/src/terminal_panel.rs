@@ -363,7 +363,7 @@ pub(crate) fn adjust_terminal_rect(rect: Rect, has_tabs: bool) -> Rect {
 
 /// Renders the right-side panels (editor and optionally terminal) in the given area.
 pub(crate) fn render_right_panels(
-    app: &AppState,
+    app: &mut AppState,
     frame: &mut Frame,
     area: ratatui::layout::Rect,
     layout_mgr: &LayoutManager,

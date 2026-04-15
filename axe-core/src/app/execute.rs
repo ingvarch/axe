@@ -694,36 +694,47 @@ impl AppState {
             }
             Command::NextBuffer => {
                 self.search = None;
-                self.buffer_manager.next_buffer();
-                self.sync_focused_split_to_active_buffer();
+                self.editor_layout.splits_mut_focused().next_tab();
+                let idx = self.editor_layout.focused_index();
+                self.set_focused_split(idx);
             }
             Command::PrevBuffer => {
                 self.search = None;
-                self.buffer_manager.prev_buffer();
-                self.sync_focused_split_to_active_buffer();
+                self.editor_layout.splits_mut_focused().prev_tab();
+                let idx = self.editor_layout.focused_index();
+                self.set_focused_split(idx);
             }
             Command::ActivateBuffer(idx) => {
                 self.search = None;
-                self.buffer_manager.set_active(idx);
-                self.sync_focused_split_to_active_buffer();
+                // `idx` is a position inside the focused split's tab list.
+                let split = self.editor_layout.splits_mut_focused();
+                if idx < split.buffers.len() {
+                    split.active = idx;
+                }
+                let focused = self.editor_layout.focused_index();
+                self.set_focused_split(focused);
             }
             Command::CloseBuffer => {
-                if let Some(buf) = self.buffer_manager.active_buffer() {
+                // With multiple splits open, Ctrl+W closes the entire
+                // focused split (all its tabs) — that's the "close the
+                // thing I'm looking at" mental model the user expects.
+                // With a single split, fall back to the per-tab behaviour
+                // so non-split users keep their legacy shortcut.
+                if self.editor_layout.len() > 1 {
+                    self.close_focused_split_entirely();
+                    self.search = None;
+                } else if let Some(buf) = self.buffer_manager.active_buffer() {
                     if buf.modified {
                         let file_name = buf.file_name().unwrap_or("[untitled]").to_string();
                         self.confirm_dialog = Some(ConfirmDialog::close_buffer(&file_name));
                     } else {
-                        let idx = self.buffer_manager.active_index();
-                        self.buffer_manager.close_buffer(idx);
-                        self.sync_focused_split_to_active_buffer();
+                        self.close_active_tab_in_focused_split();
                         self.search = None;
                     }
                 }
             }
             Command::ConfirmCloseBuffer => {
-                let idx = self.buffer_manager.active_index();
-                self.buffer_manager.close_buffer(idx);
-                self.sync_focused_split_to_active_buffer();
+                self.close_active_tab_in_focused_split();
                 self.search = None;
             }
             Command::CancelCloseBuffer => {

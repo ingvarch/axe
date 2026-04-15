@@ -2455,12 +2455,10 @@ fn open_two_temp_files(app: &mut AppState) {
     std::io::Write::write_all(&mut tmp2, b"file2\n").unwrap();
     std::io::Write::flush(&mut tmp2).unwrap();
 
-    app.buffer_manager
-        .open_file(tmp1.path())
-        .expect("open file1");
-    app.buffer_manager
-        .open_file(tmp2.path())
-        .expect("open file2");
+    // Route opens through the real command so the focused split's tab
+    // list is populated alongside the buffer manager.
+    app.execute(Command::OpenFile(tmp1.path().to_path_buf()));
+    app.execute(Command::OpenFile(tmp2.path().to_path_buf()));
 
     // Leak so paths remain valid.
     let _ = tmp1.into_temp_path();
@@ -2481,7 +2479,9 @@ fn next_buffer_switches_active() {
 fn prev_buffer_switches_active() {
     let mut app = AppState::new();
     open_two_temp_files(&mut app);
-    app.buffer_manager.set_active(0);
+    // Switch to the first tab through the focused split so both
+    // buffer_manager.active and the split's active index line up.
+    app.execute(Command::ActivateBuffer(0));
     assert_eq!(app.buffer_manager.active_index(), 0);
     app.execute(Command::PrevBuffer);
     assert_eq!(app.buffer_manager.active_index(), 1);
