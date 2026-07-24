@@ -46,6 +46,21 @@ pub fn comment_tokens_for_extension(ext: &str) -> Option<CommentTokens> {
             line: Some("--"),
             block: None,
         },
+        // GDScript: hash line comments only (no block comments).
+        "gd" => CommentTokens {
+            line: Some("#"),
+            block: None,
+        },
+        // Godot scene/resource files are ini-like: ';' line comments.
+        "tscn" | "tres" | "godot" => CommentTokens {
+            line: Some(";"),
+            block: None,
+        },
+        // Godot shaders are GLSL-like.
+        "gdshader" => CommentTokens {
+            line: Some("//"),
+            block: Some(("/*", "*/")),
+        },
         // Markup block-only comments.
         "html" | "xml" | "md" | "svg" => CommentTokens {
             line: None,
@@ -120,6 +135,10 @@ pub fn language_for_extension(ext: &str) -> Option<LanguageConfig> {
         "tf" | "tfvars" | "hcl" => (
             tree_sitter_hcl::LANGUAGE.into(),
             include_str!("../queries/hcl/highlights.scm"),
+        ),
+        "gd" => (
+            tree_sitter_gdscript::LANGUAGE.into(),
+            include_str!("../queries/gdscript/highlights.scm"),
         ),
         _ => return None,
     };
@@ -229,6 +248,40 @@ mod tests {
     }
 
     #[test]
+    fn gdscript_extension_returns_config() {
+        let config = language_for_extension("gd");
+        assert!(config.is_some(), "gd should be a supported extension");
+        let config = config.unwrap();
+        assert!(!config.highlights_query.is_empty());
+    }
+
+    #[test]
+    fn comment_tokens_gdscript_has_hash_no_block() {
+        let t = comment_tokens_for_extension("gd").unwrap();
+        assert_eq!(t.line, Some("#"));
+        assert!(t.block.is_none(), "GDScript has no block comments");
+    }
+
+    #[test]
+    fn comment_tokens_godot_resource_files_use_semicolon() {
+        // Godot scene/resource files are ini-like: ';' line comments.
+        for ext in &["tscn", "tres", "godot"] {
+            let t = comment_tokens_for_extension(ext)
+                .unwrap_or_else(|| panic!("expected comment tokens for {ext}"));
+            assert_eq!(t.line, Some(";"), "{ext} should use ; line comment");
+            assert!(t.block.is_none());
+        }
+    }
+
+    #[test]
+    fn comment_tokens_gdshader_uses_double_slash() {
+        // Godot shaders are GLSL-like: '//' line + '/* */' block comments.
+        let t = comment_tokens_for_extension("gdshader").unwrap();
+        assert_eq!(t.line, Some("//"));
+        assert_eq!(t.block, Some(("/*", "*/")));
+    }
+
+    #[test]
     fn unknown_extension_returns_none() {
         assert!(language_for_extension("xyz").is_none());
         assert!(language_for_extension("").is_none());
@@ -284,7 +337,7 @@ mod tests {
         // Verify that all bundled queries parse without errors.
         let extensions = [
             "rs", "py", "js", "ts", "tsx", "go", "c", "cpp", "html", "css", "json", "toml", "sh",
-            "md", "tf", "tfvars", "hcl",
+            "md", "tf", "tfvars", "hcl", "gd",
         ];
         for ext in extensions {
             let config =

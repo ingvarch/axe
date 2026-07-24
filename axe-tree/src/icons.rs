@@ -189,6 +189,11 @@ fn icon_for_extension(ext: &str) -> FileIcon {
             icon: " ",
             color: Color::Rgb(0, 0, 128),
         },
+        // Godot / GDScript
+        "gd" | "tscn" | "tres" | "gdshader" | "godot" => FileIcon {
+            icon: " ",
+            color: Color::Rgb(71, 140, 191),
+        },
         // Zig
         "zig" => FileIcon {
             icon: " ",
@@ -361,6 +366,7 @@ mod tests {
             ("test.md", "󰍔 "),
             ("test.sql", " "),
             ("test.sh", " "),
+            ("test.gd", " "),
         ];
         for (filename, expected_icon) in cases {
             let icon = icon_for_file(filename);

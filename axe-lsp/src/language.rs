@@ -25,6 +25,7 @@ pub fn language_id_for_path(path: &Path) -> Option<&'static str> {
         "lua" => Some("lua"),
         "java" => Some("java"),
         "rb" => Some("ruby"),
+        "gd" => Some("gdscript"),
         _ => None,
     }
 }
@@ -138,6 +139,22 @@ mod tests {
             language_id_for_path(Path::new("terragrunt.hcl")),
             Some("terraform")
         );
+    }
+
+    #[test]
+    fn gdscript_extension() {
+        assert_eq!(
+            language_id_for_path(Path::new("Player.gd")),
+            Some("gdscript")
+        );
+    }
+
+    #[test]
+    fn godot_resource_files_return_none() {
+        // Scene/resource files have no LSP server; no language id.
+        assert_eq!(language_id_for_path(Path::new("Player.tscn")), None);
+        assert_eq!(language_id_for_path(Path::new("icon.tres")), None);
+        assert_eq!(language_id_for_path(Path::new("card.gdshader")), None);
     }
 
     #[test]

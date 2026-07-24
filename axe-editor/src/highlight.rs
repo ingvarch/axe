@@ -476,6 +476,55 @@ mod tests {
     }
 
     #[test]
+    fn highlights_for_gdscript_keyword_and_function() {
+        let mut state = HighlightState::new("gd").unwrap();
+        let rope = Rope::from_str("func _ready():\n    pass\n");
+        state.parse_full(&rope);
+        let spans = state.highlights_for_range(0, 1, &rope);
+        assert_eq!(
+            spans.len(),
+            1,
+            "should have 1 line of spans, got: {:?}",
+            spans
+        );
+
+        // "func" at columns 0..4 must be a keyword.
+        let has_func_keyword = spans[0]
+            .iter()
+            .any(|s| s.kind == HighlightKind::Keyword && s.col_start == 0 && s.col_end == 4);
+        assert!(
+            has_func_keyword,
+            "expected 'func' to be a keyword, got: {:?}",
+            spans[0]
+        );
+
+        // "_ready" at columns 5..11 must be a function name.
+        let has_function = spans[0]
+            .iter()
+            .any(|s| s.kind == HighlightKind::Function && s.col_start == 5 && s.col_end == 11);
+        assert!(
+            has_function,
+            "expected '_ready' to be a function, got: {:?}",
+            spans[0]
+        );
+    }
+
+    #[test]
+    fn highlights_for_gdscript_comment_and_string() {
+        let mut state = HighlightState::new("gd").unwrap();
+        let rope = Rope::from_str("# a comment\nvar s = \"hello\"\n");
+        state.parse_full(&rope);
+        let spans = state.highlights_for_range(0, 2, &rope);
+        assert_eq!(spans.len(), 2);
+
+        let has_comment = spans[0].iter().any(|s| s.kind == HighlightKind::Comment);
+        assert!(has_comment, "expected a comment, got: {:?}", spans[0]);
+
+        let has_string = spans[1].iter().any(|s| s.kind == HighlightKind::String);
+        assert!(has_string, "expected a string, got: {:?}", spans[1]);
+    }
+
+    #[test]
     fn highlights_for_range_returns_correct_line_count() {
         let mut state = HighlightState::new("rs").unwrap();
         let rope = Rope::from_str("fn a() {}\nfn b() {}\nfn c() {}\n");
